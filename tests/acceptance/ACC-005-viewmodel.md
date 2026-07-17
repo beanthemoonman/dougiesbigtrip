@@ -9,7 +9,7 @@ harness exists in this repo, so the config assertions here are checked by eye â€
 as ACC-003/ACC-004. Run in a **real windowed browser**.
 
 - **Build:** `pnpm dev`, open the printed URL.
-- **Tester:** _______________  **Date:** _______  **Commit:** _______  **Result:** PASS / FAIL
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-17  **Commit:** aafcb6b  **Result:** âœ… PASS
 
 ## Steps
 

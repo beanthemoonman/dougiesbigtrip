@@ -174,12 +174,10 @@ FSM (draw/idle/fire/reload/holster), and synthesised first-person weapon audio. 
 integration pass exercised the whole loop — switch AK↔USP (HUD name/ammo track, mag persists),
 fire both, reload, spray the AK (pattern climbs up-center), zero console errors.
 
-**The exit test itself is not yet signed off**, because it is a human/T3 judgement that needs a
-**real windowed browser** (headless can't judge the recoil-driven *shape*, has no audio device,
-and its synthetic pointer-lock click adds a spurious yaw — the standing blocker since Phase 1).
-The committed scripts to run there, together, are ACC-003 (HUD), ACC-004 (impacts/spray),
-ACC-005 (viewmodel), ACC-006 (weapons/switch/anim/audio). Phase 3 should not start until that
-session records a PASS against a commit hash.
+**Exit test SIGNED OFF.** The developer ran the T3 scripts in a real windowed browser and
+recorded PASS against commit `aafcb6b` (2026-07-17): ACC-003 (HUD), ACC-004 (impacts/spray),
+ACC-005 (viewmodel), ACC-006 (weapons/switch/anim/audio). **Phase 2 is complete — Phase 3 (the
+map) is unblocked.**
 
 ---
 

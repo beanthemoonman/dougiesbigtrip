@@ -487,3 +487,10 @@ pass; the exit test is a T3 human pass still owed in a real windowed browser (se
 
 Phase 2 code-complete. Next session: run ACC-003/004/005/006 together in a real windowed browser,
 record PASS + commit hash, then start Phase 3 (the map).
+
+## 2026-07-17 — Phase 2 exit test signed off
+
+Developer tested the full Phase 2 build in a real windowed browser and confirmed it works.
+Recorded PASS in the four T3 acceptance scripts (ACC-003 HUD, ACC-004 impacts/spray, ACC-005
+viewmodel, ACC-006 weapons/switch/anim/audio) against commit aafcb6b. Phase 2 is complete;
+Phase 3 (the map) is unblocked. (Committing straight to main — solo project, no feature branches.)

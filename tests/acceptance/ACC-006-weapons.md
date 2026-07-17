@@ -7,7 +7,7 @@ Written **before** tuning. Run in a **real windowed browser** (look-dependent, a
 real audio device — headless has none). Sound is judged by ear; there's no automated audio assert.
 
 - **Build:** `pnpm dev`, open the printed URL.
-- **Tester:** _______________  **Date:** _______  **Commit:** _______  **Result:** PASS / FAIL
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-17  **Commit:** aafcb6b  **Result:** ✅ PASS
 
 ## Steps
 

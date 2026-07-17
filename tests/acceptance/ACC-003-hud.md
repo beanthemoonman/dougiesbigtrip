@@ -9,7 +9,7 @@ headless. Headless Chromium's synthetic pointer-lock click injects a large spuri
 untrustworthy.
 
 - **Build:** `pnpm dev`, open the printed URL.
-- **Tester:** _______________  **Date:** _______  **Commit:** _______  **Result:** PASS / FAIL
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-17  **Commit:** aafcb6b  **Result:** ✅ PASS
 
 ## Steps
 

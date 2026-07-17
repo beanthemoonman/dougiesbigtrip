@@ -9,7 +9,7 @@ headless, for the same reason as ACC-003: headless Chromium's synthetic pointer-
 injects a large spurious yaw jump, and every step here is look-dependent.
 
 - **Build:** `pnpm dev`, open the printed URL.
-- **Tester:** _______________  **Date:** _______  **Commit:** _______  **Result:** PASS / FAIL
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-17  **Commit:** aafcb6b  **Result:** ✅ PASS
 
 ## Steps
 
