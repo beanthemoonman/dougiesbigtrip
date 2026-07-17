@@ -10,6 +10,10 @@ using only CC0/permissively-licensed assets. Single-player vs. bots. No netcode.
 The goal is *feel and art direction fidelity*, not feature completeness. Movement that feels
 wrong is a P0 bug. A missing scoreboard is a P3.
 
+## MCP Severs
+
+You (Claude) will have access to Intellij and Blender MCP servers to work on the code and make and edit assets.
+
 ## Non-negotiables
 
 1. **No Valve assets.** No decompiled VMFs, no ripped textures/models/sounds, no `.vpk`

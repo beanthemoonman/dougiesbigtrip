@@ -161,3 +161,109 @@ Executed the ponytail-audit findings. Deleted unused scaffolding, no behaviour c
 - Removed unused constants/flags: `WALK_SPEED_SCALE`, `JUMP_APEX_RISE`, `Buttons.ATTACK`.
 
 net: ~-70 src lines, -1 runtime dep.
+
+## Phase 2 start — weapon defs data file
+
+Added `src/weapons/defs.ts`: typed `WeaponDef` + a `WEAPONS` table with the two starter guns
+(AK-analogue rifle, USP-analogue pistol), all fields the plan lists — fireInterval, damage,
+armorPen, falloffCoef, baseSpread, mag, reloadTime, speedMult, and a deterministic recoil
+pattern (30-step AK shape / 12-step USP) with resetTime + recoverTime. Doc-sourced values
+(falloffCoef 0.98/0.75, recoil reset/recover timings, AK pattern shape) are noted inline;
+damage/spread/etc. are labelled gameplay tuning numbers. Angles authored in degrees, converted
+to radians once at load.
+
+`src/weapons/defs.test.ts`: T0 invariants (field ranges, rifle recoil climbs over first 7
+shots, pistol out-falls the rifle at 40 m). `pnpm typecheck` + `pnpm test` green (13 tests).
+
+Deliberately data-only — no hitscan/recoil/spread logic yet, and nothing consumes these defs.
+That's the *next* task, and it's gated on the Phase 1 live exit test (still unconfirmed in a
+real browser), so I stopped here rather than build combat on top of unverified movement.
+
+## Phase 2 — damage model
+
+Added `src/game/damage.ts`: pure, world-free damage math from doc §6.
+- `rangeFalloff(weapon, dist)` = pow(falloffCoef, dist/5).
+- `HITBOX_MULT` (head 4 / chest 1 / stomach 1.25 / arm 1 / leg 0.75).
+- `computeDamage(weapon, dist, hitbox, targetArmor)` → { health, armor }. Simplified CS
+  armour split: armorPen bleeds through to health, remainder absorbed by armour point-for-
+  point, overflow falls to health when armour runs out. Damage is conserved (health + absorbed
+  == incoming).
+
+`src/game/damage.test.ts`: 5 T0 cases (base, 4× headshot, falloff monotonic + pistol < rifle
+at 40 m, armour split conservation, armour-runs-out overflow). typecheck + test green (18).
+
+Still pure math — no hitbox capsule geometry/query yet (needs the character rig, Phase 3), and
+no shot pipeline consuming it yet (gated on the Phase 1 live movement pass).
+
+## Phase 2 — deterministic recoil accumulator
+
+Added `src/weapons/recoil.ts`: pure, rng-free spray state machine (doc §3).
+- `RecoilState` = { sprayIndex, timeSinceShot, punch{yaw,pitch} }.
+- `onShot` advances the index (clamped to last step for long sprays) and adds that pattern
+  step to the accumulated view punch.
+- `tickRecoil(dt)` resets the index after `resetTime` of no fire and exponentially decays the
+  punch toward 0 with time constant `recoverTime` (framerate-independent at fixed dt).
+
+`src/weapons/recoil.test.ts`: 5 T0 cases (step-0 first shot + early climb, determinism, index
+clamp, decay-while-idle, index reset after resetTime). typecheck + test green (23).
+
+View application (feeding punch into the camera + tracing along the punched direction) is
+deliberately deferred — it's the hitscan wiring, gated on the Phase 1 live movement pass.
+
+## Phase 2 — accuracy/spread model
+
+Added `src/weapons/spread.ts`: pure inaccuracy calc (doc §4). `computeSpread(weapon, stance,
+sprayIndex)` = baseSpread × STANCE_MULT × (1 + shots×growth), hard-capped at 0.2 rad. Stance
+multipliers per doc: crouchStill 1 / still 1.3 / walking 2 / running 5 / air 20. Spray growth
+per shot and the cap are tuning numbers (ponytail-flagged; revisit against wall decals). Same
+value drives both the trace spread disc and the crosshair gap (§5).
+
+`src/weapons/spread.test.ts`: 6 T0 cases (baseline, stance ordering, spray growth, ×20 air,
+hard cap, negative index == first shot). typecheck + test green (29).
+
+Stance *classification* from live movement state (speed/ducked/grounded → Stance) is left for
+the shot-pipeline wiring, gated on the Phase 1 live pass.
+
+## Phase 2 — the shot pipeline (ties the pieces together) + seeded RNG
+
+Bigger step: stopped adding standalone pure modules and wired them into the actual shot
+pipeline — the integration everything else was "gated on". Still fully T0-testable (no world
+raycast, no rig, no dependency on the unconfirmed live movement pass).
+
+- `src/core/rng.ts`: the seeded `mulberry32` RNG owed since Phase 0 but never created —
+  confirmed it was genuinely missing (`grep` for rng/Math.random under `src/` found nothing).
+  Injected `Rng { next(): number }`, the only randomness source allowed under `src/` per the
+  determinism rule. `rng.test.ts`: same-seed determinism, cross-seed difference, [0,1) range.
+- `src/weapons/hitscan.ts`: the shot pipeline.
+  - `WeaponState` + `createWeaponState` — ammo, fire-rate timer, reload state, recoil.
+  - `canFire`/`tickWeapon`/`startReload` — cadence gate (`timeSinceFire >= fireInterval`),
+    per-tick recoil recovery, full-mag reload after `reloadTime` (no CS partial-mag carry —
+    cut scope, noted inline).
+  - `aimDirection(yaw, pitch)` — verified against the camera's YXZ euler (`camera.ts`) and
+    `wishDirFromButtons` (`input.ts`): forward = (-sin(yaw)cos(pitch), sin(pitch),
+    -cos(yaw)cos(pitch)), unit. Fixed a wrong first-draft comment about the yaw sign after
+    deriving the composition by hand.
+  - `applySpread(dir, spread, rng)` — area-uniform cone disc (ρ = spread·√u) around any aim
+    vector, built on an orthonormal basis ⟂ dir. This is the plan's "spread applied in a disc
+    around the aim vector."
+  - `fireShot(...)` — composes it: gate → `onShot` (recoil) → aim = view + punch → spread
+    perturb → returns the deterministic world ray `direction`. ponytail-noted that this shot
+    fires along a view already including its own recoil step; split pre/post-punch only if a
+    golden trace ever demands it.
+  - `hitscan.test.ts`: 13 T0 cases — aim basis/handedness, spread never exceeds the cone +
+    stays unit-length (2000 samples), spread is statistically unbiased (mean ≈ aim over 20k),
+    spread determinism, fire-rate/ammo gating, reload timing + full-mag guard, spray-climbs-up
+    integration, and full-pipeline determinism (same seed+inputs → identical directions).
+- Lint hygiene: `pnpm lint` was actually red across the whole (uncommitted) weapons module —
+  prior Phase 2 entries only ran typecheck+test, not lint, so 4 pre-existing
+  `no-non-null-assertion` errors (`recoil.ts`, `recoil.test.ts`, `spread.test.ts`) had gone
+  unnoticed. Fixed those + my 2 new ones by narrowing instead of `!` (a `reduce` pairwise
+  compare, an `if (step === undefined) return` guard on the clamped index, a throwing test
+  helper). `pnpm lint` now clean.
+- `pnpm typecheck` + `pnpm lint` clean, `pnpm test` green (45 tests, up from 29).
+
+The **world** raycast + per-bone hitbox capsule query — the other half of "hitscan" — is
+still owed and genuinely needs the character rig (Phase 3), so it stays deferred. The
+deterministic *direction* a bullet travels, which is the part that had to be pure and tested,
+is done. Live movement pass (Phase 1) still owed before wiring any of this to a trigger in a
+real browser.

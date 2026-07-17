@@ -86,16 +86,31 @@ entirely, per the ambient "worth a manual check in a real windowed browser" note
 
 Read `docs/weapon-feel.md`.
 
-- [ ] Weapon defs data file: rate of fire, damage, armour pen, range falloff, spread,
-      recoil table, mag size, reload time, movement speed multiplier.
+- [x] Weapon defs data file: rate of fire, damage, armour pen, range falloff, spread,
+      recoil table, mag size, reload time, movement speed multiplier. (`src/weapons/defs.ts`,
+      T0 invariants in `defs.test.ts`. Rifle + pistol authored. NOTE: this landed before the
+      Phase 1 live exit test was confirmed — pure data, no dependency on movement; the live
+      pass is still owed before wiring hitscan/recoil that consume these.)
 - [ ] Two guns to start: an AK-analogue (rifle) and a USP-analogue (pistol). Distinct feel:
       spray vs. tap.
-- [ ] Hitscan: raycast from camera centre (**not** the muzzle), with spread applied in a
-      disc around the aim vector.
-- [ ] Deterministic recoil: fixed spray pattern index advancing per shot, decaying back on
+- [x] Hitscan: raycast from camera centre (**not** the muzzle), with spread applied in a
+      disc around the aim vector. (`src/weapons/hitscan.ts` — the shot pipeline: ammo +
+      fire-rate + reload gating, `aimDirection()` matching the camera's YXZ euler,
+      area-uniform `applySpread()` cone disc off the seeded `core/rng.ts`, and `fireShot()`
+      composing recoil punch → aim → spread into the final ray direction. Also created
+      `src/core/rng.ts` — the seeded mulberry32 owed since Phase 0. T0 tests in
+      `hitscan.test.ts`/`rng.test.ts`. The **world** raycast + per-bone hitbox query is the
+      remaining half — deferred to Phase 3 since it needs the character rig; this produces
+      the deterministic direction that trace will follow.)
+- [x] Deterministic recoil: fixed spray pattern index advancing per shot, decaying back on
       trigger release. Recoil moves *the view*, and the bullet follows the view — same as CS.
+      (`src/weapons/recoil.ts` state machine + T0 tests. The *view application* — feeding
+      `state.punch` into the camera and tracing along it — lands with hitscan, gated on the
+      Phase 1 live pass.)
 - [ ] Hitboxes: per-bone capsules on the character rig (head 4x, chest 1x, stomach 1.25x,
-      limbs 0.75x). Query against these, not the render mesh.
+      limbs 0.75x). Query against these, not the render mesh. (Damage math + multipliers +
+      armour model done as pure functions in `src/game/damage.ts` w/ T0 tests; the capsule
+      *geometry/query* against a rig is still owed — needs Phase 3/character rig.)
 - [ ] Viewmodel: **separate camera + separate FOV + separate render pass**, layer 1,
       depth cleared between passes. See the doc — this is the #1 thing people get wrong.
 - [ ] Weapon animation state machine: idle / fire / reload / draw / holster.
