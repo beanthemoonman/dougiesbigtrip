@@ -59,6 +59,7 @@ src/
 assets/
   maps/          .glb per map + baked navmesh blob + lightmap KTX2
   weapons/       viewmodel + worldmodel .glb
+  props/         static world props (.glb)
   characters/    rigged .glb + Mixamo-derived clips
   audio/
   CREDITS.md     REQUIRED. One row per asset: file, source, author, licence, URL.

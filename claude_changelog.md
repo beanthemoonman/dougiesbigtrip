@@ -267,3 +267,24 @@ still owed and genuinely needs the character rig (Phase 3), so it stays deferred
 deterministic *direction* a bullet travels, which is the part that had to be pure and tested,
 is done. Live movement pass (Phase 1) still owed before wiring any of this to a trigger in a
 real browser.
+
+## 2026-07-16 — First prop asset
+- Modeled an original explosive barrel prop from scratch in Blender (24-sided cylinder,
+  beveled rims, two torus rib rings). ~0.59m dia × 0.88m tall, in metres, Z-up.
+- Exported `assets/props/barrel_explosive.glb` (668 tris, ~19 KB). Original CC0 work — no
+  Valve/third-party assets touched.
+- Added CREDITS.md row. Created `assets/props/` (new dir; not previously in the repo layout).
+- Added two more original props: `crate_wood.glb` (0.7m beveled cube, 12 tris) and
+  `traffic_cone.glb` (cone + square base, 104 tris). CREDITS rows added. Note: glTF export
+  doesn't apply the bevel modifier (export_apply defaults False), so the crate ships with
+  sharp edges — fine for a demo prop.
+- Added two more original props: `jerry_can.glb` (rounded body + spout, 56 tris) and
+  `pallet_wood.glb` (3 runners + 5 deck boards, 1.2x1.0m, 96 tris). CREDITS rows added.
+  Now exporting with export_apply=True so bevels bake into the mesh.
+- Started texturing props with CC0 Poly Haven textures (1k, jpg, embedded in the glb):
+  brown_planks_03 -> crate_wood + pallet_wood; rusty_metal_02 -> barrel; green_metal_rust
+  -> jerry_can. Barrel and crate read well. TODO: pallet + jerry_can need UV-scale tuning
+  (small board faces sample a washed-out patch). jerry_can roughness map failed to load on
+  export (diffuse+normal only). Cone left untextured (flat plastic is fine). glb sizes rose
+  to ~1.1-1.3MB each with embedded textures; pnpm assets:opt -> KTX2 will shrink these.
+  All three textures credited in CREDITS.md.
