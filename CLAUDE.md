@@ -40,7 +40,7 @@ You (Claude) will have access to Intellij and Blender MCP servers to work on the
 | Character movement | Hand-rolled (`src/player/`) | Rapier used only for shape-casts / collide-and-slide |
 | Nav | `recast-navigation-js` | Baked offline to a binary blob |
 | Build | Vite + TypeScript | |
-| Audio | Howler.js | Positional |
+| Audio | Web Audio (fp weapon sfx); Howler.js planned | Phase 2 first-person weapon sounds are synthesised in `src/core/audio.ts` (no sound files → no licence). Howler comes in with bots (Phase 4) for positional/distance-tail/third-person variants — the only place spatial audio earns its keep. |
 | UI/HUD | Plain DOM overlay | Don't pull in React for a crosshair |
 | Assets | glTF 2.0 (`.glb`), Meshopt + KTX2 | See `docs/asset-pipeline.md` |
 

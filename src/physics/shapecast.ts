@@ -1,4 +1,4 @@
-import type RAPIER from '@dimforge/rapier3d-compat';
+import RAPIER from '@dimforge/rapier3d-compat';
 import type { Vector3 } from 'three';
 
 /**
@@ -50,6 +50,38 @@ export function capsuleCast(
 
   outNormal.set(hit.normal1.x, hit.normal1.y, hit.normal1.z);
   return hit.time_of_impact;
+}
+
+// Reused across shots — a bullet trace runs at most once per tick, and the Ray
+// fields are plain vectors we overwrite.
+const scratchRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 });
+
+/**
+ * Traces a bullet: casts a ray from `origin` along the unit vector `direction`,
+ * up to `maxDistance` metres. Returns the distance to the impact and writes the
+ * surface normal into `outNormal`, or null if the ray hits nothing. The hit
+ * point is `origin + direction * distance`.
+ *
+ * This is the world half of the shot pipeline — the per-bone hitbox query
+ * against a character rig is separate and still owed (needs the Phase 3 rig).
+ */
+export function rayCast(
+  world: RAPIER.World,
+  origin: Vector3,
+  direction: Vector3,
+  maxDistance: number,
+  outNormal: Vector3,
+  excludeCollider?: RAPIER.Collider,
+): number | null {
+  scratchRay.origin = origin;
+  scratchRay.dir = direction;
+  // solid=true: a ray starting inside a collider impacts at distance 0 rather
+  // than passing out through the far face.
+  const hit = world.castRayAndGetNormal(scratchRay, maxDistance, true, undefined, undefined, excludeCollider);
+  if (!hit) return null;
+
+  outNormal.set(hit.normal.x, hit.normal.y, hit.normal.z);
+  return hit.timeOfImpact; // direction is unit, so toi is metres
 }
 
 /** True if a capsule at `center` overlaps anything in `world` (except `excludeCollider`).

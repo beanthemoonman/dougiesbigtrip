@@ -42,6 +42,9 @@ export interface InputState {
   /** Mouse sensitivity, radians per pixel. */
   sensitivity: number;
   pointerLocked: boolean;
+  /** Weapon slot requested since last read (1 = rifle, 2 = pistol), or 0.
+   * A latched edge, not a held state — main.ts consumes it and resets to 0. */
+  weaponSlot: number;
 }
 
 export interface InputManager {
@@ -55,9 +58,12 @@ export function createInputManager(target: HTMLElement): InputManager {
     pitch: 0,
     sensitivity: 0.0022,
     pointerLocked: false,
+    weaponSlot: 0,
   };
 
   function onKeyDown(e: KeyboardEvent): void {
+    if (e.code === 'Digit1') state.weaponSlot = 1;
+    else if (e.code === 'Digit2') state.weaponSlot = 2;
     const bit = KEY_TO_BUTTON[e.code];
     if (bit !== undefined) state.buttons |= bit;
   }

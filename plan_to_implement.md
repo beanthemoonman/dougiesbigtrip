@@ -91,17 +91,20 @@ Read `docs/weapon-feel.md`.
       T0 invariants in `defs.test.ts`. Rifle + pistol authored. NOTE: this landed before the
       Phase 1 live exit test was confirmed — pure data, no dependency on movement; the live
       pass is still owed before wiring hitscan/recoil that consume these.)
-- [ ] Two guns to start: an AK-analogue (rifle) and a USP-analogue (pistol). Distinct feel:
-      spray vs. tap.
+- [x] Two guns to start: an AK-analogue (rifle) and a USP-analogue (pistol). Distinct feel:
+      spray vs. tap. (Both modelled in Blender — `ak_viewmodel.glb` / `pistol_viewmodel.glb`.
+      Wired in `main.ts`: `1`/`2` switch, per-weapon ammo/recoil state persists across switches,
+      distinct recoil/spread/cadence from `defs.ts`. T3: ACC-006.)
 - [x] Hitscan: raycast from camera centre (**not** the muzzle), with spread applied in a
       disc around the aim vector. (`src/weapons/hitscan.ts` — the shot pipeline: ammo +
       fire-rate + reload gating, `aimDirection()` matching the camera's YXZ euler,
       area-uniform `applySpread()` cone disc off the seeded `core/rng.ts`, and `fireShot()`
       composing recoil punch → aim → spread into the final ray direction. Also created
       `src/core/rng.ts` — the seeded mulberry32 owed since Phase 0. T0 tests in
-      `hitscan.test.ts`/`rng.test.ts`. The **world** raycast + per-bone hitbox query is the
-      remaining half — deferred to Phase 3 since it needs the character rig; this produces
-      the deterministic direction that trace will follow.)
+      `hitscan.test.ts`/`rng.test.ts`. The **world** raycast landed with the decals —
+      `rayCast()` in `src/physics/shapecast.ts`, traced from the eye and excluding the
+      player's own hull. The per-bone hitbox query is the remaining half, deferred to
+      Phase 3 since it needs the character rig.)
 - [x] Deterministic recoil: fixed spray pattern index advancing per shot, decaying back on
       trigger release. Recoil moves *the view*, and the bullet follows the view — same as CS.
       (`src/weapons/recoil.ts` state machine + T0 tests. The *view application* — feeding
@@ -115,10 +118,25 @@ Read `docs/weapon-feel.md`.
       limbs 0.75x). Query against these, not the render mesh. (Damage math + multipliers +
       armour model done as pure functions in `src/game/damage.ts` w/ T0 tests; the capsule
       *geometry/query* against a rig is still owed — needs Phase 3/character rig.)
-- [ ] Viewmodel: **separate camera + separate FOV + separate render pass**, layer 1,
+- [x] Viewmodel: **separate camera + separate FOV + separate render pass**, layer 1,
       depth cleared between passes. See the doc — this is the #1 thing people get wrong.
-- [ ] Weapon animation state machine: idle / fire / reload / draw / holster.
-- [ ] Audio: positional gunshots, distance-based tail, first-person vs. third-person variants.
+      (`render/renderer.ts`: `viewmodelScene` + `viewCamera` at 60° H FOV, near 0.01, both
+      layer 1; `render()` does world pass → `clearDepth()` → viewmodel pass. Own light rig:
+      RoomEnvironment PMREM so the full-metalness gunmetal isn't black + a key/fill
+      directional. `main.ts` loads the glb, sets it to layer 1, welds it to the eye at a
+      hand-tuned lower-right offset. T3: `tests/acceptance/ACC-005-viewmodel.md`, not yet run.)
+- [x] Weapon animation state machine: idle / fire / reload / draw / holster.
+      (`src/weapons/viewmodel.ts` — procedural, since the models have no armature: draw/reload/
+      holster are timed pose offsets, `fire` is an additive decaying kick layered on top (so
+      full-auto stays smooth and you can kick mid-anything). Pure + clock-free, ticked at the
+      fixed rate; 6 T0 tests in `viewmodel.test.ts`. `main.ts` gates fire/reload/switch on the
+      idle state and applies the pose over each weapon's rest offset. T3: ACC-006.)
+- [~] Audio: positional gunshots, distance-based tail, first-person vs. third-person variants.
+      (First-person weapon sfx done: `src/core/audio.ts` synthesises the gunshot + reload with
+      the **Web Audio API** — no sound files, so no licence. Deliberately not Howler.js (see the
+      CLAUDE.md stack note): positional / distance-tail / TP variants only matter with other
+      sound sources, so they land with bots in Phase 4. The rest of this bullet is that Phase 4
+      work.)
 - [x] HUD: health, armour, ammo, crosshair (dynamic gap driven by current inaccuracy).
       (`src/ui/hud.ts` — DOM overlay, no React. The crosshair gap is the *same*
       `computeSpread()` value the bullet's spread disc uses, projected to px:
@@ -132,6 +150,36 @@ Read `docs/weapon-feel.md`.
 **Exit test:** Full-auto the rifle at a wall from 10 m. The decals form a recognisable,
 *repeatable* spray pattern — fire twice, the patterns match. Tapping at 30 m is accurate.
 The viewmodel doesn't clip into walls and doesn't distort at the screen edges.
+
+Status: the decal half is now **observable** — `tests/acceptance/ACC-004-impacts.md` is the
+committed script for it, written before tuning, **not yet run** (needs a real windowed
+browser, same standing blocker as ACC-003 and the Phase 1 live pass — run all three
+together). A headless-Chrome smoke pass over CDP confirmed the wiring end-to-end: pointer
+lock engaged, holding LMB drained 14 rounds off real weapon state, and the holes landed on
+the far wall flat to the surface as a structured cluster, not a cloud, with zero console
+errors. Judging the *shape* against `docs/weapon-feel.md` §3 is what ACC-004 is for; a
+static headless screenshot can't, since the view itself is moving under the recoil.
+The viewmodel now renders: `assets/weapons/ak_viewmodel.glb` is loaded and drawn in a
+second pass (`render/renderer.ts`) with its own camera, its own ~60° FOV, and
+`clearDepth()` between passes so it's never clipped by the world (docs/weapon-feel.md §1).
+Its own light rig (RoomEnvironment for the metallic + a key/fill directional, all layer 1)
+since the world lightmap can't reach it. `tests/acceptance/ACC-005-viewmodel.md` is the
+committed script, **not yet run** (real windowed browser, same blocker). Live headless pass:
+the AK reads correctly in the lower-right, drawn on top of the stairs/walls, properly lit,
+survives firing, zero console errors.
+
+**All Phase 2 tasks are now implemented and green** (typecheck/lint/build clean, 64 tests):
+both guns modelled + wired with per-weapon state and `1`/`2` switching, the procedural anim
+FSM (draw/idle/fire/reload/holster), and synthesised first-person weapon audio. A headless-CDP
+integration pass exercised the whole loop — switch AK↔USP (HUD name/ammo track, mag persists),
+fire both, reload, spray the AK (pattern climbs up-center), zero console errors.
+
+**The exit test itself is not yet signed off**, because it is a human/T3 judgement that needs a
+**real windowed browser** (headless can't judge the recoil-driven *shape*, has no audio device,
+and its synthetic pointer-lock click adds a spurious yaw — the standing blocker since Phase 1).
+The committed scripts to run there, together, are ACC-003 (HUD), ACC-004 (impacts/spray),
+ACC-005 (viewmodel), ACC-006 (weapons/switch/anim/audio). Phase 3 should not start until that
+session records a PASS against a commit hash.
 
 ---
 

@@ -1,0 +1,79 @@
+/**
+ * Weapon audio, synthesised with the Web Audio API — a gunshot is a filtered
+ * noise burst plus a low thump; a reload is a couple of short clicks. No sound
+ * *files*, so no asset to licence and no CREDITS row.
+ *
+ * ponytail: deliberately not Howler.js (the CLAUDE.md stack pick). Howler earns
+ * its keep for positional/spatial audio, which only matters once there are other
+ * sources in the world (bots, Phase 4). The player's own gun is at the ear —
+ * mono, no distance model — so a few lines of Web Audio cover it. Bring in
+ * Howler with the bots, for the third-person/distance-tail variants the doc wants.
+ *
+ * This is a render-side effect sink: the deterministic sim decides *when* to
+ * fire (in the fixed tick), and calls in here; nothing here is ever read back
+ * into sim state, and `ctx.currentTime` is used only to schedule envelopes.
+ */
+import type { WeaponId } from '../weapons/defs';
+import { makeRng } from './rng';
+
+let ctx: AudioContext | null = null;
+let noise: AudioBuffer | null = null;
+
+function audio(): AudioContext {
+  if (!ctx) {
+    ctx = new AudioContext();
+    // 0.5 s of white noise, generated once from the seeded rng so Math.random
+    // stays out of src/ (determinism rule). The buffer is reused for every shot.
+    const rng = makeRng(0x5eed);
+    noise = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.5), ctx.sampleRate);
+    const data = noise.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = rng.next() * 2 - 1;
+  }
+  return ctx;
+}
+
+/** Must be called from a user gesture (the pointer-lock click) or the context
+ * stays suspended and nothing plays. Safe to call repeatedly. */
+export function resumeAudio(): void {
+  void audio().resume();
+}
+
+function burst(dur: number, cutoff: number, gain: number, when: number): void {
+  const c = audio();
+  const src = c.createBufferSource();
+  src.buffer = noise;
+  const lp = c.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = cutoff;
+  const g = c.createGain();
+  g.gain.setValueAtTime(gain, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+  src.connect(lp).connect(g).connect(c.destination);
+  src.start(when, 0, dur);
+}
+
+export function playGunshot(weapon: WeaponId): void {
+  const c = audio();
+  const t = c.currentTime;
+  // Rifle: louder, a touch longer and brighter. Pistol: shorter, drier.
+  const rifle = weapon === 'rifle';
+  burst(rifle ? 0.18 : 0.12, rifle ? 3200 : 2600, rifle ? 0.9 : 0.7, t);
+  // Low body thump so it has weight, not just a hiss.
+  const osc = c.createOscillator();
+  const g = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(rifle ? 150 : 190, t);
+  osc.frequency.exponentialRampToValueAtTime(60, t + 0.08);
+  g.gain.setValueAtTime(rifle ? 0.6 : 0.45, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+  osc.connect(g).connect(c.destination);
+  osc.start(t);
+  osc.stop(t + 0.14);
+}
+
+export function playReload(): void {
+  const t = audio().currentTime;
+  // Two clicks: mag out, mag in. Rough but reads as "reload".
+  burst(0.04, 1800, 0.4, t);
+  burst(0.05, 1500, 0.5, t + 0.18);
+}
