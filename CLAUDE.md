@@ -144,7 +144,7 @@ rationale and examples in `docs/testing.md`; this is the gate.
 **Runtime budgets** (if the feature touches the scene or assets)
 - [ ] `renderer.info.render.calls` < 400
 - [ ] Initial payload < 16 MB; total < 60 MB
-- [ ] No allocation in the hot loop — used `core/scratch.ts`
+- [ ] No allocation in the hot loop — reused module-level scratch `Vector3`s (see `src/player/movement.ts`)
 - [ ] No new `castShadow` light in the world scene
 - [ ] Lightmapped materials still assert `lightMap.channel === 1` and `NoColorSpace`
 - [ ] Every new asset has a `CREDITS.md` row **and** a licence (see `docs/licensing-and-assets.md`)
@@ -173,7 +173,7 @@ rationale and examples in `docs/testing.md`; this is the gate.
 - 16 MB initial download, 60 MB total.
 - 120 fps on an RTX-class desktop GPU, 60 fps on integrated graphics at 1080p.
 - < 400 draw calls per frame. Merge static geometry per material at bake time.
-- No allocation in the hot loop. Reuse `Vector3` scratch objects; they're in `core/scratch.ts`.
+- No allocation in the hot loop. Reuse module-level scratch `Vector3` objects (see `src/player/movement.ts`).
 
 ## When you're unsure
 

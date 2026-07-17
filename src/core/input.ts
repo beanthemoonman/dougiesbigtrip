@@ -11,7 +11,6 @@ export const Buttons = {
   RIGHT: 1 << 3,
   JUMP: 1 << 4,
   DUCK: 1 << 5,
-  ATTACK: 1 << 6,
 } as const;
 
 const KEY_TO_BUTTON: Record<string, number> = {
@@ -44,9 +43,6 @@ export interface InputState {
 
 export interface InputManager {
   state: InputState;
-  /** Call from a user gesture (e.g. click on the canvas) to engage pointer lock. */
-  requestPointerLock: () => void;
-  dispose: () => void;
 }
 
 export function createInputManager(target: HTMLElement): InputManager {
@@ -92,19 +88,7 @@ export function createInputManager(target: HTMLElement): InputManager {
   document.addEventListener('pointerlockchange', onPointerLockChange);
   target.addEventListener('click', onClick);
 
-  return {
-    state,
-    requestPointerLock(): void {
-      target.requestPointerLock();
-    },
-    dispose(): void {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('pointerlockchange', onPointerLockChange);
-      target.removeEventListener('click', onClick);
-    },
-  };
+  return { state };
 }
 
 /**

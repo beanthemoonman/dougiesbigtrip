@@ -25,7 +25,6 @@ export const CLIP_ITERATIONS = 4;
 export const GROUND_NORMAL_THRESHOLD = 0.7; // dot(normal, up) >= this -> walkable (45.573 deg)
 
 export const JUMP_IMPULSE = 6.8151; // m/s, SET not additive
-export const JUMP_APEX_RISE = 1.143; // m, sanity reference for JUMP_IMPULSE
 
 export const STEP_HEIGHT = 0.4572; // m
 
@@ -46,7 +45,6 @@ export const DUCK_TRANSITION_TIME = 0.4; // s
 // Default ground run speed (rifle-equivalent, 250 u/s). Real weapon multipliers
 // arrive in Phase 2 (docs/weapon-feel.md) and scale this per-weapon.
 export const DEFAULT_GROUND_SPEED = 6.35; // m/s
-export const WALK_SPEED_SCALE = 0.52; // Shift-walk wishspeed multiplier
 
 // --- Below: NOT ported Source values. The doc doesn't give exact numbers for
 // these (categorizePosition's probe distance, view punch feel) — tuned by eye.

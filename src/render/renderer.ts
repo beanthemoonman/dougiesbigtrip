@@ -11,8 +11,6 @@ export interface RenderContext {
   camera: PerspectiveCamera;
   stats: Stats;
   render: () => void;
-  resize: () => void;
-  dispose: () => void;
 }
 
 // CS default, non-negotiable for feel — see docs/art-direction.md. Three's
@@ -66,12 +64,6 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
     stats,
     render(): void {
       renderer.render(scene, camera);
-    },
-    resize,
-    dispose(): void {
-      window.removeEventListener('resize', resize);
-      document.body.removeChild(stats.dom);
-      renderer.dispose();
     },
   };
 }

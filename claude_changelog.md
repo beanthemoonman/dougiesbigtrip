@@ -135,3 +135,29 @@ A running log of what Claude Code did in this repo, appended to at the end of ea
   - Left `docs-updated-with-testing/` in place rather than deleting it — wasn't asked to
     remove it, and it's a harmless staging folder now that its contents are merged in.
   - No code changes this turn; `pnpm typecheck`/`pnpm test` untouched by this session.
+
+## Git init + push to GitHub
+
+- Ran `git init -b main`, staged everything, made the initial commit.
+- Existing Vite `.gitignore` was already adequate (node_modules, dist, .idea, logs).
+  Added rules for `.claude/settings.local.json` and its `.tmp.*` files, which were
+  otherwise getting staged.
+- Remote: `git@github.com:beanthemoonman/dougiesbigtrip.git`. HTTPS had no stored
+  credentials, so switched to SSH (existing `id_ed25519` key authenticates as
+  beanthemoonman). Pushed `main` and set upstream tracking.
+
+## ponytail-audit — dead-code cull
+
+Executed the ponytail-audit findings. Deleted unused scaffolding, no behaviour change
+(typecheck clean, movement golden tests 9/9 green):
+- Removed `src/core/scratch.ts` entirely — the pooled `scratchVec3/Quat/Mat4` factory had
+  zero importers; movement.ts uses its own module-level scratch (its rotating-cursor pool
+  can't serve values that must survive nested calls within one tick anyway). Updated the two
+  CLAUDE.md references that pointed at `core/scratch.ts` to the module-scratch pattern.
+- Dropped `howler` + `@types/howler` deps (no audio code yet; Phase 2) and refreshed the lockfile.
+- Deleted unused exports: `createViewState`/`copyViewState` (camera.ts), `InputManager`'s
+  `requestPointerLock`/`dispose`, `RenderContext`'s `resize`/`dispose` (internal resize
+  listener kept), and `export { RAPIER }` from world.ts.
+- Removed unused constants/flags: `WALK_SPEED_SCALE`, `JUMP_APEX_RISE`, `Buttons.ATTACK`.
+
+net: ~-70 src lines, -1 runtime dep.

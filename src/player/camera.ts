@@ -12,16 +12,6 @@ export interface ViewState {
   viewPunch: number;
 }
 
-export function createViewState(feet: Vector3, eyeHeight: number): ViewState {
-  return { position: feet.clone(), eyeHeight, viewPunch: 0 };
-}
-
-export function copyViewState(out: ViewState, from: ViewState): void {
-  out.position.copy(from.position);
-  out.eyeHeight = from.eyeHeight;
-  out.viewPunch = from.viewPunch;
-}
-
 /** Poses `camera` at the interpolated eye position/orientation for this render frame. */
 export function updateViewCamera(
   camera: PerspectiveCamera,

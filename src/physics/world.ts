@@ -48,5 +48,3 @@ export function createKinematicCapsule(
   const collider = world.createCollider(RAPIER.ColliderDesc.capsule(halfHeight, radius), body);
   return { body, collider };
 }
-
-export { RAPIER };
