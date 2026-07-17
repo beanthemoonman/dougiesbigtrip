@@ -151,3 +151,37 @@ describe('fireShot integration', () => {
     expect(run()).toEqual(run());
   });
 });
+
+describe('spray pattern orientation (defs.ts authors yaw as +right)', () => {
+  // rng.next() === 0 => rho = spread * sqrt(0) = 0, i.e. a spread-free shot, so
+  // these assertions see the deterministic recoil alone.
+  const noSpread = { next: (): number => 0 };
+
+  /** Fire `n` shots as fast as cadence allows, from a dead-centre view. */
+  function spray(n: number): Vector3 {
+    const state = createWeaponState(rifle);
+    const out = new Vector3();
+    for (let i = 0; i < n; i++) {
+      const shot = fireShot(state, rifle, 0, 0, 'still', noSpread, out);
+      expect(shot).not.toBeNull();
+      // Advance just past the fire interval at the 64 Hz sim rate.
+      const ticks = Math.ceil(rifle.fireInterval / (1 / 64));
+      for (let t = 0; t < ticks; t++) tickWeapon(state, rifle, 1 / 64);
+    }
+    return out.clone();
+  }
+
+  it('climbs upward over the first seven shots', () => {
+    expect(spray(7).y).toBeGreaterThan(0);
+  });
+
+  it('pulls LEFT (-X) through steps 8-12, per docs/weapon-feel.md §3', () => {
+    // Cumulative authored yaw after 12 AK steps is about -6.4deg = 6.4deg left
+    // of centre. Left of a -Z forward with +X right is -X.
+    expect(spray(12).x).toBeLessThan(0);
+  });
+
+  it('swings RIGHT (+X) of the step-12 low point by the end of the 13-20 phase', () => {
+    expect(spray(20).x).toBeGreaterThan(spray(12).x);
+  });
+});

@@ -10,6 +10,14 @@ export interface ViewState {
   position: Vector3; // feet
   eyeHeight: number;
   viewPunch: number;
+  /**
+   * Accumulated weapon recoil punch, radians (weapons/recoil.ts). Authored
+   * +right / +up, same as the spray pattern in weapons/defs.ts — the sign
+   * conversion to view angles happens below, and must stay identical to
+   * `fireShot`'s or the bullet stops following the view.
+   */
+  punchYaw: number;
+  punchPitch: number;
 }
 
 /** Poses `camera` at the interpolated eye position/orientation for this render frame. */
@@ -21,14 +29,17 @@ export function updateViewCamera(
   yaw: number,
   pitch: number,
 ): void {
-  const eyeHeight = prev.eyeHeight + (curr.eyeHeight - prev.eyeHeight) * alpha;
-  const viewPunch = prev.viewPunch + (curr.viewPunch - prev.viewPunch) * alpha;
+  const lerp = (a: number, b: number): number => a + (b - a) * alpha;
+  const eyeHeight = lerp(prev.eyeHeight, curr.eyeHeight);
+  const viewPunch = lerp(prev.viewPunch, curr.viewPunch);
+  const punchYaw = lerp(prev.punchYaw, curr.punchYaw);
+  const punchPitch = lerp(prev.punchPitch, curr.punchPitch);
 
   camera.position.lerpVectors(prev.position, curr.position, alpha);
   camera.position.y += eyeHeight;
 
   camera.rotation.order = 'YXZ';
-  camera.rotation.y = yaw;
-  camera.rotation.x = pitch + viewPunch;
+  camera.rotation.y = yaw - punchYaw;
+  camera.rotation.x = pitch + punchPitch + viewPunch;
   camera.rotation.z = 0;
 }

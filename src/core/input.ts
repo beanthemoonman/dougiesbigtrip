@@ -11,6 +11,8 @@ export const Buttons = {
   RIGHT: 1 << 3,
   JUMP: 1 << 4,
   DUCK: 1 << 5,
+  ATTACK: 1 << 6,
+  RELOAD: 1 << 7,
 } as const;
 
 const KEY_TO_BUTTON: Record<string, number> = {
@@ -25,6 +27,7 @@ const KEY_TO_BUTTON: Record<string, number> = {
   Space: Buttons.JUMP,
   ControlLeft: Buttons.DUCK,
   ControlRight: Buttons.DUCK,
+  KeyR: Buttons.RELOAD,
 };
 
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
@@ -78,6 +81,17 @@ export function createInputManager(target: HTMLElement): InputManager {
     if (!locked) state.buttons = 0; // releasing focus shouldn't leave keys "stuck" held
   }
 
+  // Only once locked, so the click that *engages* pointer lock doesn't also
+  // fire a shot into the floor.
+  function onMouseDown(e: MouseEvent): void {
+    if (document.pointerLockElement !== target) return;
+    if (e.button === 0) state.buttons |= Buttons.ATTACK;
+  }
+
+  function onMouseUp(e: MouseEvent): void {
+    if (e.button === 0) state.buttons &= ~Buttons.ATTACK;
+  }
+
   function onClick(): void {
     if (document.pointerLockElement !== target) target.requestPointerLock();
   }
@@ -85,6 +99,8 @@ export function createInputManager(target: HTMLElement): InputManager {
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mousedown', onMouseDown);
+  window.addEventListener('mouseup', onMouseUp);
   document.addEventListener('pointerlockchange', onPointerLockChange);
   target.addEventListener('click', onClick);
 

@@ -105,8 +105,12 @@ Read `docs/weapon-feel.md`.
 - [x] Deterministic recoil: fixed spray pattern index advancing per shot, decaying back on
       trigger release. Recoil moves *the view*, and the bullet follows the view — same as CS.
       (`src/weapons/recoil.ts` state machine + T0 tests. The *view application* — feeding
-      `state.punch` into the camera and tracing along it — lands with hitscan, gated on the
-      Phase 1 live pass.)
+      `state.punch` into the camera and tracing along it — landed with the HUD: `camera.ts`
+      applies the punch, `main.ts` feeds it per tick. **Fixed a mirrored pattern while wiring
+      it:** `defs.ts` authors pattern yaw as +right, but view yaw is +left (`aimDirection`:
+      +yaw swings toward -X), and `fireShot` was *adding* it — so the AK's 8–12 "pull left"
+      phase pulled right. Nothing pinned the pattern's handedness; three tests in
+      `hitscan.test.ts` now do.)
 - [ ] Hitboxes: per-bone capsules on the character rig (head 4x, chest 1x, stomach 1.25x,
       limbs 0.75x). Query against these, not the render mesh. (Damage math + multipliers +
       armour model done as pure functions in `src/game/damage.ts` w/ T0 tests; the capsule
@@ -115,7 +119,15 @@ Read `docs/weapon-feel.md`.
       depth cleared between passes. See the doc — this is the #1 thing people get wrong.
 - [ ] Weapon animation state machine: idle / fire / reload / draw / holster.
 - [ ] Audio: positional gunshots, distance-based tail, first-person vs. third-person variants.
-- [ ] HUD: health, armour, ammo, crosshair (dynamic gap driven by current inaccuracy).
+- [x] HUD: health, armour, ammo, crosshair (dynamic gap driven by current inaccuracy).
+      (`src/ui/hud.ts` — DOM overlay, no React. The crosshair gap is the *same*
+      `computeSpread()` value the bullet's spread disc uses, projected to px:
+      `(h/2)·tan(spread)/tan(vFov/2)`. T0 in `hud.test.ts`. T3 script:
+      `tests/acceptance/ACC-003-hud.md` — **written, not yet run**; needs a real windowed
+      browser, same blocker as the Phase 1 live pass. T2 doesn't apply to a DOM overlay
+      (rationale in the script). HP/AP are hardcoded 100 until Phase 4 gives them a source.
+      Also wired the weapon into `main.ts`: LMB fires, R reloads, recoil punch now drives the
+      view via `camera.ts` — so ammo/gap/view-kick are live.)
 
 **Exit test:** Full-auto the rifle at a wall from 10 m. The decals form a recognisable,
 *repeatable* spray pattern — fire twice, the patterns match. Tapping at 30 m is accurate.

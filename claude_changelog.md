@@ -288,3 +288,47 @@ real browser.
   export (diffuse+normal only). Cone left untextured (flat plastic is fine). glb sizes rose
   to ~1.1-1.3MB each with embedded textures; pnpm assets:opt -> KTX2 will shrink these.
   All three textures credited in CREDITS.md.
+
+## 2026-07-17 — Phase 2 HUD + weapon wired into the live app
+
+Picked the HUD as the next unblocked Phase 2 item (viewmodel needs a weapon asset; Phase 1's
+live exit test still needs a real windowed browser, which I can't drive from here).
+
+- `src/ui/hud.ts` — plain DOM overlay, no React (per CLAUDE.md). HP/AP bottom-left, ammo +
+  weapon name bottom-right, four-line crosshair centred.
+  - `crosshairGapPx(spreadRad, vFovRad, heightPx)` = `(h/2)·tan(spread)/tan(vFov/2)`, floored
+    at 3 px. The load-bearing bit: the gap is driven by the *same* `computeSpread()` value the
+    bullet's spread disc uses, so the crosshair is a readout of the accuracy model rather than
+    a decoration tuned to look about right.
+  - `hud.test.ts` — 5 T0 cases, written and observed failing first: the projection identity (a
+    cone of half the vFOV lands the gap at exactly half-height), monotonicity in spread, height
+    scaling, the min-gap floor, and that a standing rifle first-shot reads under 10 px at 1080p
+    while air/deep-spray open wider.
+- **Bug found while wiring: the AK spray pattern was mirrored.** `defs.ts` authors pattern yaw
+  as +right, but view yaw is +left (`aimDirection`: +yaw swings toward -X) — and `fireShot` was
+  adding the punch, so steps 8–12's "pull left" phase pulled *right*, i.e. the whole pattern
+  was flipped versus `docs/weapon-feel.md` §3. No test pinned handedness (the existing spray
+  test only checked the upward climb). Added 3 tests to `hitscan.test.ts` — climb, pull-left,
+  swing-right — watched the two new ones fail, then fixed the sign in `fireShot`. `camera.ts`
+  now uses the identical conversion, with a comment on both sides saying so: if those two
+  drift apart the bullet stops following the view, which is the one invariant this weapon model
+  is built on.
+- Wiring: `Buttons.ATTACK` (LMB, gated on pointer-lock so the lock-engaging click doesn't fire
+  a shot into the floor) + `Buttons.RELOAD` (R) in `input.ts`; `main.ts` ticks the weapon,
+  fires, and feeds `recoil.punch` through `ViewState` (now carrying `punchYaw`/`punchPitch`,
+  interpolated like the rest) into the camera. Seeded `makeRng(1)` so the sim stays replayable.
+- `stanceOf()` in `main.ts` maps player motion onto the accuracy model's stance buckets.
+  ponytail-noted: the doc names the buckets but gives no speeds, so the 0.1 / 3.5 m/s
+  thresholds are picked against the 6.35 m/s cap, and ducked-and-moving is just 'walking'
+  (CS gives crouch-walking its own better bucket — fold in when there's a real number).
+- `tests/acceptance/ACC-003-hud.md` — first file in `tests/`, which didn't exist. Written
+  before tuning, **not yet run**: it needs a real windowed browser, same blocker as the Phase 1
+  live pass. Run them together.
+- Verified live in headless Chrome (screenshot): the room renders, the HUD reads `HP 100`,
+  `AP 100`, `30 / 30`, `AK-analogue` off real weapon state, crosshair centred and tight, zero
+  console errors. The look-dependent and firing steps are what ACC-003 is for.
+- `pnpm typecheck` / `pnpm lint` / `pnpm build` clean, `pnpm test` green (53 tests, up from 45).
+
+Still owed in Phase 2: viewmodel pass, weapon anim FSM, audio, and the world raycast + decals
+(the last is what makes the Phase 2 exit test — "fire twice, the patterns match" — observable).
+HP/AP are hardcoded until Phase 4 gives them a source.

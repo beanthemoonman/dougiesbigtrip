@@ -130,7 +130,10 @@ export function fireShot(
   state.ammo -= 1;
   state.timeSinceFire = 0;
 
-  const yaw = viewYaw + state.recoil.punch.yaw;
+  // Sign flip is load-bearing: defs.ts authors pattern yaw as +right, but view
+  // yaw is +left (aimDirection: +yaw swings toward -X). Without this the AK's
+  // 8-12 "pull left" phase pulls right and the whole pattern is mirrored.
+  const yaw = viewYaw - state.recoil.punch.yaw;
   const pitch = viewPitch + state.recoil.punch.pitch;
   aimDirection(yaw, pitch, out);
 

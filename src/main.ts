@@ -1,11 +1,16 @@
 import type { World } from '@dimforge/rapier3d-compat';
-import { BoxGeometry, Mesh, MeshBasicMaterial, Quaternion, Scene, Vector3 } from 'three';
-import { createInputManager } from './core/input';
+import { BoxGeometry, Mesh, MeshBasicMaterial, MathUtils, Quaternion, Scene, Vector3 } from 'three';
+import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
+import { makeRng } from './core/rng';
 import { updateViewCamera, type ViewState } from './player/camera';
-import { createMovementContext, createPlayerState, tickMovement } from './player/movement';
+import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './player/movement';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
 import { createRenderContext } from './render/renderer';
+import { createHud } from './ui/hud';
+import { WEAPONS } from './weapons/defs';
+import { createWeaponState, fireShot, startReload, tickWeapon } from './weapons/hitscan';
+import { computeSpread, type Stance } from './weapons/spread';
 
 // docs/art-direction.md palette. Flat-shaded, unlit greybox — no lightmap
 // exists yet (that's Phase 3), so MeshBasicMaterial rather than a lit
@@ -86,6 +91,22 @@ function buildGreyboxRoom(world: World, scene: Scene): void {
   addRamp(world, scene, new Vector3(-8, 0, 6), new Vector3(-3, 1.4, 6), 2.5, 0.3, PALETTE.wood);
 }
 
+/**
+ * Map the player's motion onto the accuracy model's stance buckets
+ * (weapons/spread.ts).
+ *
+ * ponytail: thresholds picked to read right against the 6.35 m/s ground cap —
+ * the doc names the buckets but no speeds. A ducked-and-moving player is just
+ * 'walking'; CS gives crouch-walking its own (better) bucket. Fold that in when
+ * there's a real number to port rather than one invented here.
+ */
+function stanceOf(player: PlayerState): Stance {
+  if (!player.onGround) return 'air';
+  const speed = Math.hypot(player.velocity.x, player.velocity.z);
+  if (speed < 0.1) return player.ducked ? 'crouchStill' : 'still';
+  return speed < 3.5 ? 'walking' : 'running';
+}
+
 async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#viewport');
   if (!canvas) throw new Error('missing #viewport canvas');
@@ -101,25 +122,70 @@ async function main(): Promise<void> {
   const movementCtx = createMovementContext(world, spawn);
   const player = createPlayerState(spawn);
 
-  const prevView: ViewState = { position: player.position.clone(), eyeHeight: player.eyeHeight, viewPunch: 0 };
-  const currView: ViewState = { position: player.position.clone(), eyeHeight: player.eyeHeight, viewPunch: 0 };
+  const weapon = WEAPONS.rifle;
+  const weaponState = createWeaponState(weapon);
+  // Fixed seed: the sim stays reproducible for a recorded trace. core/rng.ts is
+  // the only randomness allowed under src/.
+  const rng = makeRng(1);
+  const shotDir = new Vector3();
+
+  const hud = createHud(document.body);
+  // ponytail: health/armour are constants until the damage/round loop lands in
+  // Phase 4. game/damage.ts already has the math; nothing shoots back yet.
+  const HEALTH = 100;
+  const ARMOR = 100;
+
+  const view = (): ViewState => ({
+    position: player.position.clone(),
+    eyeHeight: player.eyeHeight,
+    viewPunch: 0,
+    punchYaw: 0,
+    punchPitch: 0,
+  });
+  const prevView = view();
+  const currView = view();
 
   startLoop({
     tick(fixedDt): void {
       prevView.position.copy(currView.position);
       prevView.eyeHeight = currView.eyeHeight;
       prevView.viewPunch = currView.viewPunch;
+      prevView.punchYaw = currView.punchYaw;
+      prevView.punchPitch = currView.punchPitch;
 
       tickMovement(movementCtx, player, { buttons: input.state.buttons, yaw: input.state.yaw }, fixedDt);
+
+      tickWeapon(weaponState, weapon, fixedDt);
+      if (input.state.buttons & Buttons.RELOAD) startReload(weaponState, weapon);
+      if (input.state.buttons & Buttons.ATTACK) {
+        // The returned ray direction goes nowhere yet: the world trace and the
+        // per-bone hitbox query need the character rig (Phase 3). Firing still
+        // drains the mag and kicks the view, which is what the HUD reads.
+        fireShot(weaponState, weapon, input.state.yaw, input.state.pitch, stanceOf(player), rng, shotDir);
+      }
 
       currView.position.copy(player.position);
       currView.eyeHeight = player.eyeHeight;
       currView.viewPunch = player.viewPunch;
+      currView.punchYaw = weaponState.recoil.punch.yaw;
+      currView.punchPitch = weaponState.recoil.punch.pitch;
     },
     render(alpha): void {
       renderCtx.stats.begin();
       updateViewCamera(renderCtx.camera, prevView, currView, alpha, input.state.yaw, input.state.pitch);
       renderCtx.render();
+      hud.update(
+        {
+          health: HEALTH,
+          armor: ARMOR,
+          weapon,
+          ammo: weaponState.ammo,
+          reloading: weaponState.reloading,
+          spreadRad: computeSpread(weapon, stanceOf(player), weaponState.recoil.sprayIndex),
+        },
+        MathUtils.degToRad(renderCtx.camera.fov),
+        renderCtx.renderer.domElement.clientHeight,
+      );
       renderCtx.stats.end();
     },
   });
