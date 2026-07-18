@@ -186,12 +186,20 @@ map) is unblocked.**
 Read `docs/blender-pipeline.md` end to end **before opening Blender.** The lightmap UV
 workflow has to be right from the first mesh or you redo everything.
 
-- [ ] Build the modular kit in Blender: wall 2 m/4 m, doorframe, floor tile, stair, crate,
+- [~] Build the modular kit in Blender: wall 2 m/4 m, doorframe, floor tile, stair, crate,
       pillar, roof. All on a 0.5 m grid. All at the correct texel density (see doc).
-- [ ] Greybox the map with the kit. One small map: two spawns, three routes, one open site.
-      Roughly the scale of half of Dust2's B site.
+      (Deferred: the greybox is authored as cuboid data — `src/game/map_greybox.ts` — not the
+      Blender kit. The kit + texel density earn their keep at texturing time, where lightmap UVs
+      actually depend on it. Build the kit in the texturing increment, not before playtest.)
+- [x] Greybox the map with the kit. One small map: two spawns, three routes, one open site.
+      Roughly the scale of half of Dust2's B site. (`de_greybox`: T spawn south, open site north,
+      CT hold behind; West/Mid-choke/East routes; crates+pillars for cover; a step→platform and a
+      ramp keep step-offset / no-slope-slide under test. Built from the same `addBox`/`addRamp`
+      path as the Phase 1 room, so Rapier cuboid colliders + MeshBasicMaterial greybox. T0 data
+      sanity in `map_greybox.test.ts`.)
 - [ ] Playtest the greybox with Phase 1 movement **before texturing**. Timings and sightlines
-      are set now; art is set later.
+      are set now; art is set later. (T3 script written: `tests/acceptance/ACC-007-greybox.md`,
+      not yet run — needs a real windowed browser.)
 - [ ] Texture with Poly Haven / Kenney CC0 sets. Tan sandstone, grey concrete, faded blue
       doors. Max 4 materials for the whole map.
 - [ ] UV channel 2 (lightmap UVs), non-overlapping, packed. Bake in Cycles. Denoise. Export

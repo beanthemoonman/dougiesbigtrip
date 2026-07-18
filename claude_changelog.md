@@ -494,3 +494,30 @@ Developer tested the full Phase 2 build in a real windowed browser and confirmed
 Recorded PASS in the four T3 acceptance scripts (ACC-003 HUD, ACC-004 impacts/spray, ACC-005
 viewmodel, ACC-006 weapons/switch/anim/audio) against commit aafcb6b. Phase 2 is complete;
 Phase 3 (the map) is unblocked. (Committing straight to main — solo project, no feature branches.)
+
+## 2026-07-18 — Phase 3 start: greybox map (data-authored)
+
+Started Phase 3 (the map). The plan's own order is greybox → playtest → *then* texture/lightmap,
+so this increment is the greybox only — no Blender/glb/lightmap yet.
+
+- **`src/game/map_greybox.ts`** — the map "de_greybox" as cuboid data (`MAP_BOXES` + `MAP_RAMPS` +
+  `T_SPAWN`/`CT_SPAWN`), roughly half of Dust2's B: T spawn (south) → open site (north) with a CT
+  hold behind, three routes between (West "tunnels", a Mid doorway choke, East "long"), crates and
+  pillars for cover, and a step→platform (0.4/0.8 m, both rises < STEP_HEIGHT) plus a shallow ramp
+  so step-offset and no-slope-slide stay under test on real map geometry.
+- **`src/main.ts`** — replaced the Phase 1 `buildGreyboxRoom` with `buildGreyboxMap`, which feeds
+  the box/ramp data through the existing `addBox`/`addRamp` path (Rapier cuboid colliders +
+  MeshBasicMaterial greybox — no realtime lights). Player now spawns at `T_SPAWN`. PALETTE moved
+  into the map file.
+- **`src/game/map_greybox.test.ts`** — T0 data sanity (the invariants that silently break the map
+  on an edit): both spawns rest just above the floor and inside the perimeter, the mid choke gap is
+  wider than the player hull, and the site step-up rises stay under STEP_HEIGHT.
+- **`tests/acceptance/ACC-007-greybox.md`** — T3 playtest script written before any layout tuning
+  (routes reachable, choke passable at speed, movement feel survives, step-up not hop, no slope
+  slide, sightlines read). Not yet run — needs a real windowed browser.
+- `pnpm typecheck` / `pnpm lint` / `pnpm test` (67) / `pnpm build` all green.
+
+Deferred (marked in plan_to_implement.md): the authored Blender modular kit + texel density lands
+with texturing/lightmap, not before playtest — that's where lightmap UVs actually depend on it.
+Next: run ACC-007 in a real windowed browser, tune the layout, then start the texture/lightmap
+increment (Blender kit, UV channel 2, Cycles bake → KTX2, glb loader, static-merge, fog+skybox).

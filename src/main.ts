@@ -7,6 +7,7 @@ import { playGunshot, playReload, resumeAudio } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
+import { MAP_BOXES, MAP_RAMPS, T_SPAWN } from './game/map_greybox';
 import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
@@ -28,15 +29,10 @@ import {
   type AnimPose,
 } from './weapons/viewmodel';
 
-// docs/art-direction.md palette. Flat-shaded, unlit greybox — no lightmap
-// exists yet (that's Phase 3), so MeshBasicMaterial rather than a lit
+// Flat-shaded, unlit greybox — no lightmap exists yet (that lands with the
+// texturing increment of Phase 3), so MeshBasicMaterial rather than a lit
 // material avoids any temptation to reach for a realtime light to "fix" it.
-const PALETTE = {
-  concrete: 0xa5a29b,
-  concreteDark: 0x5e5c58,
-  sandstoneLight: 0xc9ae7c,
-  wood: 0x7a5b3c,
-} as const;
+// Map layout + palette live in game/map_greybox.ts.
 
 function addBox(
   world: World,
@@ -75,36 +71,28 @@ function addRamp(
   addBox(world, scene, center, new Vector3(length / 2, thickness / 2, width / 2), color, quat);
 }
 
-/**
- * Phase 1 exit-test room (docs/source-movement.md): an open bhop corridor, a
- * staircase (each step under STEP_HEIGHT, to prove walk-up-not-hop), and a
- * shallow ramp well under the walkable normal threshold (to prove no slope
- * sliding). Cuboid colliders, not a trimesh — this is greybox test geometry,
- * not an authored map (that pipeline is Phase 3).
- */
-function buildGreyboxRoom(world: World, scene: Scene): void {
-  addBox(world, scene, new Vector3(0, -0.1, 0), new Vector3(10, 0.1, 10), PALETTE.concrete);
-
-  const wallHalfHeight = 2;
-  const wallY = wallHalfHeight; // floor top at y=0
-  addBox(world, scene, new Vector3(0, wallY, -10), new Vector3(10, wallHalfHeight, 0.1), PALETTE.sandstoneLight);
-  addBox(world, scene, new Vector3(0, wallY, 10), new Vector3(10, wallHalfHeight, 0.1), PALETTE.sandstoneLight);
-  addBox(world, scene, new Vector3(10, wallY, 0), new Vector3(0.1, wallHalfHeight, 10), PALETTE.sandstoneLight);
-  addBox(world, scene, new Vector3(-10, wallY, 0), new Vector3(0.1, wallHalfHeight, 10), PALETTE.sandstoneLight);
-
-  // Staircase: 6 steps, 0.3 m rise each (< 0.4572 m step height), 0.6 m tread.
-  const STEP_RISE = 0.3;
-  const STEP_DEPTH = 0.6;
-  const STEP_COUNT = 6;
-  for (let i = 0; i < STEP_COUNT; i++) {
-    const height = (i + 1) * STEP_RISE;
-    const x = 2.3 + i * STEP_DEPTH;
-    addBox(world, scene, new Vector3(x, height / 2, -6), new Vector3(STEP_DEPTH / 2, height / 2, 1.25), PALETTE.concreteDark);
+/** Build the greybox map (game/map_greybox.ts) into the physics world + scene. */
+function buildGreyboxMap(world: World, scene: Scene): void {
+  for (const b of MAP_BOXES) {
+    addBox(
+      world,
+      scene,
+      new Vector3(b.c[0], b.c[1], b.c[2]),
+      new Vector3(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2),
+      b.color,
+    );
   }
-
-  // Ramp: rises 1.4 m over a 5 m run (~15.6 deg, well under the 45.573 deg
-  // walkable threshold) — standing on it should not slide.
-  addRamp(world, scene, new Vector3(-8, 0, 6), new Vector3(-3, 1.4, 6), 2.5, 0.3, PALETTE.wood);
+  for (const r of MAP_RAMPS) {
+    addRamp(
+      world,
+      scene,
+      new Vector3(r.start[0], r.start[1], r.start[2]),
+      new Vector3(r.end[0], r.end[1], r.end[2]),
+      r.width,
+      r.thickness,
+      r.color,
+    );
+  }
 }
 
 /**
@@ -135,9 +123,9 @@ async function main(): Promise<void> {
 
   await initPhysics();
   const world = createWorld();
-  buildGreyboxRoom(world, renderCtx.scene);
+  buildGreyboxMap(world, renderCtx.scene);
 
-  const spawn = new Vector3(0, 0.05, 0);
+  const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
   const movementCtx = createMovementContext(world, spawn);
   const player = createPlayerState(spawn);
 
