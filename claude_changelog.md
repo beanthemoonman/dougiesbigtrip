@@ -636,3 +636,22 @@ First slice of Phase 4. Recast bake offline, Detour query at runtime — never b
 - typecheck / lint / test (70) green.
 
 Next: bot entity driving the *player* movement code via synthesised wishdir/buttons, then the FSM.
+
+## 2026-07-18 — Phase 4: bot drives the shared movement code, follows nav
+
+The load-bearing Phase 4 property: **a bot is a second player.** It runs the exact same
+`tickMovement` as the human and only differs in where input comes from — it synthesises a yaw +
+FORWARD press instead of reading a keyboard. No bespoke bot mover (the plan flags this as easy to
+get wrong).
+
+- **`src/ai/bot.ts`**: `createBot` (own `MovementContext` + `PlayerState`), `setGoal` (findPath to
+  a target), `tickBot` (steer toward the current nav waypoint — `yaw = atan2(-dx,-dz)` to match
+  `wishDirFromButtons`'s `(-sinθ,-cosθ)` forward — press FORWARD, advance waypoints within 0.6 m,
+  run shared movement). Bots walk, no jump/bhop.
+- **T1 `src/ai/bot.test.ts`**: bot follows the baked navmesh T-spawn→CT-spawn across the real
+  greybox colliders, stays grounded the whole way (never tunnels floor / flies off a ramp), and
+  ends near CT spawn; a second test asserts no goal → stands still. Proves bots inherit the Source
+  movement feel for free.
+- typecheck / lint / test (72) green.
+
+Next: bot FSM (Idle→Patrol→Investigate→Engage→Reposition→Dead) + perception (FOV/LOS/hearing).
