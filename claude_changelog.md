@@ -704,3 +704,12 @@ wire bots into main.ts (spawn, tick, render placeholder bodies, fire→hitscan) 
 
 Remaining Phase 4: wire bots into main.ts (spawn per team, drive `tickBrain`, render placeholder
 bodies, fire→hitscan/damage, freeze gating on `phase`) + HUD round/score + the T3 acceptance run.
+
+## Map symmetry pass (de_greybox)
+Made the greybox layout mirror-symmetric across x=0. Perimeter walls and the mid
+divider were already symmetric; mirrored the off-center props to matching pairs:
+crates now at (±3,10)/(±6.5,7)/(±6,12), pillars at (0,6)/(±8,16), step+platform
+at (±9,10)/(±9,12.75), and the wood ramp at both x=∓11→∓7. Dropped the stray z=9
+crate that would have stacked on/overlapped the (±3,10) pair.
+Rebaked: navmesh.bin, de_greybox.glb, lightmap.exr → ldr.png → lightmap.ktx2.
+All 93 tests green (movement_map crate-jump trace still lands on the floor).
