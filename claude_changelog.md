@@ -611,3 +611,28 @@ Three playtest bugs from the first round, in priority order.
 
 Verified in real Chrome: spawn now faces the map, cast shadows and shaded wall/crate faces read
 clearly, zero console errors. typecheck / lint / test (69) green.
+
+## 2026-07-18 — Phase 4 start: navmesh bake + Detour runtime pathing
+
+First slice of Phase 4. Recast bake offline, Detour query at runtime — never bake at load time
+(docs/navmesh-pipeline.md).
+
+- **`recast-navigation` dep** + `tsx`/`@types/node` devDeps (a TS runner for the bake script; the
+  test reads the baked blob from disk in Node).
+- **Single collision source.** Refactored `src/game/map_greybox.ts`: `mapCuboids()` yields every
+  collider as an oriented `{center, halfExtents, quat}`. `buildMapColliders` (Rapier) and the new
+  `collisionTriangles()` (triangle soup for recast) both derive from it — nav walks *exactly* what
+  the player collides with, no UCX_ mesh needed (this map's collision is cuboid data, not glb).
+- **`tools/navbake/bake.ts`** (`pnpm nav:bake`): `generateSoloNavMesh` over `collisionTriangles()`,
+  agent params from `src/player/constants.ts` (radius/height/step), `walkable*` divided by cs/ch
+  into **voxel cells** (the #1 recast mistake). → `assets/maps/de_greybox.navmesh.bin` (24 KB,
+  shipped like the lightmap).
+- **`src/ai/nav.ts`**: `loadNav(url)` (browser fetch) / `navFromBytes` (Node), and `findPath` that
+  snaps endpoints onto the mesh with `findClosestPoint` before `computePath` (a bot a few cm off
+  the mesh otherwise gets no path).
+- **T1 `src/ai/nav.test.ts`**: paths T-spawn→CT-spawn against the baked blob, asserts a real
+  multi-point corridor whose endpoints snap near the spawns and that actually spans the map's Z —
+  guards against a hole-filled bake from wrong walkable* units.
+- typecheck / lint / test (70) green.
+
+Next: bot entity driving the *player* movement code via synthesised wishdir/buttons, then the FSM.

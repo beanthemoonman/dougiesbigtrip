@@ -50,18 +50,28 @@ export const MAP_RAMPS = data.ramps as unknown as readonly MapRamp[];
 export const T_SPAWN = data.spawns.T as unknown as readonly [number, number, number];
 export const CT_SPAWN = data.spawns.CT as unknown as readonly [number, number, number];
 
+/** One oriented cuboid — the shared shape behind every box and ramp. */
+export interface MapCuboid {
+  readonly center: Vector3;
+  readonly halfExtents: Vector3;
+  readonly quat: Quaternion;
+}
+
 /**
- * Build the greybox map's Rapier cuboid colliders into `world`. The engine
- * (main.ts) and the headless sim tests both call this, so collision is defined
- * in exactly one place. Visuals come from the baked glb; these stay the cuboids.
+ * Every collider in the map as an oriented cuboid. Single source of truth for
+ * collision geometry: the Rapier colliders (buildMapColliders) and the navmesh
+ * triangle emitter (collisionTriangles) both derive from this, so physics and
+ * nav can't silently diverge.
  */
-export function buildMapColliders(world: World): void {
+export function mapCuboids(): MapCuboid[] {
+  const out: MapCuboid[] = [];
+  const identity = new Quaternion();
   for (const b of MAP_BOXES) {
-    addStaticBox(
-      world,
-      new Vector3(b.c[0], b.c[1], b.c[2]),
-      new Vector3(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2),
-    );
+    out.push({
+      center: new Vector3(b.c[0], b.c[1], b.c[2]),
+      halfExtents: new Vector3(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2),
+      quat: identity.clone(),
+    });
   }
   for (const r of MAP_RAMPS) {
     const dir = new Vector3(r.end[0] - r.start[0], r.end[1] - r.start[1], r.end[2] - r.start[2]);
@@ -72,7 +82,59 @@ export function buildMapColliders(world: World): void {
       .add(new Vector3(r.end[0], r.end[1], r.end[2]))
       .multiplyScalar(0.5)
       .addScaledVector(normal, -r.thickness / 2);
-    const quat = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), angle);
-    addStaticBox(world, center, new Vector3(length / 2, r.thickness / 2, r.width / 2), quat);
+    out.push({
+      center,
+      halfExtents: new Vector3(length / 2, r.thickness / 2, r.width / 2),
+      quat: new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), angle),
+    });
   }
+  return out;
+}
+
+/**
+ * Build the greybox map's Rapier cuboid colliders into `world`. The engine
+ * (main.ts) and the headless sim tests both call this, so collision is defined
+ * in exactly one place. Visuals come from the baked glb; these stay the cuboids.
+ */
+export function buildMapColliders(world: World): void {
+  for (const { center, halfExtents, quat } of mapCuboids()) {
+    addStaticBox(world, center, halfExtents, quat);
+  }
+}
+
+// Unit-cube corner offsets (±1 per axis) and the 12 triangles winding them CCW
+// outward. Scaled by halfExtents, rotated by quat, offset by center below.
+const CUBE_CORNERS: readonly [number, number, number][] = [
+  [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+  [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
+];
+const CUBE_TRIS: readonly number[] = [
+  0, 2, 1, 0, 3, 2, // -z
+  4, 5, 6, 4, 6, 7, // +z
+  0, 1, 5, 0, 5, 4, // -y
+  3, 7, 6, 3, 6, 2, // +y
+  0, 4, 7, 0, 7, 3, // -x
+  1, 2, 6, 1, 6, 5, // +x
+];
+
+/**
+ * The whole map as a flat triangle soup (positions, indices) for the offline
+ * recast navmesh bake. Derived from mapCuboids() so nav walks exactly what the
+ * player collides with.
+ */
+export function collisionTriangles(): { positions: number[]; indices: number[] } {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const v = new Vector3();
+  for (const { center, halfExtents, quat } of mapCuboids()) {
+    const base = positions.length / 3;
+    for (const [cx, cy, cz] of CUBE_CORNERS) {
+      v.set(cx * halfExtents.x, cy * halfExtents.y, cz * halfExtents.z)
+        .applyQuaternion(quat)
+        .add(center);
+      positions.push(v.x, v.y, v.z);
+    }
+    for (const idx of CUBE_TRIS) indices.push(base + idx);
+  }
+  return { positions, indices };
 }
