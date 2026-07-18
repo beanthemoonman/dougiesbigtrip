@@ -655,3 +655,17 @@ get wrong).
 - typecheck / lint / test (72) green.
 
 Next: bot FSM (Idle→Patrol→Investigate→Engage→Reposition→Dead) + perception (FOV/LOS/hearing).
+
+## 2026-07-18 — Phase 4: bot perception (sight cone + LOS + hearing)
+
+- **`src/ai/perception.ts`**: `canSee` (in SIGHT_RANGE 40 m, inside the 150° view cone via a
+  forward·toTarget dot vs `cos(halfFOV)`, and a clear LOS raycast eye-to-eye excluding the bot's
+  own hull) and `canHear` (within HEARING_RADIUS 25 m). Module scratch vectors, no per-tick alloc.
+  These gates are what let bots lose you behind cover instead of tracking omnisciently.
+- **T1 `src/ai/perception.test.ts`**: sees a clear target in front; blind to targets behind (cone),
+  out of range, and through a wall (a one-box world kept LOS deterministic, independent of the map
+  layout). `canHear` in/out of radius.
+- typecheck / lint / test (77) green.
+
+Next: bot FSM (Idle→Patrol→Investigate→Engage→Reposition→Dead) + a non-snapping aim model, then
+the round loop.
