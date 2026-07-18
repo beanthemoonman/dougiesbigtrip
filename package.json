@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "assets:lightmap": "oiiotool assets/maps/de_greybox/lightmap.exr --clamp:min=0:max=1 -d uint8 -o assets/maps/de_greybox/lightmap_ldr.png && toktx --t2 --encode uastc --uastc_quality 3 --zcmp 18 --assign_oetf linear assets/maps/de_greybox/lightmap.ktx2 assets/maps/de_greybox/lightmap_ldr.png"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

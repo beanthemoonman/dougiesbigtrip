@@ -555,3 +555,27 @@ Deferred (marked in plan_to_implement.md): KTX2 encode (payload budget — the 1
 the 16 MB initial-download budget until then), the final 2048-sample bake, `lightMapIntensity`
 fine-tune, Poly Haven CC0 albedo/tiling textures, and a real skybox matching the sun. Next: a T3
 run to sign off "looks lit" (soft crate shadows / wall bounce) and then the KTX2 + albedo polish.
+
+## 2026-07-18 — Phase 3: lightmap shipped as KTX2 (payload budget cleared)
+
+Installed `toktx` (AUR `ktx-software` 4.4.2) and encoded the lightmap, closing the payload item.
+
+- **`pnpm assets:lightmap`** — reproducible encode: `oiiotool` clamps the HDR EXR master to 8-bit
+  linear PNG, then `toktx --t2 --encode uastc --uastc_quality 3 --zcmp 18 --assign_oetf linear`
+  produces `lightmap.ktx2`. **12.6 MB EXR → 316 KB KTX2**, stays compressed in VRAM. (UASTC is
+  LDR, so highlights above 1.0 clip — acceptable at greybox; the ACES tonemapper compresses
+  highlights anyway.)
+- **`src/render/lightmap.ts`** — swapped EXRLoader → KTX2Loader (transcoder served from
+  `/basis`, `detectSupport(renderer)`); the lightmap wiring (channel 1, NoColorSpace, flipY
+  false) is unchanged. `loadLightmappedMap` now takes the renderer.
+- **`public/basis/`** — vendored the Basis transcoder (js + wasm) from three.js so KTX2Loader can
+  transcode; `eslint.config.js` ignores `public/**` (minified vendor js). CREDITS row added
+  (Apache-2.0).
+- **`.gitignore`** — the EXR + intermediate PNG are regenerable bake masters (build_map.py +
+  assets:lightmap); ship the KTX2, not them. Untracked the 12.6 MB EXR from the previous commit.
+- Verified in a real Chrome: map still renders lit via the KTX2 lightmap, consistent with the
+  known-good EXR render, zero app/transcoder console errors. typecheck / lint / test (67) / build
+  green; dist ships `lightmap.ktx2` at 316 KB.
+
+Remaining Phase 3 polish: final 2048-sample bake, `lightMapIntensity` fine-tune, Poly Haven CC0
+albedo/tiling textures, and a real skybox matching the sun — then the T3 "looks lit" exit test.

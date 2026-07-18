@@ -204,11 +204,11 @@ workflow has to be right from the first mesh or you redo everything.
       doors. Max 4 materials for the whole map. (Deferred: 3 flat-albedo materials
       (M_Sandstone/M_Concrete/M_Wood) for now — the baked lightmap is the look; photographic
       tiling albedo is polish. Add the CC0 sets + UV0 tiling in a follow-up.)
-- [~] UV channel 2 (lightmap UVs), non-overlapping, packed. Bake in Cycles. Denoise. Export
-      lightmap as EXR → KTX2. (Done except KTX2: UVMap_Lightmap via Smart UV Project + Pack,
-      Cycles Diffuse bake (Direct+Indirect, no Color) at 128 samples + denoise, saved to
-      `assets/maps/de_greybox/lightmap.exr`. KTX2 deferred — `toktx` not installed; ship EXR
-      until `pnpm assets:opt` gains the encode. Final 2048-sample bake also still owed.)
+- [x] UV channel 2 (lightmap UVs), non-overlapping, packed. Bake in Cycles. Denoise. Export
+      lightmap as EXR → KTX2. (UVMap_Lightmap via Smart UV Project + Pack, Cycles Diffuse bake
+      (Direct+Indirect, no Color) at 128 samples + denoise → `lightmap.exr` (master, gitignored),
+      encoded to `lightmap.ktx2` (316 KB, UASTC) via `pnpm assets:lightmap`. Final 2048-sample
+      bake still owed; the LDR clamp for UASTC drops HDR highlights above 1.0 — fine at greybox.)
 - [x] Export `.glb`. Import into three. Lightmap wired into `material.lightMap` + `lightMapIntensity`.
       (`tools/blender/build_map.py` exports with +Y Up; `TEXCOORD_1` verified via
       `gltf-transform inspect`. `src/render/lightmap.ts` loads the EXR, sets channel=1,

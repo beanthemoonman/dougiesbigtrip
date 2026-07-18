@@ -26,3 +26,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Regenerable lightmap bake masters — ship the KTX2, not these
+# (tools/blender/build_map.py + `pnpm assets:lightmap` regenerate them)
+assets/maps/*/lightmap.exr
+assets/maps/*/lightmap_ldr.png

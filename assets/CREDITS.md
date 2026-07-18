@@ -16,3 +16,5 @@ One row per asset, added at the moment the asset is added. See `docs/licensing-a
 | green_metal_rust (embedded in jerry_can.glb) | Poly Haven | Poly Haven | CC0-1.0 | https://polyhaven.com/a/green_metal_rust | 2026-07-16 |
 | assets/maps/de_greybox.glb | Original (generated in Blender from de_greybox.json via tools/blender/build_map.py) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-18 |
 | assets/maps/de_greybox/lightmap.exr | Original (Cycles diffuse bake, tools/blender/build_map.py) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-18 |
+| assets/maps/de_greybox/lightmap.ktx2 | Original (UASTC-encoded from lightmap.exr via `pnpm assets:lightmap`) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-18 |
+| public/basis/basis_transcoder.{js,wasm} | Bundled with three.js (Basis Universal transcoder) | Binomial LLC / Khronos | Apache-2.0 | https://github.com/BinomialLLC/basis_universal | 2026-07-18 |

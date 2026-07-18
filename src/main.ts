@@ -2,7 +2,7 @@ import type { World } from '@dimforge/rapier3d-compat';
 import { Color, FogExp2, Group, MathUtils, Object3D, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
-import mapExrUrl from '../assets/maps/de_greybox/lightmap.exr?url';
+import mapKtx2Url from '../assets/maps/de_greybox/lightmap.ktx2?url';
 import rifleUrl from '../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
 import { playGunshot, playReload, resumeAudio } from './core/audio';
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
   const SKY = new Color(0x9fb8d6);
   renderCtx.scene.background = SKY;
   renderCtx.scene.fog = new FogExp2(SKY.getHex(), 0.012);
-  renderCtx.scene.add(await loadLightmappedMap(mapGlbUrl, mapExrUrl));
+  renderCtx.scene.add(await loadLightmappedMap(mapGlbUrl, mapKtx2Url, renderCtx.renderer));
 
   const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
   const movementCtx = createMovementContext(world, spawn);
