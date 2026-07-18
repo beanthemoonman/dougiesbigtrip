@@ -10,7 +10,7 @@ browser** (headless Chromium's synthetic pointer-lock click injects a spurious y
 step here is look/movement dependent).
 
 - **Build:** `pnpm dev`, open the printed URL.
-- **Tester:** ______  **Date:** ______  **Commit:** ______  **Result:** ⬜ (not yet run)
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-18  **Commit:** 4725ae4  **Result:** ✅ PASS
 
 Map: `de_greybox` (`src/game/map_greybox.ts`). You spawn at **T** (south). The **site** is the
 open area to the north; **CT** hold is behind it.

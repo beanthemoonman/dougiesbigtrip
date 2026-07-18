@@ -197,16 +197,28 @@ workflow has to be right from the first mesh or you redo everything.
       ramp keep step-offset / no-slope-slide under test. Built from the same `addBox`/`addRamp`
       path as the Phase 1 room, so Rapier cuboid colliders + MeshBasicMaterial greybox. T0 data
       sanity in `map_greybox.test.ts`.)
-- [ ] Playtest the greybox with Phase 1 movement **before texturing**. Timings and sightlines
-      are set now; art is set later. (T3 script written: `tests/acceptance/ACC-007-greybox.md`,
-      not yet run — needs a real windowed browser.)
-- [ ] Texture with Poly Haven / Kenney CC0 sets. Tan sandstone, grey concrete, faded blue
-      doors. Max 4 materials for the whole map.
-- [ ] UV channel 2 (lightmap UVs), non-overlapping, packed. Bake in Cycles. Denoise. Export
-      lightmap as EXR → KTX2.
-- [ ] Export `.glb`. Import into three. Lightmap wired into `material.lightMap` + `lightMapIntensity`.
-- [ ] Static-merge geometry per material. Verify draw call count.
-- [ ] Add exponential fog + a skybox matching the lightmap's sun direction.
+- [x] Playtest the greybox with Phase 1 movement **before texturing**. Timings and sightlines
+      are set now; art is set later. (`tests/acceptance/ACC-007-greybox.md` PASS, 2026-07-18,
+      commit 4725ae4.)
+- [~] Texture with Poly Haven / Kenney CC0 sets. Tan sandstone, grey concrete, faded blue
+      doors. Max 4 materials for the whole map. (Deferred: 3 flat-albedo materials
+      (M_Sandstone/M_Concrete/M_Wood) for now — the baked lightmap is the look; photographic
+      tiling albedo is polish. Add the CC0 sets + UV0 tiling in a follow-up.)
+- [~] UV channel 2 (lightmap UVs), non-overlapping, packed. Bake in Cycles. Denoise. Export
+      lightmap as EXR → KTX2. (Done except KTX2: UVMap_Lightmap via Smart UV Project + Pack,
+      Cycles Diffuse bake (Direct+Indirect, no Color) at 128 samples + denoise, saved to
+      `assets/maps/de_greybox/lightmap.exr`. KTX2 deferred — `toktx` not installed; ship EXR
+      until `pnpm assets:opt` gains the encode. Final 2048-sample bake also still owed.)
+- [x] Export `.glb`. Import into three. Lightmap wired into `material.lightMap` + `lightMapIntensity`.
+      (`tools/blender/build_map.py` exports with +Y Up; `TEXCOORD_1` verified via
+      `gltf-transform inspect`. `src/render/lightmap.ts` loads the EXR, sets channel=1,
+      NoColorSpace, flipY=false, assigns lightMap. Verified lit in-browser, zero app errors.)
+- [x] Static-merge geometry per material. Verify draw call count. (Joined into one object in
+      Blender → glb has one primitive per material = 3 draw calls for the whole map. Well under
+      400.)
+- [~] Add exponential fog + a skybox matching the lightmap's sun direction. (FogExp2 + a sky
+      colour background added, tuned to the bake. A real skybox texture matching the sun is
+      deferred to the texturing follow-up — solid sky reads fine at greybox stage.)
 
 **Exit test:** The map loads under 3 s on a cold cache, renders in under 400 draw calls,
 and looks lit — with soft shadows under crates and bounce light on walls — with zero

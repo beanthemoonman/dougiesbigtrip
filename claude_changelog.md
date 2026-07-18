@@ -521,3 +521,37 @@ Deferred (marked in plan_to_implement.md): the authored Blender modular kit + te
 with texturing/lightmap, not before playtest — that's where lightmap UVs actually depend on it.
 Next: run ACC-007 in a real windowed browser, tune the layout, then start the texture/lightmap
 increment (Blender kit, UV channel 2, Cycles bake → KTX2, glb loader, static-merge, fog+skybox).
+
+## 2026-07-18 — Phase 3: baked-lightmap map pipeline (the Source look)
+
+ACC-007 greybox playtest PASSed (recorded, commit 4725ae4). Then built the lightmap pipeline
+end to end — the actual "Source look" (baked lighting, zero realtime world lights).
+
+- **Single source of truth.** Moved the map layout to `assets/maps/de_greybox.json`; both the
+  engine colliders (`src/game/map_greybox.ts`, now imports the JSON — `resolveJsonModule` on) and
+  the Blender bake (`tools/blender/build_map.py`) read the same numbers, so render + collision
+  can't drift.
+- **`tools/blender/build_map.py`** — reproducible generator: builds all geometry in three.js
+  space and converts per-vertex to Blender Z-up (one code path for boxes + the rotated ramp, no
+  axis algebra), 3 flat-albedo materials by surface class (M_Sandstone/M_Concrete/M_Wood), joins
+  to one object, Smart-UV-Projects UVMap_Lightmap (channel 2) + packs, adds a Sun + physical sky
+  (bake-only, none ship), bakes Cycles Diffuse (Direct+Indirect, **no Color**) at 128 samples +
+  denoise, exports `de_greybox.glb` (+Y Up, `TEXCOORD_1` verified via `gltf-transform inspect`)
+  and `de_greybox/lightmap.exr`.
+- **`src/render/lightmap.ts`** — loads the glb + EXR, wires the lightmap onto every material
+  (`channel=1`, `NoColorSpace`, `flipY=false`). Loaded as **EXR not KTX2** — `toktx` isn't
+  installed; EXR is HDR-correct with zero new tooling. KTX2 is the payload win (12.6 MB → ~1 MB)
+  for `pnpm assets:opt` once toktx lands; the material wiring is identical (swap the loader).
+- **`src/main.ts`** — map VISUALS now come from the baked glb; COLLISION stays the proven Rapier
+  cuboids (`buildMapColliders`, same layout data) so nothing ships a collision mesh. Added
+  FogExp2 + a sky-colour background (skybox stand-in). Removed the old flat-greybox mesh helpers.
+- **Verified in a real Chrome** (claude-in-chrome): map renders lit — sandstone walls with soft
+  baked gradient, not black, not blown out, not static — viewmodel + HUD intact, zero app console
+  errors. Map is **3 draw calls** (one primitive per material, joined at bake).
+- CREDITS rows added for the glb + lightmap (original/CC0). typecheck / lint / test (67) / build
+  all green.
+
+Deferred (marked in plan_to_implement.md): KTX2 encode (payload budget — the 12.6 MB EXR exceeds
+the 16 MB initial-download budget until then), the final 2048-sample bake, `lightMapIntensity`
+fine-tune, Poly Haven CC0 albedo/tiling textures, and a real skybox matching the sun. Next: a T3
+run to sign off "looks lit" (soft crate shadows / wall bounce) and then the KTX2 + albedo polish.

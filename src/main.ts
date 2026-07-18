@@ -1,6 +1,8 @@
 import type { World } from '@dimforge/rapier3d-compat';
-import { BoxGeometry, Group, Mesh, MeshBasicMaterial, MathUtils, Object3D, Quaternion, Scene, Vector3 } from 'three';
+import { Color, FogExp2, Group, MathUtils, Object3D, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
+import mapExrUrl from '../assets/maps/de_greybox/lightmap.exr?url';
 import rifleUrl from '../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
 import { playGunshot, playReload, resumeAudio } from './core/audio';
@@ -13,6 +15,7 @@ import { createMovementContext, createPlayerState, tickMovement, type PlayerStat
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
 import { createDecals } from './render/decals';
+import { loadLightmappedMap } from './render/lightmap';
 import { createRenderContext } from './render/renderer';
 import { createHud } from './ui/hud';
 import { WEAPONS, type WeaponId } from './weapons/defs';
@@ -29,69 +32,31 @@ import {
   type AnimPose,
 } from './weapons/viewmodel';
 
-// Flat-shaded, unlit greybox — no lightmap exists yet (that lands with the
-// texturing increment of Phase 3), so MeshBasicMaterial rather than a lit
-// material avoids any temptation to reach for a realtime light to "fix" it.
-// Map layout + palette live in game/map_greybox.ts.
+// The map's VISUALS come from the baked-lightmap glb (loadLightmappedMap); its
+// COLLISION stays the proven Rapier cuboids built here from the same layout
+// data, so the two align without shipping a collision mesh in the glb. Baked
+// lighting only — no realtime lights in the world scene (art-direction.md).
 
-function addBox(
-  world: World,
-  scene: Scene,
-  center: Vector3,
-  halfExtents: Vector3,
-  color: number,
-  rotation?: Quaternion,
-): void {
-  addStaticBox(world, center, halfExtents, rotation);
-  const mesh = new Mesh(
-    new BoxGeometry(halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2),
-    new MeshBasicMaterial({ color }),
-  );
-  mesh.position.copy(center);
-  if (rotation) mesh.quaternion.copy(rotation);
-  scene.add(mesh);
-}
-
-/** A straight ramp collider+mesh from `start` to `end` (both on the walkable surface). */
-function addRamp(
-  world: World,
-  scene: Scene,
-  start: Vector3,
-  end: Vector3,
-  width: number,
-  thickness: number,
-  color: number,
-): void {
-  const dir = end.clone().sub(start);
-  const length = dir.length();
-  const angle = Math.atan2(dir.y, dir.x);
-  const normal = new Vector3(-Math.sin(angle), Math.cos(angle), 0);
-  const center = start.clone().add(end).multiplyScalar(0.5).addScaledVector(normal, -thickness / 2);
-  const quat = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), angle);
-  addBox(world, scene, center, new Vector3(length / 2, thickness / 2, width / 2), color, quat);
-}
-
-/** Build the greybox map (game/map_greybox.ts) into the physics world + scene. */
-function buildGreyboxMap(world: World, scene: Scene): void {
+/** Build the greybox map colliders (game/map_greybox.ts) into the physics world. */
+function buildMapColliders(world: World): void {
   for (const b of MAP_BOXES) {
-    addBox(
+    addStaticBox(
       world,
-      scene,
       new Vector3(b.c[0], b.c[1], b.c[2]),
       new Vector3(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2),
-      b.color,
     );
   }
   for (const r of MAP_RAMPS) {
-    addRamp(
-      world,
-      scene,
-      new Vector3(r.start[0], r.start[1], r.start[2]),
-      new Vector3(r.end[0], r.end[1], r.end[2]),
-      r.width,
-      r.thickness,
-      r.color,
-    );
+    const dir = new Vector3(r.end[0] - r.start[0], r.end[1] - r.start[1], r.end[2] - r.start[2]);
+    const length = dir.length();
+    const angle = Math.atan2(dir.y, dir.x);
+    const normal = new Vector3(-Math.sin(angle), Math.cos(angle), 0);
+    const center = new Vector3(r.start[0], r.start[1], r.start[2])
+      .add(new Vector3(r.end[0], r.end[1], r.end[2]))
+      .multiplyScalar(0.5)
+      .addScaledVector(normal, -r.thickness / 2);
+    const quat = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), angle);
+    addStaticBox(world, center, new Vector3(length / 2, r.thickness / 2, r.width / 2), quat);
   }
 }
 
@@ -123,7 +88,14 @@ async function main(): Promise<void> {
 
   await initPhysics();
   const world = createWorld();
-  buildGreyboxMap(world, renderCtx.scene);
+  buildMapColliders(world);
+
+  // Map visuals: baked-lightmap glb (built by tools/blender/build_map.py). Sky
+  // colour + matching exponential fog stand in for a skybox at greybox stage.
+  const SKY = new Color(0x9fb8d6);
+  renderCtx.scene.background = SKY;
+  renderCtx.scene.fog = new FogExp2(SKY.getHex(), 0.012);
+  renderCtx.scene.add(await loadLightmappedMap(mapGlbUrl, mapExrUrl));
 
   const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
   const movementCtx = createMovementContext(world, spawn);

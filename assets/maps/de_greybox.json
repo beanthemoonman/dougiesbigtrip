@@ -1,0 +1,32 @@
+{
+  "_comment": "Single source of truth for de_greybox layout. Consumed by src/game/map_greybox.ts (colliders) AND tools/blender/build_map.py (render+lightmap bake). Coords: three.js metres, Y up, floor top y=0. Colors are hex. surface: material class for texturing/lightmap grouping + src/game/surfaces.ts.",
+  "spawns": { "T": [0, 0.05, -19], "CT": [0, 0.05, 18] },
+  "boxes": [
+    { "c": [0, -0.1, -1], "s": [24, 0.2, 42], "color": 10854555, "surface": "Concrete" },
+
+    { "c": [0, 2, -22], "s": [25, 4, 0.5], "color": 13217404, "surface": "Sandstone" },
+    { "c": [0, 2, 20], "s": [25, 4, 0.5], "color": 13217404, "surface": "Sandstone" },
+    { "c": [-12, 2, -1], "s": [0.5, 4, 42], "color": 13217404, "surface": "Sandstone" },
+    { "c": [12, 2, -1], "s": [0.5, 4, 42], "color": 13217404, "surface": "Sandstone" },
+
+    { "c": [-4, 2, -6], "s": [0.5, 4, 20], "color": 6180440, "surface": "Concrete" },
+    { "c": [4, 2, -6], "s": [0.5, 4, 20], "color": 6180440, "surface": "Concrete" },
+
+    { "c": [-2.75, 2, -6], "s": [2.5, 4, 0.5], "color": 6180440, "surface": "Concrete" },
+    { "c": [2.75, 2, -6], "s": [2.5, 4, 0.5], "color": 6180440, "surface": "Concrete" },
+
+    { "c": [-3, 0.6, 9], "s": [1.4, 1.2, 1.4], "color": 8018236, "surface": "Wood" },
+    { "c": [3, 0.75, 10], "s": [1.5, 1.5, 1.5], "color": 8018236, "surface": "Wood" },
+    { "c": [6.5, 0.6, 7], "s": [1.4, 1.2, 1.4], "color": 8018236, "surface": "Wood" },
+    { "c": [-6, 0.6, 12], "s": [1.4, 1.2, 1.4], "color": 8018236, "surface": "Wood" },
+
+    { "c": [0, 2, 6], "s": [0.6, 4, 0.6], "color": 13217404, "surface": "Sandstone" },
+    { "c": [8, 2, 16], "s": [0.6, 4, 0.6], "color": 13217404, "surface": "Sandstone" },
+
+    { "c": [9, 0.2, 10], "s": [4, 0.4, 1.5], "color": 6180440, "surface": "Concrete" },
+    { "c": [9, 0.4, 12.75], "s": [4, 0.8, 3], "color": 6180440, "surface": "Concrete" }
+  ],
+  "ramps": [
+    { "start": [-11, 0, 14], "end": [-7, 1.2, 14], "width": 3, "thickness": 0.3, "color": 8018236, "surface": "Wood" }
+  ]
+}
