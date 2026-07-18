@@ -669,3 +669,25 @@ Next: bot FSM (Idle→Patrol→Investigate→Engage→Reposition→Dead) + perce
 
 Next: bot FSM (Idle→Patrol→Investigate→Engage→Reposition→Dead) + a non-snapping aim model, then
 the round loop.
+
+## 2026-07-18 — Phase 4: non-snapping aim model + bot FSM
+
+- **`src/ai/aim.ts`** (T0, pure): a turn-rate-capped view tracker. `stepAngle`/`stepAim` rotate
+  toward the desired angles by at most `turnRate*dt`, shortest way round the ±π wrap — it NEVER
+  snaps (an aimbot reads as cheating). `desiredYawPitch` inverts the `aimDirection` convention;
+  `onTarget` gates firing to a small cone. Rng-free on purpose — reaction/error live in the FSM.
+  `aim.test.ts`: shortest-signed delta across the wrap, per-tick step never exceeds the cap,
+  converges on a 180° target, sign conventions.
+- **`src/ai/brain.ts`** (T1): the FSM — Idle→Investigate→Engage→Reposition, Dead terminal. Engage
+  *stands and aims* (Reposition moves), so bots don't run at you spraying. Per-difficulty knobs
+  (`DIFFICULTIES` easy/normal/hard): reaction delay, aim turn-rate, aim error radius (resampled per
+  acquisition from the injected seeded rng — steady during a burst), and lost-target memory.
+  `tickBrain` returns fire *intent* only — the caller owns the shot, keeping the FSM decoupled from
+  combat. Sight/LOS gates (perception.ts) make bots lose you behind cover.
+  `brain.test.ts`: acquires a visible target and fires only *after* the reaction delay; never fires
+  through a wall (stays Idle); a target that dies mid-engage drops the bot to Reposition then Idle
+  after `loseMemory`; a heard sound → Investigate; Dead is terminal.
+- typecheck / lint / test (88) green.
+
+Remaining Phase 4: round loop (freezetime→live→end→reset, score, respawn) + fixed loadouts, then
+wire bots into main.ts (spawn, tick, render placeholder bodies, fire→hitscan) and the T3 script.
