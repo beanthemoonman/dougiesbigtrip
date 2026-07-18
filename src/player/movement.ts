@@ -254,7 +254,7 @@ function traceStraight(
   outNormal: Vector3,
 ): number | null {
   capsuleCenterFromFeet(position, shape.halfHeight, shape.radius, traceCenterScratch);
-  const fraction = capsuleCast(ctx.world, shape, traceCenterScratch, displacement, outNormal, ctx.collider);
+  const fraction = capsuleCast(ctx.world, shape, traceCenterScratch, displacement, outNormal, ctx.collider, false);
   if (fraction === null) {
     position.add(displacement);
     return null;
@@ -281,6 +281,7 @@ function tryPlayerMove(ctx: MovementContext, shape: Capsule, position: Vector3, 
       displacementScratch,
       hitNormalScratch,
       ctx.collider,
+      false,
     );
 
     if (fraction === null) {

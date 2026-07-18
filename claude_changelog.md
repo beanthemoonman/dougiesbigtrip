@@ -579,3 +579,35 @@ Installed `toktx` (AUR `ktx-software` 4.4.2) and encoded the lightmap, closing t
 
 Remaining Phase 3 polish: final 2048-sample bake, `lightMapIntensity` fine-tune, Poly Haven CC0
 albedo/tiling textures, and a real skybox matching the sun — then the T3 "looks lit" exit test.
+
+## First-round bug fixes (spawn facing, edge free-fall, shadow contrast)
+
+Three playtest bugs from the first round, in priority order.
+
+- **Edge free-fall (P0, movement).** Running-jumping into a crate could pin the player mid-air
+  against its face forever: once the capsule was touching a wall, `castShape(..., stopAtPenetration=true)`
+  returned TOI 0 for *every* cast direction, so collide-and-slide couldn't move the player out — the
+  5-plane budget filled with the same wall normal, velocity zeroed, and gravity piled up unused
+  (`vy` → -∞) while position stayed frozen. Fix: `capsuleCast` now takes a `stopAtPenetration` flag;
+  the collide-and-slide sweeps (`tryPlayerMove`, `traceStraight`) pass `false` so a touching capsule
+  slides down the wall and falls, while the ground/overlap probes keep `true` (so standing-on-floor
+  detection is unaffected). `src/physics/shapecast.ts`, `src/player/movement.ts`.
+  - **T1 regression:** `src/player/movement_map.test.ts` — first world-level movement test (runs
+    `tickMovement` against the real greybox Rapier colliders). Reproduces the running-jump into the
+    crate and asserts the player lands on the floor with bounded `vy` and doesn't tunnel; a second
+    test asserts flat-ground walking stays grounded (guards the fix from regressing ground contact).
+    Golden pure-function tests (`movement.test.ts`) untouched and green.
+  - Extracted `buildMapColliders` from `main.ts` into `src/game/map_greybox.ts` so the engine and the
+    sim test build colliders from one source (no drift).
+- **Spawn faces a wall (disorienting).** T spawn is 3 m in front of the south perimeter wall and
+  default yaw looked straight at it. `main.ts` now sets `input.state.yaw` to face the player from
+  their spawn toward the enemy spawn (`atan2` of the spawn→CT vector) — you spawn looking down mid
+  at the site.
+- **Weak shadows (objects blend together).** Bake ratio, not engine: the sun (energy 4) vs. the
+  `MULTIPLE_SCATTERING` sky fill (strength 0.5) were too close, so shaded faces stayed bright.
+  Re-baked with sun energy 6 / sky strength 0.2 (and a tighter 1.5° sun angle for crisper contact
+  shadows). `tools/blender/build_map.py`; re-encoded `lightmap.ktx2` (316 KB → 395 KB, still far
+  under budget).
+
+Verified in real Chrome: spawn now faces the map, cast shadows and shaded wall/crate faces read
+clearly, zero console errors. typecheck / lint / test (69) green.

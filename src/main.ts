@@ -1,5 +1,4 @@
-import type { World } from '@dimforge/rapier3d-compat';
-import { Color, FogExp2, Group, MathUtils, Object3D, Quaternion, Vector3 } from 'three';
+import { Color, FogExp2, Group, MathUtils, Object3D, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
 import mapKtx2Url from '../assets/maps/de_greybox/lightmap.ktx2?url';
@@ -9,11 +8,11 @@ import { playGunshot, playReload, resumeAudio } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
-import { MAP_BOXES, MAP_RAMPS, T_SPAWN } from './game/map_greybox';
+import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_greybox';
 import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
-import { addStaticBox, createWorld, initPhysics } from './physics/world';
+import { createWorld, initPhysics } from './physics/world';
 import { createDecals } from './render/decals';
 import { loadLightmappedMap } from './render/lightmap';
 import { createRenderContext } from './render/renderer';
@@ -33,32 +32,9 @@ import {
 } from './weapons/viewmodel';
 
 // The map's VISUALS come from the baked-lightmap glb (loadLightmappedMap); its
-// COLLISION stays the proven Rapier cuboids built here from the same layout
-// data, so the two align without shipping a collision mesh in the glb. Baked
-// lighting only — no realtime lights in the world scene (art-direction.md).
-
-/** Build the greybox map colliders (game/map_greybox.ts) into the physics world. */
-function buildMapColliders(world: World): void {
-  for (const b of MAP_BOXES) {
-    addStaticBox(
-      world,
-      new Vector3(b.c[0], b.c[1], b.c[2]),
-      new Vector3(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2),
-    );
-  }
-  for (const r of MAP_RAMPS) {
-    const dir = new Vector3(r.end[0] - r.start[0], r.end[1] - r.start[1], r.end[2] - r.start[2]);
-    const length = dir.length();
-    const angle = Math.atan2(dir.y, dir.x);
-    const normal = new Vector3(-Math.sin(angle), Math.cos(angle), 0);
-    const center = new Vector3(r.start[0], r.start[1], r.start[2])
-      .add(new Vector3(r.end[0], r.end[1], r.end[2]))
-      .multiplyScalar(0.5)
-      .addScaledVector(normal, -r.thickness / 2);
-    const quat = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), angle);
-    addStaticBox(world, center, new Vector3(length / 2, r.thickness / 2, r.width / 2), quat);
-  }
-}
+// COLLISION stays the proven Rapier cuboids built by buildMapColliders (from the
+// same layout data), so the two align without shipping a collision mesh in the
+// glb. Baked lighting only — no realtime lights in the world scene (art-direction.md).
 
 /**
  * Map the player's motion onto the accuracy model's stance buckets
@@ -98,6 +74,10 @@ async function main(): Promise<void> {
   renderCtx.scene.add(await loadLightmappedMap(mapGlbUrl, mapKtx2Url, renderCtx.renderer));
 
   const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
+  // Face the player from their spawn toward the enemy spawn (the map), not the
+  // wall 3 m behind them. forward at yaw θ is (-sinθ, -cosθ), so θ = atan2(-dx, -dz)
+  // of the spawn→CT vector points the camera down that line.
+  input.state.yaw = Math.atan2(T_SPAWN[0] - CT_SPAWN[0], T_SPAWN[2] - CT_SPAWN[2]);
   const movementCtx = createMovementContext(world, spawn);
   const player = createPlayerState(spawn);
 

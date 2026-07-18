@@ -149,10 +149,12 @@ def setup_lighting():
     # Idempotent: drop any lights from a previous run.
     for o in [o for o in bpy.data.objects if o.type == "LIGHT"]:
         bpy.data.objects.remove(o, do_unlink=True)
-    # Sun: low-ish angle, sharp-ish shadows (Source look).
+    # Sun: low-ish angle, sharp-ish shadows (Source look). Strong key vs. a weak
+    # sky fill so crate/wall faces in shadow actually go dark — a soft, near-equal
+    # ratio read flat and made objects blend into each other (first-round bug).
     sun_data = bpy.data.lights.new("Sun", type="SUN")
-    sun_data.energy = 4.0
-    sun_data.angle = math.radians(3.0)
+    sun_data.energy = 6.0
+    sun_data.angle = math.radians(1.5)
     sun = bpy.data.objects.new("Sun", sun_data)
     sun.rotation_euler = (math.radians(50), 0, math.radians(35))
     bpy.context.scene.collection.objects.link(sun)
@@ -165,7 +167,7 @@ def setup_lighting():
     bg = nt.nodes.new("ShaderNodeBackground")
     sky = nt.nodes.new("ShaderNodeTexSky")
     sky.sky_type = "MULTIPLE_SCATTERING"
-    bg.inputs["Strength"].default_value = 0.5
+    bg.inputs["Strength"].default_value = 0.2
     out = nt.nodes.new("ShaderNodeOutputWorld")
     nt.links.new(sky.outputs["Color"], bg.inputs["Color"])
     nt.links.new(bg.outputs["Background"], out.inputs["Surface"])

@@ -13,6 +13,9 @@
 // proven cuboids. Same box list → they align. Re-run the Blender bake if the
 // layout JSON changes, or render and collision drift apart.
 
+import type { World } from '@dimforge/rapier3d-compat';
+import { Quaternion, Vector3 } from 'three';
+import { addStaticBox } from '../physics/world';
 import data from '../../assets/maps/de_greybox.json';
 
 // docs/art-direction.md palette (mirrors the hex colours in the JSON).
@@ -46,3 +49,30 @@ export const MAP_BOXES = data.boxes as unknown as readonly MapBox[];
 export const MAP_RAMPS = data.ramps as unknown as readonly MapRamp[];
 export const T_SPAWN = data.spawns.T as unknown as readonly [number, number, number];
 export const CT_SPAWN = data.spawns.CT as unknown as readonly [number, number, number];
+
+/**
+ * Build the greybox map's Rapier cuboid colliders into `world`. The engine
+ * (main.ts) and the headless sim tests both call this, so collision is defined
+ * in exactly one place. Visuals come from the baked glb; these stay the cuboids.
+ */
+export function buildMapColliders(world: World): void {
+  for (const b of MAP_BOXES) {
+    addStaticBox(
+      world,
+      new Vector3(b.c[0], b.c[1], b.c[2]),
+      new Vector3(b.s[0] / 2, b.s[1] / 2, b.s[2] / 2),
+    );
+  }
+  for (const r of MAP_RAMPS) {
+    const dir = new Vector3(r.end[0] - r.start[0], r.end[1] - r.start[1], r.end[2] - r.start[2]);
+    const length = dir.length();
+    const angle = Math.atan2(dir.y, dir.x);
+    const normal = new Vector3(-Math.sin(angle), Math.cos(angle), 0);
+    const center = new Vector3(r.start[0], r.start[1], r.start[2])
+      .add(new Vector3(r.end[0], r.end[1], r.end[2]))
+      .multiplyScalar(0.5)
+      .addScaledVector(normal, -r.thickness / 2);
+    const quat = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), angle);
+    addStaticBox(world, center, new Vector3(length / 2, r.thickness / 2, r.width / 2), quat);
+  }
+}

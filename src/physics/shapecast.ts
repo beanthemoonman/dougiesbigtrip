@@ -31,6 +31,7 @@ export function capsuleCast(
   displacement: Vector3,
   outNormal: Vector3,
   excludeCollider?: RAPIER.Collider,
+  stopAtPenetration = true,
 ): number | null {
   if (displacement.lengthSq() === 0) return null;
 
@@ -41,7 +42,11 @@ export function capsuleCast(
     shape,
     TARGET_DISTANCE,
     1.0,
-    true,
+    // The collide-and-slide sweep passes false so a capsule already touching a
+    // wall/edge can still slide along it and fall away, instead of every cast
+    // returning TOI 0 and pinning the player mid-air (the "caught on edge →
+    // infinite free fall" bug). Ground/overlap probes keep the default true.
+    stopAtPenetration,
     undefined,
     undefined,
     excludeCollider,
