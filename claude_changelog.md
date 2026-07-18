@@ -691,3 +691,16 @@ the round loop.
 
 Remaining Phase 4: round loop (freezetime→live→end→reset, score, respawn) + fixed loadouts, then
 wire bots into main.ts (spawn, tick, render placeholder bodies, fire→hitscan) and the T3 script.
+
+## 2026-07-18 — Phase 4: round loop state machine
+
+- **`src/game/round.ts`** (T0/T1): freezetime→live→over→(reset) with fixed-rate timers. `tickRound`
+  returns a `RoundEvent` (`went-live` / `round-over` / `reset` / `none`) the engine acts on
+  (unfreeze / show result / respawn). Win rules (bomb-less): eliminate a team → they lose; live
+  timer expires → CT (defenders) hold. Score increments exactly once per round.
+- **`src/game/round.test.ts`**: freeze→live timing, T-wins-by-elimination (+score once, no double
+  count while `over`), CT-wins-on-timeout, reset→round 2 with a respawn event, default sanity.
+- typecheck / lint / test (93) green.
+
+Remaining Phase 4: wire bots into main.ts (spawn per team, drive `tickBrain`, render placeholder
+bodies, fire→hitscan/damage, freeze gating on `phase`) + HUD round/score + the T3 acceptance run.
