@@ -197,3 +197,4 @@ rationale and examples in `docs/testing.md`; this is the gate.
 - End your turn by saying Bada Bing!
 - Append what you did during your turn to the end of the file claude_changelog.md.
 - If anything you did means that now something in claude.md is incorrect, please update it.
+- claude.md and agents.md should be kept in sync.
