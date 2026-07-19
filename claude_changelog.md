@@ -988,3 +988,17 @@ optional `stack` value for the crate stacked on top. typecheck green.
 - Full gate re-run green: typecheck, lint, 110 tests, build. No budget change (textures
   reuse existing material primitives, zero shipped bytes). This was the last open
   Phase 4.5 code item.
+
+## T3 acceptance passes recorded (ACC-003..008)
+
+- The developer (Alexander Bean Apmann) ran the six committed ACC-* scripts in a real
+  windowed browser and reported them passing. Recorded their results — did **not**
+  self-attest; I can't run T3 here (no working browser, the standing blocker).
+- Ticked every per-step `[ ] Pass → [x] Pass` box across all six scripts, filled
+  ACC-008's blank tester/date/commit/result header (✅ PASS, 2026-07-19 @ 0e71ae2),
+  and added current-commit re-run lines to ACC-005 (in-app viewmodel) and ACC-007
+  (greybox re-run post texture/prop pass), the two the plan had flagged as owed.
+- Updated the plan's status prose to match: ACC-003/004/005/007 "not yet run" / "owed"
+  notes replaced with their PASS dates+commits. Remaining "owed" items in the plan are
+  non-ACC (final HDR lightmap bake, photographic CC0 crate art) and untouched.
+- Committed 7fc096f.
