@@ -276,6 +276,11 @@ A T1 flake here is a **P0 determinism bug**, not a retry.
 - **6.6 — Combat: lag comp + damage + round.** Rewind hitreg, damage, round rules authoritative;
   kill/tracer/round events to clients.
   *Check: full ACC-010 PASS recorded against a commit hash → Phase 6 exit test met.*
+- **6.7 — Connect UI + Tab scoreboard.** Plain-DOM connect overlay (default server URL prefilled)
+  and a held-Tab 3v3 scoreboard; K/D accumulates client-side from 6.6's `kill` events. Full spec
+  in `docs/connect-and-scoreboard.md`.
+  *Check: page loads to connect overlay → default URL connects → hold Tab shows 3v3 + K/D
+  (ACC-011).*
 
 ---
 

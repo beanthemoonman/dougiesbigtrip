@@ -1480,3 +1480,16 @@ claude_changelog.md
 
 Files: src/main.ts (edited — imports, map collider loading, sim_init, tick loop,
 respawn), claude_changelog.md
+
+## Black-screen fix (sim_reset_player)
+
+- **Root cause**: `main.ts` imported `sim_reset_player` from `sim-wasm`, but `sim/pkg` was stale (function didn't exist in the built WASM) → ESM named-import failure crashed init → black screen. Vite's `.vite` dep cache also needed clearing.
+- **Fix**: rebuilt WASM (`wasm-pack build sim --target bundler --features wasm`); `rm -rf node_modules/.vite`.
+- **Code**: `sim_reset_player()` resets only player state (preserving map colliders) instead of `sim_init()` which recreated the whole PhysicsWorld; `sim_init()` moved before map-collider loading at startup.
+- Verified in Chrome: app renders (HUD, viewmodel, map, freeze countdown), sim locked at 64 Hz, no WASM errors.
+- Committed 5556734, pushed to main.
+- Note: `pnpm lint` fails on pre-existing issues (ESLint scanning `target/doc/` generated files — add `target/` to ignores; plus pre-existing non-null assertions). No new lint errors from this change.
+
+## Phase 6.7 plan: connect UI + Tab scoreboard
+- New doc `docs/connect-and-scoreboard.md`: plain-DOM connect overlay (default ws://127.0.0.1:9876 prefilled) + held-Tab 3v3 scoreboard with client-side K/D from kill events. Includes DoD (T0/T2/T3) and named wire-format gaps (names on wire, real 3v3 server).
+- Added phase 6.7 to `docs/netcode.md` §9 increment plan. Slotted after 6.6 (not the requested 6.5, which is taken by Full-AI) because the K/D feed depends on 6.6's kill events.
