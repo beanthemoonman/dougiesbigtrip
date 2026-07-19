@@ -1,7 +1,9 @@
 # Plan to Implement
 
 Target: a browser FPS demo with CS:Source-like look and movement feel. One map, two weapons,
-bots, round loop. Single-player. ~5 weeks of evenings.
+bots, round loop. Starts single-player (~5 weeks of evenings through Phase 5), then grows into
+a multiplayer deathmatch with an authoritative Rust server (Phase 6), ragdolls (Phase 7), and
+a containerized deploy (Phase 8).
 
 Each phase ends with a **demoable build** and an **exit test** you can actually perform.
 Do not start phase N+1 until phase N's exit test passes.
@@ -248,6 +250,34 @@ lose you when you break LOS, and are beatable but not free.
 
 ---
 
+## Phase 4.5 — Art & asset refinement (1–2 weeks)
+
+The greybox and the blocky placeholder models got us to "it plays right." This phase makes it
+*look* right. Everything deferred in Phase 3 (texturing, the modular kit, the skybox) lands here,
+and the character rig unblocks the hitbox debts left over from Phases 2–3.
+
+- [ ] **De-lopside the map.** `de_greybox` (`src/game/map_greybox.ts`) is awkwardly asymmetric.
+      Rework route/site geometry for balanced sightlines and cover, then **re-run ACC-007**
+      (greybox playtest) — timings and sightlines must still pass before art goes on top.
+- [ ] **Weapon models.** Replace the faceted `ak_viewmodel.glb` / `pistol_viewmodel.glb` with
+      properly curved, higher-fidelity models (Blender). Keep the layer-1 / separate-camera /
+      separate-FOV viewmodel wiring untouched (`docs/weapon-feel.md`).
+- [ ] **Character models.** Rigged T and CT `.glb`s in `assets/characters/` (Mixamo-derived
+      clips per the repo layout). This unblocks two standing debts: the per-bone hitbox capsules
+      and the world-space per-bone hitscan query, both deferred from Phase 2/3 pending a rig.
+- [ ] **Breakable props.** Better crate/barrel models with CC0 textures, including the
+      destructible variants Phase 3 skipped. They must not become clip/collision hazards.
+- [ ] **Textures.** Land the deferred Phase 3 texturing: Poly Haven / Kenney CC0 sets, ≤4 map
+      materials total, UV0 tiling albedo, and a real skybox matching the lightmap's sun direction.
+- [ ] Every new asset gets a `CREDITS.md` row **at add-time** and a licence. No exceptions.
+- [ ] Stay inside budget: < 400 draw calls, < 60 MB total. Re-verify on integrated graphics.
+
+**Exit test:** Side-by-side against the greybox build — weapons read as curved, not faceted;
+T and CT are distinguishable at range; crates break and can't be stood on mid-air; the map
+feels symmetric in a playtest. Draw-call and payload budgets still hold.
+
+---
+
 ## Phase 5 — Polish + ship (½–1 week)
 
 - [ ] Muzzle flash (sprite + brief light exception — the one allowed dynamic light), tracers,
@@ -257,24 +287,65 @@ lose you when you break LOS, and are beatable but not free.
 - [ ] Loading screen with real progress. Preload weapon/audio before spawn.
 - [ ] `pnpm assets:opt`: Meshopt + KTX2/Basis. Verify the 16 MB budget.
 - [ ] Settings: sensitivity, FOV (world), volume. Persist to a config object.
-- [ ] Deploy static to Pages/Netlify. Verify on a mid-range laptop, not just your desktop.
+- [ ] Deploy static to Pages/Netlify for the single-player build. (The real multiplayer target
+      is the containerized client+server deploy in Phase 8; this is the interim static host.)
+      Verify on a mid-range laptop, not just your desktop.
 
 **Exit test:** A stranger opens the URL on an integrated-GPU laptop, is shooting within 10 s,
 and doesn't mention frame rate.
 
 ---
 
+## Phase 6 — Netcode: Rust deathmatch server (multiple weeks)
+
+This is the big one — the whole reason Phase 0 mandated a fixed 64 Hz timestep. Multiplayer needs
+client prediction, lag compensation, and server reconciliation against an **authoritative** sim.
+
+- [ ] Rust server running the same fixed 64 Hz sim as the client. The movement math must match
+      `src/player/movement.ts` exactly — port it or share it (WASM), don't reimplement by feel.
+- [ ] One deathmatch map. **On page load: the player joins and replaces a bot.** If 10 players
+      are already connected, the newcomer **spectates** instead of spawning.
+- [ ] Client-side prediction + server reconciliation for local movement. Lag compensation
+      (rewind) for hitscan so shots register against where the shooter saw the target.
+- [ ] Transport: WebRTC unreliable channel (Geckos.io-style) or WebSocket — decide at phase start
+      and record why. Snapshot/delta encoding for entity state.
+- [ ] Bots and humans share the same slots: a bot fills any empty slot, a human takes it on join.
+
+**Exit test:** Two browsers connected, both moving and shooting. Each sees the other where the
+server says, with no rubber-banding. An 11th connection lands in spectate, not in the fight.
+
+---
+
+## Phase 7 — Light ragdoll physics (½–1 week)
+
+- [ ] On player/bot death, swap the animated model for a Rapier-driven ragdoll (a small,
+      light articulated body — not a full muscle sim; the tuning is a trap, keep it minimal).
+- [ ] **Corpses must not be clip hazards.** The ragdoll does not collide with live players —
+      you can walk through a body. Settle fast and/or despawn on a timer.
+- [ ] Deterministic enough not to break the sim: ragdolls are cosmetic, driven off the seeded
+      RNG, and never feed back into gameplay state.
+
+**Exit test:** Kill a bot — the body falls plausibly and you can walk straight through it
+without snagging or getting shoved.
+
+---
+
+## Phase 8 — Containerization & deploy (½–1 week)
+
+- [ ] Dockerfile for the static client (built assets) and a Dockerfile for the Rust server.
+- [ ] Compose file wiring client + server for a one-command deploy to a real host.
+- [ ] Document the deploy in `docs/` and point Phase 5's interim static host at the real one.
+
+**Exit test:** `docker compose up` on a fresh host serves the site and the deathmatch server;
+a browser hitting the host can join and play against another connection.
+
+---
+
 ## Explicitly out of scope
 
-- **Netcode.** Multiplayer needs client prediction, lag compensation, server reconciliation,
-  and an authoritative server. It is a bigger project than everything above combined. If you
-  want it later: Geckos.io (WebRTC unreliable channel) + a headless Node sim sharing
-  `src/player/movement.ts`. The fixed-timestep discipline in Phase 0 is what makes that
-  possible at all — which is why it's in Phase 0.
 - Buy menu / economy
 - Bomb plant/defuse (add in ~a day once rounds work, if you want it)
 - Multiple maps
-- Ragdolls (Rapier can, but the tuning time is a trap)
 
 ## Risk register
 
@@ -283,5 +354,5 @@ and doesn't mention frame rate.
 | Movement feels "floaty, but I can't say why" | Golden tests + the reference table. Don't tune by vibes alone; verify against numbers first, *then* tune. |
 | Lightmap pipeline fights you for a week | Do the doc's 10-minute single-cube walkthrough before touching the real map. |
 | Asset licence contamination | CREDITS.md at add-time. Never "just for testing." |
-| Scope creep into multiplayer | It's in the out-of-scope list for a reason. |
+| Netcode (Phase 6) balloons the whole project | Gate it behind a shipped, polished single-player build (Phases 0–5). Don't start the Rust server until Phase 5's exit test passes. The fixed-timestep discipline from Phase 0 is what makes it tractable at all. |
 | Blender UV2 mistakes discovered at texture time | Bake a test lightmap on the greybox before art passes. |

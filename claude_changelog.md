@@ -750,3 +750,23 @@ are the same height-band placeholder as the bots (bots hit the player's torso fl
   x=±10 lanes are dead pockets (paths truncate at z≈11.8 behind the platforms);
   x=±7 and mid traverse fully. Spawns moved onto the lane heads.
 - typecheck / lint / build / test (95) green.
+
+---
+
+## 2026-07-18 (plan/rename update)
+
+- Renamed the project from `hl-demo` to **Counter Douglas Global Offensive**: `package.json`
+  name (slugified), `index.html` title, `src/main.ts` boot log, and the `CLAUDE.md` intro line.
+- Reworked `plan_to_implement.md`:
+  - Inserted **Phase 4.5 — Art & asset refinement** between Phases 4 and 5 (de-lopside the map,
+    curved weapon models, rigged T/CT characters, textured breakable props, land the deferred
+    Phase 3 texturing). Noted the character rig unblocks the per-bone hitbox debts from Phase 2/3.
+  - Added **Phase 6 — Netcode** (authoritative Rust deathmatch server: join replaces a bot,
+    11th+ connection spectates, prediction + reconciliation + lag comp).
+  - Added **Phase 7 — Light ragdoll physics** (Rapier ragdoll on death, corpses non-colliding
+    with live players so they're never a clip hazard).
+  - Added **Phase 8 — Containerization & deploy** (Docker client + Rust server, compose).
+  - Updated the intro to reflect the longer multiplayer scope; removed netcode and ragdolls from
+    "Explicitly out of scope" (they now have phases); pointed Phase 5's static deploy at Phase 8;
+    updated the risk-register row that assumed multiplayer was out of scope.
+- `pnpm typecheck` green.

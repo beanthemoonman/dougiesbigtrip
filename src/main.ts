@@ -409,7 +409,7 @@ async function main(): Promise<void> {
     },
   });
 
-  console.log(`hl-demo: sim locked at ${TICK_RATE} Hz — click to lock the mouse.`);
+  console.log(`Counter Douglas Global Offensive: sim locked at ${TICK_RATE} Hz — click to lock the mouse.`);
 }
 
 void main();

@@ -4,8 +4,9 @@ Context for Claude Code working in this repo. Read this before making changes.
 
 ## What this is
 
-`hl-demo` — a browser FPS demo that imitates the look and feel of **Counter-Strike: Source**
-using only CC0/permissively-licensed assets. Single-player vs. bots. No netcode.
+`Counter Douglas Global Offensive` — a browser FPS demo that imitates the look and feel of
+**Counter-Strike: Source** using only CC0/permissively-licensed assets. Started single-player
+vs. bots; a Rust deathmatch server (Phase 6) adds netcode later.
 
 The goal is *feel and art direction fidelity*, not feature completeness. Movement that feels
 wrong is a P0 bug. A missing scoreboard is a P3.
