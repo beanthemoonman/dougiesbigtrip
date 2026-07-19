@@ -332,7 +332,17 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
       preloaded before spawn; audio is synthesised (no files → nothing to fetch), and the
       AudioContext must stay lazy until the first user gesture. `done()` fades the overlay
       out just before the loop starts. Step-granular not byte-granular per a ponytail note.)
-- [ ] `pnpm assets:opt`: Meshopt + KTX2/Basis. Verify the 16 MB budget.
+- [~] `pnpm assets:opt`: Meshopt + KTX2/Basis. Verify the 16 MB budget.
+      (**Budget verified PASS**: production `pnpm build` ships 9.3 MB uncompressed dist,
+      **~7.06 MB over the wire** (JS/wasm gzipped, glb/ktx2 as-is) against the 16 MB
+      budget — >2× headroom. Fattest assets are the crate/pallet/barrel props (~1.1–1.3 MB
+      each), which is embedded Poly Haven PBR textures on 24-vertex greybox cubes, not
+      geometry (Meshopt shaves 0). **Deferred:** the actual KTX2 compression pass. It needs
+      KTX2+Meshopt decoders wired into all five `GLTFLoader` sites (runtime fragility), buys
+      ~25% on assets that are *already* under budget and are placeholders slated for the
+      Phase-4.5 CC0 texture swap. ponytail: the 16 MB constraint isn't binding — build the
+      pipeline when real assets push toward the ceiling, not against placeholders. Verified
+      on the dev box; re-verify on integrated graphics at deploy.)
 - [x] Settings: sensitivity, FOV (world), volume. Persist to a config object.
       (`src/core/settings.ts` — a `Settings` config object is the source of truth, no
       localStorage per CLAUDE.md. A DOM panel of native range sliders mutates it and pushes
