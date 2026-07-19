@@ -1,8 +1,9 @@
-import { CapsuleGeometry, Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, Object3D, Vector3 } from 'three';
+import { Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, type MeshStandardMaterial, Object3D, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
 import navUrl from '../assets/maps/de_greybox.navmesh.bin?url';
 import mapKtx2Url from '../assets/maps/de_greybox/lightmap.ktx2?url';
+import ctPlayerUrl from '../assets/characters/ct_player.glb?url';
 import rifleUrl from '../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
 import { createBot } from './ai/bot';
@@ -16,7 +17,7 @@ import { computeDamage } from './game/damage';
 import { hitboxAt } from './game/hitbox';
 import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_greybox';
 import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
-import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HEIGHT } from './player/constants';
+import { EYE_HEIGHT_STANDING } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
@@ -111,14 +112,22 @@ async function main(): Promise<void> {
   const BOT_MAX_HP = 100;
   interface Enemy {
     readonly brain: BotBrain;
-    readonly body: Mesh;
+    readonly body: Object3D;
     readonly spawn: Vector3;
     alive: boolean;
     hp: number;
     fireCooldown: number; // s until the bot may shoot again (cyclic rate)
   }
-  const botMat = new MeshBasicMaterial({ color: 0xb64d4d }); // unlit — no realtime lights
-  const botGeo = new CapsuleGeometry(PLAYER_RADIUS, STANDING_HEIGHT - 2 * PLAYER_RADIUS, 6, 12);
+  // CT world-model (bots are CT). Baked-lighting world has no realtime lights,
+  // so flatten the glb's MeshStandardMaterials to unlit MeshBasicMaterial —
+  // same reason the old capsule used MeshBasic. Loaded once, cloned per bot.
+  const ctModel = (await new GLTFLoader().loadAsync(ctPlayerUrl)).scene;
+  ctModel.traverse((o) => {
+    if (o instanceof Mesh) {
+      const src = o.material as MeshStandardMaterial;
+      o.material = new MeshBasicMaterial({ color: src.color });
+    }
+  });
   // Three CT spawns fanned across their end cover, each patrolling the open
   // centre corridor (x in [-3, 3]) down toward T and back. The flanks hold cover
   // (west crate cluster, east platform); the middle is the killing lane, so the
@@ -133,7 +142,7 @@ async function main(): Promise<void> {
   ];
   const enemies: Enemy[] = botSpawns.map(({ s, patrol }) => {
     const bot = createBot(world, s);
-    const body = new Mesh(botGeo, botMat);
+    const body = ctModel.clone();
     renderCtx.scene.add(body);
     return {
       brain: createBrain(bot, DIFFICULTIES.normal, patrol),
@@ -170,6 +179,7 @@ async function main(): Promise<void> {
       e.hp = BOT_MAX_HP;
       e.fireCooldown = 0;
       e.body.visible = true;
+      e.brain.bot.ctx.collider.setEnabled(true);
       const b = e.brain.bot;
       b.state.position.copy(e.spawn);
       b.state.velocity.set(0, 0, 0);
@@ -350,6 +360,7 @@ async function main(): Promise<void> {
                 if (enemy.hp <= 0) {
                   enemy.alive = false;
                   enemy.body.visible = false;
+                  enemy.brain.bot.ctx.collider.setEnabled(false); // corpse is a ghost
                   killBot(enemy.brain);
                 }
               } else {
@@ -382,11 +393,12 @@ async function main(): Promise<void> {
       );
       active.root.rotation.set(animPose.pitch, active.rest.yaw, animPose.roll, 'YXZ');
 
-      // Move placeholder bot bodies to their capsule centre (feet + half height).
+      // Bot world-models: feet sit on the glb origin, so position = feet (the
+      // bot's state position). rotation.y = aim yaw (model faces -Z = its forward).
       for (const e of enemies) {
         if (!e.alive) continue;
         const p = e.brain.bot.state.position;
-        e.body.position.set(p.x, p.y + STANDING_HEIGHT / 2, p.z);
+        e.body.position.set(p.x, p.y, p.z);
         e.body.rotation.y = e.brain.aim.yaw;
       }
 

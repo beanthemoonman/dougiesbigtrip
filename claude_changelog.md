@@ -876,3 +876,19 @@ New workflow — reference image → curve JSON → 3D model:
   screenshot) are gitignored per non-negotiable #1. Only the extracted geometry
   (tools/blender/curves/*.curve.json — plain numbers) is committed.
 - AK 385 polys.
+
+## 2026-07-19 — T/CT character world-models (procedural)
+- New `tools/blender/build_characters.py`: blocky low-poly humanoid (boxes, CS:S
+  silhouette), one body parameterised by a team palette. Exports
+  `assets/characters/{ct,t}_player.glb` (126 polys each). CT = navy SWAT, T =
+  tan/olive masked militia. Feet on z=0 so `body.position = feet` in three.js;
+  faces +Y (→ -Z forward), so `model.rotation.y = bot.yaw`.
+- No rig yet — hitboxes stay height bands (src/game/hitbox.ts, Phase 5 gets bones).
+- Wired into main.ts: bots (CT) now render the ct glb instead of the placeholder
+  capsule. glb MeshStandardMaterials flattened to unlit MeshBasicMaterial (baked
+  world has no realtime lights), loaded once + cloned per bot. Position now feet,
+  not capsule centre. T model exists for later (human is T, first-person only).
+- typecheck green.
+
+## Bugfix: dead bots become ghosts
+Disabled the Rapier collider on bot death (`setEnabled(false)`) so nothing — player movement or bullets — collides with a corpse. Re-enabled on respawn. `src/main.ts`.
