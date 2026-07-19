@@ -16,7 +16,7 @@ import { createBot } from './ai/bot';
 import { createBrain, DIFFICULTIES, hearSound, killBot, tickBrain, type BotBrain } from './ai/brain';
 import { loadNav } from './ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './ai/anim';
-import { playGunshot, playReload, resumeAudio } from './core/audio';
+import { playFootstep, playGunshot, playImpact, playReload, resumeAudio } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
@@ -31,6 +31,7 @@ import { createMovementContext, createPlayerState, tickMovement, type PlayerStat
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
 import { createDecals } from './render/decals';
+import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
 import { loadLightmappedMap } from './render/lightmap';
 import { createRenderContext } from './render/renderer';
 import { makeSky } from './render/sky';
@@ -248,11 +249,25 @@ async function main(): Promise<void> {
   const shotOrigin = new Vector3();
   const hitNormal = new Vector3();
   const hitPoint = new Vector3();
+  const muzzle = new Vector3(); // tracer/flash origin, ~a barrel-length ahead of the eye
+  const tracerEnd = new Vector3();
   const decals = createDecals(renderCtx.scene);
+  const vfx = createVfx(renderCtx.scene);
+
+  // Impact surface per placed prop (wood crates/pallets, metal barrels/cans,
+  // else the concrete default the map falls back to). Keyed by collider handle.
+  const surfaceByCollider = new Map<number, Surface>();
+  placedProps.forEach((p, i) => {
+    const url = PROP_PLACEMENTS[i]?.[0];
+    const surface: Surface =
+      url === crateUrl || url === palletUrl ? 'wood' : url === barrelUrl || url === jerryUrl ? 'metal' : 'concrete';
+    surfaceByCollider.set(p.collider.handle, surface);
+  });
   // ponytail: bullets stop at the first thing they touch. Wallbang/penetration is
   // in docs/weapon-feel.md §6 as explicitly optional for the demo — add it when
   // there are walls thin enough for it to matter (Phase 3).
   const MAX_SHOT_DISTANCE = 100; // m; the greybox is 20 m across
+  const STEP_STRIDE = 1.9; // m between footstep sounds at a walk/run
 
   // --- Enemy bots (CT). The human is the lone T; bots defend from CT spawn. ---
   // Placeholder capsule bodies until the character rig lands (Phase 5); each bot
@@ -344,6 +359,7 @@ async function main(): Promise<void> {
   let playerAlive = true;
   let health = 100;
   let armor = 100;
+  let stepDist = 0; // metres walked since the last footstep (see STEP_STRIDE)
 
   const playerFeet = new Vector3(); // scratch: player feet, the bots' target
   const impact = new Vector3();
@@ -458,6 +474,17 @@ async function main(): Promise<void> {
 
       if (live && playerAlive) {
         tickMovement(movementCtx, player, { buttons: input.state.buttons, yaw: input.state.yaw }, fixedDt);
+        // Footsteps: a step every STEP_STRIDE metres of ground travel. Distance-
+        // paced (not time-paced) so it speeds up when you run. The greybox floor
+        // is concrete throughout — sample a real surface here if the map varies.
+        const groundSpeed = player.onGround ? Math.hypot(player.velocity.x, player.velocity.z) : 0;
+        stepDist += groundSpeed * fixedDt;
+        if (groundSpeed > 0.5 && stepDist >= STEP_STRIDE) {
+          stepDist = 0;
+          playFootstep('concrete');
+        } else if (groundSpeed <= 0.5) {
+          stepDist = 0; // reset so the first step after stopping isn't instant
+        }
       }
 
       // Bots: perceive the player, run the FSM, and shoot back.
@@ -537,6 +564,14 @@ async function main(): Promise<void> {
               movementCtx.collider, // the eye sits inside the player's own hull
               rayHit,
             );
+            // Muzzle flash + tracer, whether or not the shot connects. Muzzle is
+            // a barrel-length ahead of the eye; the tracer runs to the impact
+            // (or to max range on a miss) so a whiff still reads as a shot fired.
+            muzzle.copy(shotOrigin).addScaledVector(shot.direction, 0.35);
+            tracerEnd.copy(shotOrigin).addScaledVector(shot.direction, distance ?? MAX_SHOT_DISTANCE);
+            // The pistol is a suppressed USP-S — a much smaller, dimmer flash.
+            vfx.muzzleFlash(muzzle, shot.direction, active.id === 'pistol' ? 0.3 : 1);
+            vfx.tracer(muzzle, tracerEnd);
             if (distance !== null) {
               impact.copy(shotOrigin).addScaledVector(shot.direction, distance);
               const enemy = rayHit.collider ? byCollider.get(rayHit.collider.handle) : undefined;
@@ -551,6 +586,8 @@ async function main(): Promise<void> {
                   bp.x, bp.y, bp.z, enemy.brain.aim.yaw,
                 ) ?? hitboxAt(bp.y, impact.y);
                 enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
+                vfx.impact(impact, hitNormal, 'flesh'); // blood puff, no bullet hole
+                playImpact('flesh');
                 if (enemy.hp <= 0) {
                   enemy.alive = false;
                   enemy.root.visible = false;
@@ -569,7 +606,14 @@ async function main(): Promise<void> {
                   renderCtx.scene.remove(pp.mesh);
                   pp.collider.setEnabled(false); // gone: no invisible box to bump/stand on
                 }
-                if (broke.length === 0) decals.add(hitPoint.copy(impact), hitNormal); // bullet mark
+                // Surface drives the puff colour + impact tick; the map has no
+                // collider→surface entry, so it falls back to concrete.
+                const surface = (rayHit.collider ? surfaceByCollider.get(rayHit.collider.handle) : undefined) ?? 'concrete';
+                vfx.impact(impact, hitNormal, surface);
+                playImpact(surface);
+                if (broke.length === 0 && SURFACE_FX[surface].decal) {
+                  decals.add(hitPoint.copy(impact), hitNormal); // bullet mark
+                }
               }
             }
           }
@@ -582,9 +626,10 @@ async function main(): Promise<void> {
       currView.punchYaw = active.state.recoil.punch.yaw;
       currView.punchPitch = active.state.recoil.punch.pitch;
     },
-    render(alpha): void {
+    render(alpha, frameDt): void {
       renderCtx.stats.begin();
       updateViewCamera(renderCtx.camera, prevView, currView, alpha, input.state.yaw, input.state.pitch);
+      vfx.update(frameDt); // age muzzle flash / tracers / impact puffs off real time
 
       // Apply the viewmodel anim pose on top of the active weapon's rest pose.
       // ponytail: read straight off the last sim tick, no render interpolation —

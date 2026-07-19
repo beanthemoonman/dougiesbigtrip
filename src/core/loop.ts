@@ -18,8 +18,10 @@ const MAX_STEPS_PER_FRAME = 8; // hard cap even if the clamp above is bypassed
 export interface LoopCallbacks {
   /** Advance simulation by exactly FIXED_DT seconds. May be called 0+ times per frame. */
   tick: (fixedDt: number) => void;
-  /** Draw a frame. `alpha` is how far between the previous and current tick we are. */
-  render: (alpha: number) => void;
+  /** Draw a frame. `alpha` is how far between the previous and current tick we are.
+   * `frameDt` is real seconds since the last frame (clamped), for render-only
+   * cosmetics (VFX fades) — never feed it into the sim. */
+  render: (alpha: number, frameDt: number) => void;
 }
 
 export interface LoopHandle {
@@ -49,7 +51,7 @@ export function startLoop(callbacks: LoopCallbacks): LoopHandle {
     }
 
     const alpha = accumulator / FIXED_DT;
-    callbacks.render(alpha);
+    callbacks.render(alpha, frameDt);
 
     rafId = requestAnimationFrame(frame);
   }

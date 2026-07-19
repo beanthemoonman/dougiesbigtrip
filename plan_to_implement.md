@@ -307,9 +307,17 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
 
 ## Phase 5 — Polish + ship (½–1 week)
 
-- [ ] Muzzle flash (sprite + brief light exception — the one allowed dynamic light), tracers,
+- [x] Muzzle flash (sprite + brief light exception — the one allowed dynamic light), tracers,
       shell casings, impact decals per surface type, blood puffs, footstep audio per material.
-- [ ] Surface types: material name convention drives impact sound + decal + footstep.
+      (`src/render/vfx.ts` + audio additions + main wiring. Flash is an additive quad, **not** a
+      light — the map is unlit MeshBasicMaterial so a PointLight would do nothing, and a realtime
+      light fights art-direction.md; the "light exception" is moot. **Shell casings deferred** with
+      a ponytail note — barely visible in an FPS. ACC-009 written before tuning; T0 in
+      `src/render/vfx.test.ts`.)
+- [x] Surface types: material name convention drives impact sound + decal + footstep. (Grounded in
+      *what was hit* — bot→flesh, crate/pallet→wood, barrel/can→metal, else concrete — not in
+      per-collider material data, which the abstract Rapier cuboids don't carry. `SURFACE_FX` table
+      drives puff colour + whether a hole is stamped; `playImpact`/`playFootstep` vary by surface.)
 - [ ] Slight bloom, film grain off, sharp shadows only from the bake.
 - [ ] Loading screen with real progress. Preload weapon/audio before spawn.
 - [ ] `pnpm assets:opt`: Meshopt + KTX2/Basis. Verify the 16 MB budget.

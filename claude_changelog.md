@@ -1071,3 +1071,50 @@ optional `stack` value for the crate stacked on top. typecheck green.
   (no explosion) via the probe. Typecheck/lint/build green.
 - **Owed (standing T3 blocker):** in-app visual confirm the bots now show + animate —
   needs a real windowed browser, which isn't available here.
+
+## 2026-07-19 — Phase 5: Combat juice (muzzle flash, tracers, surface impacts, footsteps)
+
+First slice of Phase 5 (Polish). Combat had no visual/audio feedback on a shot; now it does.
+
+- **`src/render/vfx.ts`** (new) — a render-side transient-FX sink, same discipline as `audio.ts`:
+  the deterministic sim decides *when* and calls in with world coords; nothing is read back, and it
+  ages off real frame dt, never the fixed tick. Three pooled scene objects total, so firing
+  forever never grows the scene graph or draw calls:
+  - **Muzzle flash** — one additive quad at the muzzle, scaled/faded per frame. *Not a light*: the
+    map is unlit `MeshBasicMaterial` so a `PointLight` illuminates nothing, and a realtime light
+    fights `art-direction.md`. The plan's "one allowed dynamic light" is moot; a bright quad gives
+    the same Source read with zero lightmap-discipline risk. Noted in the file header.
+  - **Tracers** — pool of 12 thin additive cylinders in one `InstancedMesh`, stretched muzzle→impact
+    (or to max range on a miss, so a whiff still reads as a shot).
+  - **Impact puffs** — pool of 24 normal-facing quads in one `InstancedMesh`, per-instance colour by
+    surface (pale dust / tan splinter / bright spark / blood red).
+  - `SURFACE_FX` table + `Surface` type (`concrete | wood | metal | flesh`): colour + whether a
+    bullet hole is stamped (flesh = no hole).
+- **`src/core/audio.ts`** — `playImpact(surface)` (bright tick for concrete/metal, duller for wood,
+  low wet thud for flesh) and `playFootstep(surface)` (soft distance-paced thump). Synthesised,
+  same as the gun — no sound files, no CREDITS row.
+- **`src/core/loop.ts`** — `render` callback now also receives `frameDt` (real seconds, clamped),
+  so render-only cosmetics age without reading a clock under `src/` (the clock stays in loop.ts per
+  the determinism rule). `tick` is untouched.
+- **`src/main.ts`** — wired into the fire path: muzzle flash + tracer on every shot; surface-typed
+  impact puff + `playImpact` on every hit; blood + no-hole on bots; decals now gated on
+  `SURFACE_FX[surface].decal` (flesh skips them). Surface is inferred from what was hit via a
+  `surfaceByCollider` map built from the prop placements (map falls back to concrete). Footsteps:
+  distance-paced (`STEP_STRIDE = 1.9 m`), only while on-ground and moving, always concrete for the
+  uniform greybox floor. `vfx.update(frameDt)` aged in `render`.
+- **Tests** — `src/render/vfx.test.ts` (5 T0): surface-FX table shape, **pools bounded** (adds
+  exactly 3 scene objects, never grows — the draw-call-budget guarantee without a GL context), and
+  transient lifetime aging. Written before the implementation.
+- **T3** — `tests/acceptance/ACC-009-combat-juice.md`, written before tuning per the DoD; awaits a
+  run in a real windowed browser (standing environment blocker, same as ACC-003/004).
+- **Deferred** (ponytail): shell casings — barely visible in an FPS, pure animation code; add if a
+  playtest asks. Per-region surfaces need the map colliders tagged at `buildMapColliders` time; the
+  `Surface`/`SURFACE_FX`/audio plumbing is already in place for that day.
+- **Gate**: typecheck, lint, **121 tests** (was 116, +5) all green, production build succeeds.
+
+## 2026-07-19 — Muzzle flash tuning (ACC-009 feedback)
+
+- Flash was too big: base `FLASH_SIZE` 0.5 m → 0.22 m.
+- `muzzleFlash` gained an optional `scale` (size + peak opacity). The suppressed USP-S pistol now
+  fires at 0.3× — much smaller and dimmer than the rifle. main passes it per active weapon.
+- typecheck/lint/vfx tests green.

@@ -71,6 +71,48 @@ export function playGunshot(weapon: WeaponId): void {
   osc.stop(t + 0.14);
 }
 
+/**
+ * Impact tick when a bullet lands — surface-typed. Hard surfaces (concrete/
+ * metal) ring bright and short; wood is duller; flesh is a low wet thud with no
+ * ricochet snap. Quiet relative to the gun; it's a confirmation, not an event.
+ */
+export function playImpact(surface: 'concrete' | 'wood' | 'metal' | 'flesh'): void {
+  const t = audio().currentTime;
+  switch (surface) {
+    case 'metal':
+      burst(0.05, 6000, 0.28, t);
+      break;
+    case 'concrete':
+      burst(0.04, 4200, 0.22, t);
+      break;
+    case 'wood':
+      burst(0.05, 2200, 0.24, t);
+      break;
+    case 'flesh': {
+      // No high snap — a short low thump, the "you hit someone" cue.
+      const c = audio();
+      const osc = c.createOscillator();
+      const g = c.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(220, t);
+      osc.frequency.exponentialRampToValueAtTime(90, t + 0.06);
+      g.gain.setValueAtTime(0.3, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+      osc.connect(g).connect(c.destination);
+      osc.start(t);
+      osc.stop(t + 0.09);
+      break;
+    }
+  }
+}
+
+/** A soft footstep thump. Surface tweaks the cutoff so gravel≠wood≠metal grate. */
+export function playFootstep(surface: 'concrete' | 'wood' | 'metal' | 'flesh'): void {
+  const t = audio().currentTime;
+  const cutoff = surface === 'metal' ? 1400 : surface === 'wood' ? 900 : 700;
+  burst(0.05, cutoff, 0.12, t);
+}
+
 export function playReload(): void {
   const t = audio().currentTime;
   // Two clicks: mag out, mag in. Rough but reads as "reload".
