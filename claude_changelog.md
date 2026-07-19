@@ -793,3 +793,24 @@ are the same height-band placeholder as the bots (bots hit the player's torso fl
 
 skipped: ACC-007 re-run (human T3 playtest) — still the gate before art goes on the greybox.
 Weapon/character/prop/texture art tracks (rest of Phase 4.5) not started.
+
+## 2026-07-18 — Phase 4.5: curved weapon models
+
+- **`tools/blender/build_weapons.py`** (new): reproducible procedural builder for both
+  first-person viewmodels, companion to `build_map.py`. Replaces the hand-modeled 268-tri
+  faceted AK / pistol with curved, smooth-shaded models: cylinder barrels/muzzle/gas tube
+  (20–28 sides, smooth-shaded), beveled receiver/stock/handguards, a forward-tilted banana
+  mag and angled grip. Built in the **same local frame** as the old models (Blender: +Y muzzle,
+  +Z up; export_yup → three.js -Z forward), dims 0.044×1.03×0.325 m ≈ the old 0.05×1.02×0.34,
+  so the hand-tuned layer-1 viewmodel rest offsets in `main.ts` still hold — no code touched.
+- Fixed one build bug while authoring: `primitive_cube_add(size=1)` already spans 1.0 per axis,
+  so scaling by `size/2` made every box half-size → all the parts floated apart with gaps. Scale
+  by full `size`. (Also dropped a `SIMPLE_DEFORM` bend for the mag — unpredictable; a tilted box
+  reads fine as an AK mag at viewmodel scale.)
+- Verified silhouettes in Blender left-ortho (both read as coherent guns, not a loose kit);
+  `pnpm build` bundles both glbs clean (AK 103 KB, pistol 55 KB — still trivial vs. budget).
+- `assets/CREDITS.md`: the two weapon rows now cite `build_weapons.py` as the source.
+
+skipped: in-app ACC-005 (viewmodel doesn't clip walls / distort at edges) — real windowed
+browser, same standing T3 blocker as ACC-003/004/005. Frame-matched + build-verified for now.
+Character/prop/texture tracks of Phase 4.5 not yet started.

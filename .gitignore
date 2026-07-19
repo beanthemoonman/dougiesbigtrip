@@ -31,3 +31,5 @@ dist-ssr
 # (tools/blender/build_map.py + `pnpm assets:lightmap` regenerate them)
 assets/maps/*/lightmap.exr
 assets/maps/*/lightmap_ldr.png
+
+opencode.jsonc

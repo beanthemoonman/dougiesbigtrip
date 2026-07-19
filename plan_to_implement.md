@@ -265,9 +265,14 @@ and the character rig unblocks the hitbox debts left over from Phases 2–3.
       navmesh (`pnpm nav:bake`) + Blender glb/lightmap rebaked; bot patrols retargeted to the open
       centre lane; T1 movement traces re-pointed. All 95 tests + typecheck/lint/build green.
       **Still owed: re-run ACC-007** (human greybox playtest) — timings/sightlines gate before art.
-- [ ] **Weapon models.** Replace the faceted `ak_viewmodel.glb` / `pistol_viewmodel.glb` with
-      properly curved, higher-fidelity models (Blender). Keep the layer-1 / separate-camera /
-      separate-FOV viewmodel wiring untouched (`docs/weapon-feel.md`).
+- [x] **Weapon models.** Replaced the faceted `ak_viewmodel.glb` / `pistol_viewmodel.glb` with
+      curved, higher-fidelity models — smooth-shaded cylinder barrels/muzzle/gas tube, beveled
+      receiver/stock/grip, a forward-tilted banana mag. Built reproducibly by
+      `tools/blender/build_weapons.py` (companion to `build_map.py`) in the **same local frame**
+      (dims 0.044×1.03×0.325 m vs. the old 0.05×1.02×0.34) so the hand-tuned layer-1 rest offsets
+      in `main.ts` stay valid — viewmodel wiring untouched. Verified silhouettes in Blender ortho;
+      `pnpm build` bundles both clean. **Owed: in-app ACC-005 pass** (real windowed browser, same
+      standing T3 blocker) to confirm no edge distortion / wall clipping at the viewmodel FOV.
 - [ ] **Character models.** Rigged T and CT `.glb`s in `assets/characters/` (Mixamo-derived
       clips per the repo layout). This unblocks two standing debts: the per-bone hitbox capsules
       and the world-space per-bone hitscan query, both deferred from Phase 2/3 pending a rig.
