@@ -907,3 +907,31 @@ instead of guessing mesh-origin y offsets, so every prop rests its base on the f
 Rapier box collider (addStaticBox) sized to the bbox and rotated by its yaw, so props
 block the player and bots. Dropped the manual y column from PROP_PLACEMENTS; added an
 optional `stack` value for the crate stacked on top. typecheck green.
+
+## 2026-07-19 — Phase 4.5: map textures + skybox (procedural)
+- Texturing pass done **in-repo**, not downloaded. art-direction.md is explicit —
+  the Source look is hand-authored ~512² tiled detail, "rather than photoscanned
+  mush" — so Poly Haven's photoreal PBR was the wrong tool (and its MCP toggle was
+  off anyway). Went procedural: zero shipped bytes, zero licensing, reproducible
+  like build_map.py.
+- `src/render/surfacetex.ts`: seamless value-noise tiling detail maps per surface
+  (M_Concrete mottle, M_Sandstone sedimentary banding, M_Wood vertical grain +
+  plank seams), generated once at load as CanvasTextures, assigned onto the map
+  glb's MeshStandardMaterials by name on UV0 (the cube-projected tiling channel;
+  lightmap keeps UV1). Detail sits in a high narrow band (~0.62–1.0) so it reads as
+  wear/variation without halving the palette base colour it multiplies. Seeded from
+  core/rng (no Math.random under src/, determinism rule).
+- `src/render/sky.ts`: equirect gradient skybox (zenith→horizon haze + one warm sun
+  disk) as `scene.background` — no skydome mesh, no draw call, no fog bleed. Sun
+  placed at the bake direction (build_map.py Sun euler (50,0,35) → three ≈
+  (0.44,0.64,0.63), ~40° elevation). Replaces the flat SKY-colour background; fog
+  still tinted the horizon haze.
+- No new draw calls (textures reuse existing material primitives), no new shipped
+  assets → no CREDITS rows (nothing is shipped; both are generated on the client).
+- `src/render/surfacetex.test.ts`: guards the one thing that silently breaks a
+  tiling texture — seams (field wraps u/v), range, determinism. 98 tests green.
+- typecheck + lint green (also fixed a pre-existing non-null assertion in
+  placeProps that was failing lint). build clean.
+- **Owed (T3, standing blocker):** visual ACC pass in a real windowed browser —
+  Chrome extension/Playwright both unavailable here. Repeats/tile scale, sun
+  placement, and detail contrast are eyeball-tuned and want one playtest to dial in.

@@ -30,6 +30,8 @@ import { addStaticBox, createWorld, initPhysics } from './physics/world';
 import { createDecals } from './render/decals';
 import { loadLightmappedMap } from './render/lightmap';
 import { createRenderContext } from './render/renderer';
+import { makeSky } from './render/sky';
+import { applySurfaceTextures } from './render/surfacetex';
 import { createHud } from './ui/hud';
 import { WEAPONS, type WeaponId } from './weapons/defs';
 import { createWeaponState, fireShot, startReload, tickWeapon, type WeaponState } from './weapons/hitscan';
@@ -121,7 +123,9 @@ async function placeProps(scene: Object3D, world: import('@dimforge/rapier3d-com
   const size = new Vector3();
   const localCenter = new Vector3();
   for (const [url, x, z, yaw, stack = 0] of PROP_PLACEMENTS) {
-    const { root, box } = models.get(url)!;
+    const model = models.get(url);
+    if (!model) continue;
+    const { root, box } = model;
     box.getSize(size);
     box.getCenter(localCenter);
     // Drop the base to the floor: shift so box.min.y + posY = stack.
@@ -154,12 +158,15 @@ async function main(): Promise<void> {
   const world = createWorld();
   buildMapColliders(world);
 
-  // Map visuals: baked-lightmap glb (built by tools/blender/build_map.py). Sky
-  // colour + matching exponential fog stand in for a skybox at greybox stage.
+  // Map visuals: baked-lightmap glb (built by tools/blender/build_map.py) plus
+  // procedural tiling surface detail (surfacetex.ts) and a gradient skybox
+  // (sky.ts) whose sun matches the bake. Fog colour stays the horizon haze.
   const SKY = new Color(0x9fb8d6);
-  renderCtx.scene.background = SKY;
+  renderCtx.scene.background = makeSky();
   renderCtx.scene.fog = new FogExp2(SKY.getHex(), 0.012);
-  renderCtx.scene.add(await loadLightmappedMap(mapGlbUrl, mapKtx2Url, renderCtx.renderer));
+  const mapRoot = await loadLightmappedMap(mapGlbUrl, mapKtx2Url, renderCtx.renderer);
+  applySurfaceTextures(mapRoot);
+  renderCtx.scene.add(mapRoot);
 
   // Decorative props scattered near the existing cover. Each gets a static box
   // collider from its measured footprint (see placeProps); dynamic prop bodies
