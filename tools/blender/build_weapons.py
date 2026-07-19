@@ -8,6 +8,7 @@ Run headless:  blender -b -P tools/blender/build_weapons.py
 Or via the Blender MCP (exec the file's contents).
 """
 import bpy
+import bmesh
 import math
 import os
 from mathutils import Vector, Euler
@@ -30,7 +31,8 @@ def materials():
     return {
         "gunmetal": mat("M_Gunmetal", (0.045, 0.045, 0.05), 1.0, 0.35),
         "steel":    mat("M_Steel", (0.10, 0.10, 0.11), 1.0, 0.22),
-        "wood":     mat("M_Wood_Grip", (0.20, 0.09, 0.03), 0.0, 0.55),
+        "wood":     mat("M_Wood_Grip", (0.28, 0.13, 0.04), 0.0, 0.52),
+        "bakelite": mat("M_Bakelite", (0.24, 0.085, 0.028), 0.0, 0.40),
         "polymer":  mat("M_Polymer", (0.02, 0.02, 0.025), 0.0, 0.45),
     }
 
@@ -71,6 +73,29 @@ def cyl(name, center, radius, length, material, axis="Y", verts=32, cone=1.0):
     elif axis == "Z":
         pass  # default
     bpy.ops.object.transform_apply(rotation=True)
+    return _finish(o, material, smooth=True, bevel=0.0)
+
+def slant_brake(name, center, radius, length, material, verts=24, angle_deg=32):
+    """AKM slant compensator: a stub cylinder whose muzzle face is cut diagonally
+    (top edge forward, bottom edge back) — the AK's iconic front-end silhouette."""
+    bpy.ops.mesh.primitive_cone_add(vertices=verts, radius1=radius, radius2=radius,
+                                    depth=length, location=center)
+    o = bpy.context.active_object
+    o.name = name
+    o.rotation_euler = (math.radians(90), 0, 0)  # along +Y
+    bpy.ops.object.transform_apply(rotation=True)
+    front = center[1] + length / 2
+    me = o.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    a = math.radians(angle_deg)
+    n = Vector((0, math.cos(a), math.sin(a))).normalized()  # tilt in Y-Z, keep top-forward
+    p = Vector((center[0], front - radius * math.tan(a), center[2]))
+    bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
+                           plane_co=p, plane_no=n, clear_outer=True)
+    bmesh.ops.contextual_create(bm, geom=[e for e in bm.edges if e.is_boundary])
+    bm.to_mesh(me)
+    bm.free()
     return _finish(o, material, smooth=True, bevel=0.0)
 
 def tilted_box(name, center, size, material, tilt_deg, tilt_axis="X", bevel=0.006):
@@ -148,7 +173,7 @@ def build_ak(M):
 
     # --- barrel + muzzle ---
     parts.append(cyl("AK_barrel", (0, 0.45, 0.010), 0.014, 0.42, M["steel"], verts=32))
-    parts.append(cyl("AK_muzzle", (0, 0.63, 0.010), 0.017, 0.065, M["steel"], verts=28, cone=0.92))
+    parts.append(slant_brake("AK_muzzle", (0, 0.635, 0.010), 0.018, 0.070, M["steel"], verts=28))
 
     # --- gas tube (thicker) ---
     parts.append(cyl("AK_gas", (0, 0.36, 0.044), 0.011, 0.26, M["steel"], verts=28))
@@ -171,13 +196,13 @@ def build_ak(M):
     parts.append(box("AK_rsight_notch", (0, 0.21, 0.066), (0.018, 0.008, 0.008), M["steel"], bevel=0.003))
 
     # --- curved banana magazine ---
-    parts.extend(curved_mag("AK_mag", (0, 0.10, -0.03), 0.022, 0.050, 0.22, 12, M["steel"]))
+    parts.extend(curved_mag("AK_mag", (0, 0.10, -0.03), 0.022, 0.050, 0.22, 12, M["bakelite"]))
 
     # --- mag catch ---
     parts.append(box("AK_magcatch", (0.018, -0.01, -0.070), (0.008, 0.025, 0.012), M["steel"], bevel=0.004))
 
     # --- pistol grip ---
-    parts.append(tilted_box("AK_grip", (0, -0.05, -0.100), (0.032, 0.050, 0.14), M["polymer"], tilt_deg=20, bevel=0.014))
+    parts.append(tilted_box("AK_grip", (0, -0.05, -0.100), (0.032, 0.050, 0.14), M["bakelite"], tilt_deg=20, bevel=0.014))
 
     # --- stock (wood) ---
     parts.append(box("AK_stock_neck", (0, -0.18, 0.0), (0.036, 0.16, 0.058), M["wood"], bevel=0.012))

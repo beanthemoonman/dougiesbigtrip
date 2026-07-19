@@ -856,3 +856,9 @@ skipped: in-app ACC-005 (real windowed browser) still owed with the other T3 scr
   - **Beavertail tang** added at the rear, filling the empty web behind the slide (USP signature).
 - Pistol now 382 polys / 495 KB. Frame convention unchanged, `main.ts` rest offset still holds.
 - Verified in Blender left-ortho: frame flows continuously; reads as a USP-S body.
+
+## 2026-07-19 — AK reshaped toward CS2 AK-47 (reference)
+- Added `slant_brake()` (bmesh diagonal bisect) → AKM slant compensator replaces the plain cone muzzle.
+- New `M_Bakelite` material (orange-brown); pistol grip + curved mag now bakelite, not black/steel.
+- Warmed the wood to amber to match CS2 furniture.
+- Rebuilt: AK 323 polys / pistol unchanged 382. Frame convention untouched, main.ts wiring valid.
