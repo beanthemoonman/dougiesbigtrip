@@ -1,41 +1,44 @@
 /**
  * Integration test: start the Rust deathmatch server, connect via WebSocket,
- * and verify the Welcome round-trip. This is the 6.0 exit test.
+ * and verify the Phase 6.3 authoritative loop end-to-end:
+ *   Welcome (slot 0 on first connect) → send CommandFrames → receive a Snapshot
+ *   whose entity[0] has moved in the commanded direction.
  *
- * Tests end-to-end: cargo build → server listen → WS handshake → Welcome decode.
+ * Runs on an isolated port via SERVER_BIND so it doesn't collide with the
+ * default 9876 (which the dev environment's Blender MCP also uses).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { decodeWelcome, SPECTATOR } from '../../src/net/protocol';
+import { decodeSnapshot, decodeWelcome, encodeCommand } from '../../src/net/protocol';
 
 const SERVER_BIN = resolve(import.meta.dirname, '../../target/debug/server');
-const WS_URL = 'ws://127.0.0.1:9876';
+const BIND = '127.0.0.1:9899';
+const WS_URL = `ws://${BIND}`;
 
-describe('server WS echo + Welcome round-trip', () => {
+describe('server authoritative loop (6.3)', () => {
   let proc: ChildProcess | null = null;
 
   beforeAll(async () => {
-    proc = spawn(SERVER_BIN, [], { stdio: 'pipe' });
-    // Wait for the server to bind.
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('server start timeout')), 10000);
+    proc = spawn(SERVER_BIN, [], { stdio: 'pipe', env: { ...process.env, SERVER_BIND: BIND } });
+    await new Promise<void>((res, rej) => {
+      const timeout = setTimeout(() => rej(new Error('server start timeout')), 10000);
       proc!.stdout?.on('data', (chunk: Buffer) => {
         if (chunk.toString().includes('listening')) {
           clearTimeout(timeout);
-          resolve();
+          res();
         }
       });
       proc!.on('error', (e) => {
         clearTimeout(timeout);
-        reject(e);
+        rej(e);
       });
       proc!.on('exit', (code) => {
         if (code !== null && code !== 0) {
           clearTimeout(timeout);
-          reject(new Error(`server exited with code ${code}`));
+          rej(new Error(`server exited with code ${code}`));
         }
       });
     });
@@ -45,50 +48,74 @@ describe('server WS echo + Welcome round-trip', () => {
     proc?.kill();
   });
 
-  it('receives a valid Welcome on connect', async () => {
+  it('assigns slot 0 on first connect', async () => {
     const ws = new WebSocket(WS_URL);
-    const data = await new Promise<Uint8Array>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('welcome timeout')), 5000);
+    const data = await new Promise<Uint8Array>((res, rej) => {
+      const timeout = setTimeout(() => rej(new Error('welcome timeout')), 5000);
       ws.on('message', (raw: Buffer) => {
         clearTimeout(timeout);
-        resolve(new Uint8Array(raw));
+        res(new Uint8Array(raw));
         ws.close();
       });
-      ws.on('error', (e) => {
-        clearTimeout(timeout);
-        reject(e);
-      });
+      ws.on('error', rej);
     });
-
     const welcome = decodeWelcome(data);
     expect(welcome).not.toBeNull();
     expect(welcome!.map).toBe('de_douglas');
-    expect(welcome!.yourSlot).toBe(SPECTATOR); // first connect = spectate
+    expect(welcome!.yourSlot).toBe(0);
     expect(welcome!.seed).toBe(1);
-    expect(welcome!.serverTick).toBe(0);
   });
 
-  it('echoes binary messages', async () => {
+  it('ticks movement and streams a snapshot that reflects a command', async () => {
     const ws = new WebSocket(WS_URL);
+    await new Promise<void>((res) => ws.on('open', () => res()));
 
-    // Consume the Welcome first.
-    await new Promise<void>((resolve) => {
-      ws.on('message', () => resolve());
-    });
-
-    // Send a binary message; the server echoes it.
-    const sent = new Uint8Array([42, 99, 255]);
-    ws.send(sent);
-
-    const reply = await new Promise<Uint8Array>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('echo timeout')), 5000);
+    // First message is the Welcome; the rest are Snapshots.
+    let welcomed = false;
+    const startPos = await new Promise<[number, number, number]>((res, rej) => {
+      const timeout = setTimeout(() => rej(new Error('first snapshot timeout')), 5000);
       ws.on('message', (raw: Buffer) => {
-        clearTimeout(timeout);
-        resolve(new Uint8Array(raw));
-        ws.close();
+        const bytes = new Uint8Array(raw);
+        if (!welcomed) {
+          welcomed = true;
+          return; // Welcome
+        }
+        const snap = decodeSnapshot(bytes);
+        if (snap && snap.entities.length > 0) {
+          clearTimeout(timeout);
+          res(snap.entities[0]!.pos);
+        }
       });
     });
 
-    expect(Buffer.from(reply)).toEqual(Buffer.from(sent));
+    // Drive forward (yaw toward +x) for ~40 ticks and watch the entity move.
+    const Buttons = { FORWARD: 1 << 0 };
+    let seq = 0;
+    const send = (): void => {
+      seq += 1;
+      ws.send(encodeCommand({ seq, lastAckSnapshot: 0, buttons: Buttons.FORWARD, yaw: 0, pitch: 0, weapon: 1, shot: null }));
+    };
+    const moved = await new Promise<[number, number, number]>((res, rej) => {
+      const timeout = setTimeout(() => rej(new Error('movement timeout')), 5000);
+      let ticks = 0;
+      const interval = setInterval(() => {
+        send();
+        ticks += 1;
+        if (ticks > 60) clearInterval(interval);
+      }, 15);
+      ws.on('message', (raw: Buffer) => {
+        const snap = decodeSnapshot(new Uint8Array(raw));
+        if (snap && snap.entities.length > 0 && snap.ackSeq > 20) {
+          clearTimeout(timeout);
+          clearInterval(interval);
+          res(snap.entities[0]!.pos);
+        }
+      });
+    });
+    ws.close();
+
+    // The player should have translated appreciably from the spawn.
+    const dist = Math.hypot(moved[0] - startPos[0], moved[2] - startPos[2]);
+    expect(dist).toBeGreaterThan(0.5);
   });
 });

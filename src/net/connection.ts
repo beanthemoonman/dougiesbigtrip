@@ -6,7 +6,7 @@
  * See docs/netcode.md §3 for the transport handshake sequence.
  */
 
-import { decodeWelcome, type Welcome } from './protocol';
+import { decodeSnapshot, decodeWelcome, type Snapshot, type Welcome } from './protocol';
 
 export type ConnectionState =
   | { status: 'disconnected' }
@@ -18,6 +18,12 @@ export interface Connection {
   readonly state: ConnectionState;
   /** Begin the connection to `wsUrl`. Non-blocking. */
   connect(wsUrl: string): void;
+  /** Send a binary frame (e.g. an encoded CommandFrame). No-op if not open. */
+  send(bytes: Uint8Array): void;
+  /** Called once when the Welcome arrives. */
+  onWelcome?: (w: Welcome) => void;
+  /** Called for every Snapshot received. */
+  onSnapshot?: (s: Snapshot) => void;
   /** Graceful close. */
   close(): void;
 }
@@ -29,6 +35,12 @@ export function createConnection(): Connection {
   const conn: Connection = {
     get state() {
       return state;
+    },
+    send(bytes: Uint8Array): void {
+      // `as BufferSource`: TS 5.7's generic Uint8Array<ArrayBufferLike> doesn't
+      // unify with send()'s ArrayBufferView<ArrayBuffer>, but a byte view is a
+      // valid BufferSource at runtime.
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(bytes as BufferSource);
     },
     connect(wsUrl: string): void {
       if (ws) {
@@ -53,7 +65,11 @@ export function createConnection(): Connection {
         const welcome = decodeWelcome(bytes);
         if (welcome) {
           state = { status: 'connected', welcome };
+          conn.onWelcome?.(welcome);
+          return;
         }
+        const snap = decodeSnapshot(bytes);
+        if (snap) conn.onSnapshot?.(snap);
       };
 
       ws.onclose = () => {

@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  decodeCommand,
+  decodeSnapshot,
   decodeWelcome,
+  encodeCommand,
   encodeWelcome,
+  F_ALIVE,
+  F_DUCKED,
+  F_TEAM_CT,
   PROTOCOL_VERSION,
   SPECTATOR,
+  type Snapshot,
+  TAG_SNAP,
   TAG_WELCOME,
 } from './protocol';
 
@@ -58,5 +66,73 @@ describe('protocol (TS)', () => {
       seed: 0,
       serverTick: 0,
     });
+  });
+
+  it('round-trips a CommandFrame without a shot', () => {
+    const c = {
+      seq: 12345,
+      lastAckSnapshot: 678,
+      buttons: 0b1010_0101,
+      yaw: 1.25,
+      pitch: -0.5,
+      weapon: 2,
+      shot: null,
+    };
+    expect(decodeCommand(encodeCommand(c))).toEqual(c);
+  });
+
+  it('round-trips a CommandFrame with a shot', () => {
+    const c = {
+      seq: 1,
+      lastAckSnapshot: 0,
+      buttons: 0,
+      yaw: 3,
+      pitch: 0.5,
+      weapon: 1,
+      shot: { eyePos: [1, 1.5, -25] as [number, number, number], dir: [0, 0, 1] as [number, number, number] },
+    };
+    expect(decodeCommand(encodeCommand(c))).toEqual(c);
+  });
+
+  // Golden bytes shared with sim/src/protocol.rs snapshot_golden_bytes.
+  it('decodes a Snapshot produced by the Rust encoder', () => {
+    const bytes = new Uint8Array([
+      3, 1, 100, 0, 0, 0, 7, 0, 0, 0, 1, 0, 5, 0, 0, 192, 63, 0, 0, 0, 0, 0, 0, 200, 193, 0, 0,
+      128, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 63, 0, 0, 128, 190, 100, 0, 1, 30, 1, 96, 234,
+      2, 0, 3, 0,
+    ]);
+    const expected: Snapshot = {
+      serverTick: 100,
+      ackSeq: 7,
+      entities: [
+        {
+          slot: 0,
+          flags: F_ALIVE | F_TEAM_CT,
+          pos: [1.5, 0, -25],
+          vel: [4, 0, 0],
+          yaw: 1.5,
+          pitch: -0.25,
+          health: 100,
+          armor: 0,
+          weapon: 1,
+          ammo: 30,
+        },
+      ],
+      round: { phase: 1, timeLeftMs: 60000, scoreT: 2, scoreCt: 3 },
+    };
+    expect(decodeSnapshot(bytes)).toEqual(expected);
+  });
+
+  it('rejects a Snapshot with the wrong tag', () => {
+    const buf = new Uint8Array(11);
+    buf[0] = 99;
+    buf[1] = PROTOCOL_VERSION;
+    expect(decodeSnapshot(buf)).toBeNull();
+    // sanity: a well-formed empty-entity snapshot header decodes
+    const ok = new Uint8Array(18);
+    ok[0] = TAG_SNAP;
+    ok[1] = PROTOCOL_VERSION;
+    expect(decodeSnapshot(ok)).not.toBeNull();
+    expect(F_DUCKED).toBe(2);
   });
 });

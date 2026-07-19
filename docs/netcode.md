@@ -264,9 +264,18 @@ A T1 flake here is a **P0 determinism bug**, not a retry.
 - **6.2 — Client runs on WASM (single-player).** Swap `main.ts` to drive the local player and
   bots through the WASM sim; delete the replaced TS. Single-player plays identically to today.
   *Check: ACC-007/008 re-run PASS against the WASM sim.*
-- **6.3 — Authoritative one-human server.** CommandFrames in → server ticks movement →
+- **6.3 — Authoritative one-human server. ✅** CommandFrames in → server ticks movement →
   snapshots out → client predicts + reconciles. No remote players yet.
   *Check: in-browser movement is server-driven, reconciliation invisible, no rubber-band.*
+  Done: `server/src/main.rs` (64 Hz game loop, slot table, per-conn tasks); `sim/src/map.rs`
+  (native de_douglas collider load — same JSON the TS client uses); `CommandFrame`/`Snapshot`
+  in `sim/src/protocol.rs` + `src/net/protocol.ts` (round-trip + shared golden-bytes tests);
+  `src/net/prediction.ts` (predict + reconcile, unit-tested); `sim_set_player` WASM binding;
+  `main.ts` `?connect=ws://…` branch. T1: `tests/harness/server.test.ts` drives commands →
+  snapshot reflects real server-side movement. T3: `tests/acceptance/ACC-012-server-movement.md`
+  (human gate — automated pointer-lock is invalid, see ACC-007 note). Remote players / server
+  round+bots deliberately deferred to 6.4–6.6, so a networked client still runs its local round
+  and bots for now.
 - **6.4 — Remote entities + slots.** Second connection; interpolate remote player; slot manager
   (join / evict-bot / spectator / disconnect).
   *Check: two browsers see each other move smoothly; 11th spectates.*

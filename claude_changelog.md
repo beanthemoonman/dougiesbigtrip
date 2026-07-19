@@ -1531,3 +1531,72 @@ respawn), claude_changelog.md
 ## Black-screen fix + review (Phase 6.2 uncommitted)
 - **Root cause of black screen: stale Vite dep-optimizer cache.** `node_modules/.vite/deps/sim-wasm.js` had been pre-bundled before the Rust WASM crate exported `sim_add_player` / the indexed `sim_tick(index, …)` API, so `main.ts` threw `SyntaxError: … does not provide an export named 'sim_add_player'` at import and never rendered. The rebuilt `sim/pkg` was correct; only Vite's cache was stale. Fixed by clearing `node_modules/.vite` and restarting dev. No source change required.
 - Reviewed the uncommitted Phase 6.2 diff (Rust multi-player sim + TS bot/brain/main rewire): exclude-handle threading (`Option<ColliderHandle>`), indexed player vector, and bot WASM↔TS-body sync are all correct and internally consistent. 150 JS + 19 Rust tests green, `pnpm typecheck` green, app verified rendering in-browser with a clean console.
+
+## Phase 6.3 — Authoritative one-human server
+
+Built the increment 6.3 slice of the netcode: CommandFrames in → server ticks the native
+`sim` at 64 Hz → Snapshots out → client predicts + reconciles against the same WASM sim.
+
+### Wire format (both ends, shared golden bytes)
+- `sim/src/protocol.rs`: added `CommandFrame` (seq, lastAckSnapshot, buttons, yaw, pitch,
+  weapon, optional Shot) and `Snapshot` (serverTick, ackSeq, EntityState[], RoundState) with a
+  little-endian `Reader` and round-trip + truncation tests. Flags: `F_ALIVE/F_DUCKED/F_TEAM_CT`.
+- `src/net/protocol.ts`: mirrored `encodeCommand`/`decodeCommand`/`decodeSnapshot`.
+- Cross-end contract locked by a **shared golden-bytes vector** asserted in *both*
+  `snapshot_golden_bytes` (Rust) and the TS "decodes a Snapshot produced by the Rust encoder"
+  test — change one, change the other.
+
+### Native server (`server/src/main.rs`)
+- Single 64 Hz game-loop task owns the `SimWorld` + a 10-slot table; each WS connection runs a
+  reader task (decode CommandFrame → loop) and a writer task (outbound queue → socket), wired via
+  tokio mpsc/oneshot.
+- Consumes **one command per slot per tick** (keeps server/client 1:1 for bit-exact
+  reconciliation), holds last input if starved, sets per-client `ackSeq`, broadcasts a full
+  Snapshot every tick (delta encoding is 6.4).
+- First connect → slot 0; slots revert to empty on disconnect. Player-vs-player collision is 6.4,
+  so one human excludes the shared kinematic body from its own shapecast = the single-player path.
+- `SERVER_BIND` env overrides the default `127.0.0.1:9876` (the dev box's Blender MCP also holds
+  9876 — tests use an isolated port).
+
+### Shared map load (`sim/src/map.rs`)
+- Native `map::load(&mut SimWorld, json)` parses `assets/maps/de_douglas.json` (the SAME file the
+  TS client's `map_douglas.ts` reads) → identical colliders on server and client, no duplicated
+  map data. Test loads the real map and checks the T/CT mirror.
+
+### Client (`src/net/`)
+- `prediction.ts`: `createPredictor(sim, ownSlot)` — ring-buffers unacked commands, `predict()`
+  advances the WASM sim + returns the frame to send, `reconcile(snap)` snaps slot 0 to the
+  authoritative state (`sim_set_player`) then replays `seq > ackSeq`. Sim injected → unit-tested
+  without WASM (reconcile+replay reproduces predicted state; divergent authority corrects then
+  replays forward).
+- `connection.ts`: added `send()`, `onWelcome`, `onSnapshot`.
+- New WASM binding `sim_set_player(index, pos, vel, ducked)` (reconciliation anchor).
+- `main.ts`: `?connect=ws://host:port` branch — the local player's movement is predicted+sent and
+  reconciled async; absent → unchanged single-player. Bots/round stay client-side (6.5/6.6).
+
+### Tests / verification
+- `tests/harness/server.test.ts` rewritten for 6.3: spawns the server on an isolated port,
+  asserts slot-0 assignment, then drives forward CommandFrames and asserts the streamed Snapshot
+  shows the entity actually moved (>0.5 m) — end-to-end over a real WebSocket.
+- Full suite green: **25 Rust + 159 JS** tests, `pnpm typecheck` clean, `pnpm build` bundles.
+- In-browser: connects as slot 0, app renders (HUD/viewmodel, no black screen), reconcile runs
+  every snapshot with zero errors. Feel/no-rubber-band is the human gate `ACC-012-server-movement.md`
+  (automated pointer-lock is invalid per the ACC-007 note).
+
+### GOTCHA (cost ~20 min — read before touching the WASM sim)
+Rebuilding `sim/pkg` with `wasm-pack` is **not enough**. `sim-wasm` is a pnpm `file:` dependency,
+so pnpm keeps a **copy** at `node_modules/.pnpm/sim@file+sim+pkg/node_modules/sim/` that does NOT
+auto-update when you rebuild `sim/pkg`. Symptom: the JS glue exports the new fn but
+`wasm.<fn> is not a function` at runtime (glue new, `.wasm` stale). Full fix after editing the
+Rust WASM bindings:
+1. `wasm-pack build sim --target bundler --features wasm`
+2. re-sync the pnpm copy: `cp -f sim/pkg/{sim_bg.wasm,sim.js,sim_bg.js,sim.d.ts,sim_bg.wasm.d.ts}
+   node_modules/.pnpm/sim@file+sim+pkg/node_modules/sim/`  (or `pnpm install`)
+3. `rm -rf node_modules/.vite` and restart `pnpm dev`
+4. hard-reload the browser (Ctrl+Shift+R) — Vite immutable-caches `?v=<hash>` module URLs, so a
+   plain reload can serve a stale bundle the browser cached during an optimize race.
+
+Files: sim/src/protocol.rs, sim/src/map.rs, sim/src/lib.rs (sim_set_player), server/src/main.rs,
+src/net/{protocol.ts,protocol.test.ts,prediction.ts,prediction.test.ts,connection.ts}, src/main.ts,
+tests/harness/server.test.ts, tests/acceptance/ACC-012-server-movement.md, docs/netcode.md,
+claude_changelog.md.

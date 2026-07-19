@@ -1,5 +1,6 @@
 pub mod constants;
 pub mod input;
+pub mod map;
 pub mod movement;
 pub mod protocol;
 pub mod rng;
@@ -250,6 +251,32 @@ mod wasm_bindings {
                 ]
             }
             None => vec![],
+        }
+    }
+
+    /// Snap a player to an authoritative net state (reconciliation anchor).
+    /// Sets position, velocity, and duck state; on_ground and other fields are
+    /// recomputed on the next tick. The client calls this with the server's
+    /// state as-of ackSeq, then replays unacked commands via sim_tick.
+    #[wasm_bindgen]
+    pub fn sim_set_player(
+        index: u32,
+        px: f64, py: f64, pz: f64,
+        vx: f64, vy: f64, vz: f64,
+        ducked: bool,
+    ) {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((world, states)) = sim.as_mut() {
+            let i = index as usize;
+            if i < states.len() {
+                let s = &mut states[i];
+                s.position = nalgebra::Vector3::new(px, py, pz);
+                s.velocity = nalgebra::Vector3::new(vx, vy, vz);
+                s.ducked = ducked;
+                if i == 0 {
+                    world.sync_player_body(px, py, pz, ducked);
+                }
+            }
         }
     }
 

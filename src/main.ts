@@ -32,7 +32,11 @@ import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
-import { sim_add_box, sim_add_player, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_tick } from 'sim-wasm';
+import { sim_add_box, sim_add_player, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_set_player, sim_tick } from 'sim-wasm';
+import { createConnection } from './net/connection';
+import { createPredictor, type Predictor } from './net/prediction';
+import { encodeCommand } from './net/protocol';
+import { SPECTATOR } from './net/protocol';
 import { createDecals } from './render/decals';
 import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
 import { loadLightmappedMap } from './render/lightmap';
@@ -518,6 +522,38 @@ async function main(): Promise<void> {
     return '';
   }
 
+  // --- Netcode (Phase 6.3): ?connect=ws://host:port drives the LOCAL player's
+  // movement through the authoritative server (predict + reconcile). Absent →
+  // pure single-player, unchanged. Remote players / server-side round+bots are
+  // 6.4–6.6; here only the human's movement is server-authoritative.
+  let predictor: Predictor | null = null;
+  let netConn: ReturnType<typeof createConnection> | null = null;
+  const connectUrl = new URLSearchParams(location.search).get('connect');
+  if (connectUrl) {
+    const conn = createConnection();
+    conn.onWelcome = (w): void => {
+      if (w.yourSlot === SPECTATOR) {
+        console.warn('[net] server full — spectating (movement stays local)');
+        return;
+      }
+      // The local player is always WASM index 0; bind the predictor to it.
+      predictor = createPredictor(
+        {
+          tick: (b, y) => { sim_tick(0, b, y); },
+          setPlayer: (px, py, pz, vx, vy, vz, ducked) =>
+            sim_set_player(0, px, py, pz, vx, vy, vz, ducked),
+        },
+        w.yourSlot,
+      );
+      console.log(`[net] connected as slot ${w.yourSlot}`);
+    };
+    conn.onSnapshot = (s): void => {
+      predictor?.reconcile(s);
+    };
+    conn.connect(connectUrl);
+    netConn = conn;
+  }
+
   loading.done();
   startLoop({
     tick(fixedDt): void {
@@ -537,7 +573,15 @@ async function main(): Promise<void> {
       playerFeet.copy(player.position);
 
       if (live && playerAlive) {
-        sim_tick(0, input.state.buttons, input.state.yaw);
+        if (predictor && netConn) {
+          // Networked: predict locally (advances the WASM sim) and ship the
+          // command; reconciliation happens async in onSnapshot. Same sim read
+          // below either way.
+          const cmd = predictor.predict(input.state.buttons, input.state.yaw, input.state.pitch, active.id === 'rifle' ? 1 : 2);
+          netConn.send(encodeCommand(cmd));
+        } else {
+          sim_tick(0, input.state.buttons, input.state.yaw);
+        }
         const s = sim_get_state(0);
         player.position.set(s[0]!, s[1]!, s[2]!);
         player.velocity.set(s[3]!, s[4]!, s[5]!);
