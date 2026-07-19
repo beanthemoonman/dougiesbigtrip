@@ -1,6 +1,7 @@
 # Asset Pipeline
 
-How raw exports become shippable files. Budget: **16 MB initial, 60 MB total.**
+How raw exports become shippable files. Budget: **48 MB initial, 60 MB total.** (Initial was
+16 MB through Phase 5; raised in Phase 6 to absorb the shared Rust `sim.wasm`.)
 
 Raw Blender output will be roughly 10× over budget. That's expected — the whole job of this
 pipeline is that last 10×.
@@ -159,7 +160,7 @@ Provide an `.m4a` fallback only if you care about ancient Safari. Modern Safari 
 | Characters + anims | 3 MB | one mesh, retargeted |
 | Audio sprite | 1.5 MB | |
 | JS bundle + WASM | 1.5 MB | three ~600 KB gz, rapier ~500 KB, recast ~200 KB |
-| **Initial total** | **≈16 MB** | |
+| **Initial total** | **≈16 MB today; < 48 MB budget** | Headroom reserved for `sim.wasm` (Phase 6) |
 
 Verify every build:
 

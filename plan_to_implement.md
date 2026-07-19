@@ -371,18 +371,39 @@ items — both are non-blocking for the single-player build. **Phase 5 is substa
 This is the big one — the whole reason Phase 0 mandated a fixed 64 Hz timestep. Multiplayer needs
 client prediction, lag compensation, and server reconciliation against an **authoritative** sim.
 
+**Read `docs/netcode.md` end to end before writing any Rust.** It is the wire-format and
+architecture spec; this checklist is its summary.
+
 **Status: not started.** No Rust, no netcode, no client prediction, no transport. Phase 5's
 single-player build is substantively complete, unblocking this phase.
 
-- [ ] Rust server running the same fixed 64 Hz sim as the client. The movement math must match
-      `src/player/movement.ts` exactly — port it or share it (WASM), don't reimplement by feel.
-- [ ] One deathmatch map. **On page load: the player joins and replaces a bot.** If 10 players
-      are already connected, the newcomer **spectates** instead of spawning.
-- [ ] Client-side prediction + server reconciliation for local movement. Lag compensation
-      (rewind) for hitscan so shots register against where the shooter saw the target.
-- [ ] Transport: WebRTC unreliable channel (Geckos.io-style) or WebSocket — decide at phase start
-      and record why. Snapshot/delta encoding for entity state.
-- [ ] Bots and humans share the same slots: a bot fills any empty slot, a human takes it on join.
+**Decisions locked (2026-07-19, see `docs/netcode.md`):**
+- **Transport: WebSocket** (binary). Universally supported, one dependency each side, no
+  SDP/ICE/DTLS. Swap to WebRTC behind the transport interface only if real-internet loss shows up.
+- **Sim ownership: WASM-share.** One Rust sim crate (`sim/`) is the single source of truth,
+  compiled native for the server and wasm32 for the client. The client runs the *same binary* it
+  can't cheat behaviour it doesn't own, and prediction/reconciliation are bit-exact.
+- **AI: full port to Rust.** The rich `src/ai/` FSM (nav/perception/brain/aim/bot) moves into the
+  sim crate and runs server-side; server bots play at single-player quality. `ai/anim.ts`
+  (animation playback) stays TS.
+
+Increments (each demoable; full breakdown + exit checks in `docs/netcode.md` §9):
+
+- [ ] **6.0 Scaffold.** `sim/` + `server/` Cargo workspace; `wasm-pack` build importable by Vite;
+      WS echo ↔ browser handshake. (`docs/netcode.md` committed = done.)
+- [ ] **6.1 Sim crate + WASM parity.** Port movement/constants/input/rng/shapecast/world +
+      de_douglas colliders; re-point the golden movement tests at the WASM sim, bit-exact green.
+- [ ] **6.2 Client on WASM (single-player).** Swap `main.ts` to the WASM sim, delete the replaced
+      TS; single-player plays identically (ACC-007/008 re-run PASS).
+- [ ] **6.3 Authoritative one-human server.** CommandFrames → server tick → snapshot → client
+      predict + reconcile, no rubber-band.
+- [ ] **6.4 Remote entities + slots.** Interpolation; slot manager — **join replaces a bot, 11th
+      spectates, disconnect frees the slot back to a bot.**
+- [ ] **6.5 Full AI server-side.** Port `ai/{nav,perception,brain,aim,bot}`; bots fill empty slots
+      and fight at single-player quality; human join evicts a bot.
+- [ ] **6.6 Combat: lag comp + damage + round.** Rewind hitreg so shots register where the shooter
+      saw the target; damage/round authoritative; kill/tracer/round events to clients.
+- [ ] **T3:** `tests/acceptance/ACC-010-netcode.md`, written before tuning, PASS against a commit hash.
 
 **Exit test:** Two browsers connected, both moving and shooting. Each sees the other where the
 server says, with no rubber-banding. An 11th connection lands in spectate, not in the fight.

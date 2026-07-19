@@ -120,6 +120,42 @@ Rules:
 
 ---
 
+## The bake emits two artifacts (Phase 6)
+
+`pnpm nav:bake` writes **both**:
+
+| File | Format | Consumer |
+|---|---|---|
+| `de_douglas.navmesh.bin` | recast-navigation's NavMeshSet + Detour serialization (`exportNavMesh`) | The current **JS** runtime (`src/ai/nav.ts`). **Retires in Phase 6** when the WASM sim owns nav. |
+| `de_douglas.navmesh.tris.bin` | Portable walkable-triangle soup (spec below) | The **Rust** AI (`docs/netcode.md`). |
+
+**Why two.** The Detour blob is standard but its byte layout is coupled to Detour's
+compile-time config (polyref width, wasm pointer sizes), so a Rust Detour crate won't read it
+without matching that config exactly. The portable soup has **zero ABI coupling** — just floats
+and ints — so any language reads it. The bake derives it from the *same* baked navmesh via
+`getNavMeshPositionsAndIndices(navMesh)`, so it can't drift from the Detour blob.
+
+### Portable format (`*.navmesh.tris.bin`) — little-endian
+
+```
+offset  type          field
+0       u32           magic = 0x544D564E  ("NVMT")
+4       u32           version = 1
+8       u32           vertCount
+12      u32           triCount
+16      f32 × 3·vertCount   verts   (world-space, Y-up, metres)
+...     u32 × 3·triCount    indices (into verts; each consecutive 3 = one triangle)
+```
+
+Total bytes = `16 + vertCount·12 + triCount·12`. The triangles are the **walkable surface**
+(recast's detail mesh), not the collision geometry — a Rust navigator builds point-in-triangle
+tests + shared-edge adjacency + A*/funnel over these, or feeds them to a Rust recast bake at
+server startup (a one-time startup bake is fine — the "never bake at runtime" rule is about the
+client's *frame* budget, not a server boot). The bake round-trips its own output before writing,
+so a malformed file fails the bake, not the server.
+
+---
+
 ## Bots use the player's movement code
 
 Non-negotiable, and easy to get wrong:

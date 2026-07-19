@@ -22,7 +22,7 @@ The split for this project:
 | **Pure math** | air accel produces 6.35 m/s after N ticks | Yes, trivially. Golden values. |
 | **Deterministic simulation** | given this 400-tick input trace, the player ends at this position | **Yes** — because we're fixed-timestep and input-driven. This is the big one. |
 | **Data invariants** | every spray pattern has 30 entries; every material name maps to a surface type | Yes. Cheap. Catch at CI. |
-| **Runtime budgets** | < 400 draw calls, < 16 MB initial | Yes, headless, assertable |
+| **Runtime budgets** | < 400 draw calls, < 48 MB initial | Yes, headless, assertable |
 | **Rendering correctness** | the lightmap is applied to `uv1` | Partially — assert material state, not pixels |
 | **Feel** | "does the AK spray feel right" | **No.** Human, scripted, recorded. |
 

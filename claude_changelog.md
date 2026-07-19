@@ -1265,3 +1265,53 @@ Files: src/game/map_douglas.{ts,test.ts}, src/main.ts, src/player/movement_map.t
 src/ai/{nav,bot,brain}.test.ts, tools/maps/build_douglas.mjs, tools/blender/build_map.py,
 tools/navbake/bake.ts, package.json, assets/CREDITS.md, docs/*, tests/acceptance/ACC-007-*,
 assets/maps/de_douglas.* (json/glb/navmesh + lightmap.{exr,ktx2,png})
+
+## Phase 6 planning — netcode spec committed (WebSocket / WASM-share / full AI)
+
+Locked the three Phase 6 forks with the dev and wrote the spec before any Rust:
+
+- **Transport: WebSocket** (binary) — universally supported, one dep each side, no
+  SDP/ICE/DTLS. WebRTC deferred behind the transport interface.
+- **Sim ownership: WASM-share** — one Rust `sim/` crate is the single source of truth,
+  compiled native (server) + wasm32 (client). Client runs the same binary → can't cheat
+  behaviour it doesn't own, and prediction/reconciliation are bit-exact.
+- **AI: full port to Rust** — `src/ai/{nav,perception,brain,aim,bot}` move into the sim crate
+  and run server-side at single-player quality; `ai/anim.ts` (playback) stays TS.
+
+Wrote `docs/netcode.md`: architecture, the shared `sim/` crate layout, wire format
+(CommandFrame / delta Snapshot / Welcome), slot lifecycle (join replaces a bot / 11th
+spectates / disconnect → bot), prediction+reconciliation+interpolation+lag-comp mechanics,
+the TS→WASM client migration table, DoD/test tiers (golden tables re-pointed at the WASM sim),
+a 6.0–6.6 increment plan with per-step exit checks, risks, and named deferrals.
+
+Expanded `plan_to_implement.md` Phase 6 into the decision record + 6.0–6.6 checklist pointing
+at the doc. Added a forward note to the stack table in CLAUDE.md and AGENTS.md (movement moves
+into the shared Rust sim crate in Phase 6). No code yet — planning/docs only.
+
+Files: docs/netcode.md (new), plan_to_implement.md, CLAUDE.md, AGENTS.md, claude_changelog.md
+
+## Phase 6 prep — Rust-readable navmesh rebake + budget raised to 48 MB
+
+Per the dev's three follow-ups on the Phase 6 plan:
+
+- **Rebake for Rust readability.** The current `de_douglas.navmesh.bin` is recast-navigation's
+  NavMeshSet+Detour serialization — standard, but its byte layout is coupled to Detour's
+  compile-time config (polyref width, wasm pointer sizes), so a Rust Detour crate won't read it
+  cleanly. `tools/navbake/bake.ts` now **also** emits `de_douglas.navmesh.tris.bin`: a portable,
+  ABI-independent walkable-triangle soup (magic "NVMT", version, vertCount, triCount, then f32
+  world-space Y-up verts + u32 indices) via `getNavMeshPositionsAndIndices(navMesh)`. Zero
+  language coupling; derived from the same baked mesh so it can't drift from the Detour blob. The
+  bake round-trips its own output (magic + size assertion) before writing. Both files ship for
+  now; the Detour blob retires in Phase 6 when the WASM sim owns nav. Rebaked: detour 66,648 B,
+  portable 39,040 B (2439 verts / 813 tris). Format spec added to `docs/navmesh-pipeline.md`;
+  the netcode.md nav risk item is now resolved.
+- **Budget 16 → 48 MB.** Raised the initial-download budget across the authoritative statements
+  (CLAUDE.md, AGENTS.md, docs/asset-pipeline.md, docs/testing.md, docs/netcode.md) to absorb the
+  shared `sim.wasm` without worry; total stays 60 MB. Left Phase 5's historical "verified under
+  16 MB" status prose and the unrelated VRAM "16 MB" line as-is.
+
+typecheck clean; `src/ai/nav.test.ts` green (Detour-blob format unchanged, JS runtime unaffected).
+
+Files: tools/navbake/bake.ts, assets/maps/de_douglas.navmesh.tris.bin (new),
+docs/navmesh-pipeline.md, docs/netcode.md, docs/asset-pipeline.md, docs/testing.md,
+CLAUDE.md, AGENTS.md, claude_changelog.md

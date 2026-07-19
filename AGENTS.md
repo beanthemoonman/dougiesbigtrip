@@ -38,7 +38,7 @@ You (Claude) will have access to Intellij and Blender MCP servers to work on the
 |---|---|---|
 | Renderer | three.js (r170+) | WebGL2 |
 | Physics | `@dimforge/rapier3d-compat` | WASM; used for raycasts + collision queries only |
-| Character movement | Hand-rolled (`src/player/`) | Rapier used only for shape-casts / collide-and-slide |
+| Character movement | Hand-rolled (`src/player/`) | Rapier used only for shape-casts / collide-and-slide. **Phase 6: moves into a shared Rust `sim/` crate (WASM-share) — server-authoritative, client runs the same WASM. See `docs/netcode.md`.** |
 | Nav | `recast-navigation-js` | Baked offline to a binary blob |
 | Build | Vite + TypeScript | |
 | Audio | Web Audio (fp weapon sfx); Howler.js planned | Phase 2 first-person weapon sounds are synthesised in `src/core/audio.ts` (no sound files → no licence). Howler comes in with bots (Phase 4) for positional/distance-tail/third-person variants — the only place spatial audio earns its keep. |
@@ -149,7 +149,7 @@ rationale and examples in `docs/testing.md`; this is the gate.
 
 **Runtime budgets** (if the feature touches the scene or assets)
 - [ ] `renderer.info.render.calls` < 400
-- [ ] Initial payload < 16 MB; total < 60 MB
+- [ ] Initial payload < 48 MB; total < 60 MB
 - [ ] No allocation in the hot loop — reused module-level scratch `Vector3`s (see `src/player/movement.ts`)
 - [ ] No new `castShadow` light in the world scene
 - [ ] Lightmapped materials still assert `lightMap.channel === 1` and `NoColorSpace`
@@ -176,7 +176,8 @@ rationale and examples in `docs/testing.md`; this is the gate.
 
 ## Performance budget
 
-- 16 MB initial download, 60 MB total.
+- 48 MB initial download, 60 MB total. (Raised from 16 MB in Phase 6 to absorb the shared Rust
+  `sim.wasm`; the single-player client still ships ~7 MB over the wire — headroom is deliberate.)
 - 120 fps on an RTX-class desktop GPU, 60 fps on integrated graphics at 1080p.
 - < 400 draw calls per frame. Merge static geometry per material at bake time.
 - No allocation in the hot loop. Reuse module-level scratch `Vector3` objects (see `src/player/movement.ts`).
