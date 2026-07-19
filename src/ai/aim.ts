@@ -8,6 +8,26 @@
  * the seeded rng. This module is just the geometry of turning your head.
  */
 import { Vector3 } from 'three';
+import { PLAYER_RADIUS } from '../player/constants';
+
+/**
+ * Does a bot's shot land? A per-shot angular miss (`spread` rad, sampled from two
+ * uniform [0,1) values) is projected onto the target plane; the shot connects only
+ * if it falls within the target's body radius. Distance-scaled by construction:
+ * lethal point-blank, increasingly sprayable with range. This is what gates bot
+ * damage — without it every on-target tick was a guaranteed chest hit (an aimbot).
+ */
+export function botShotLands(
+  distM: number,
+  spread: number,
+  r1: number,
+  r2: number,
+  bodyRadius: number = PLAYER_RADIUS,
+): boolean {
+  const ax = (r1 - 0.5) * 2 * spread;
+  const ay = (r2 - 0.5) * 2 * spread;
+  return distM * Math.hypot(ax, ay) <= bodyRadius;
+}
 
 export interface AimState {
   yaw: number;

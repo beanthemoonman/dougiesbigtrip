@@ -14,6 +14,8 @@ import rifleUrl from '../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
 import { createBot } from './ai/bot';
 import { createBrain, DIFFICULTIES, hearSound, killBot, tickBrain, type BotBrain } from './ai/brain';
+import { canSee } from './ai/perception';
+import { botShotLands } from './ai/aim';
 import { loadNav } from './ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './ai/anim';
 import { playFootstep, playGunshot, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
@@ -331,7 +333,16 @@ async function main(): Promise<void> {
   // is a full second player driving the shared movement (ai/bot.ts) + brain FSM.
   const BOT_WEAPON = WEAPONS.rifle;
   const BOT_MAX_HP = 100;
+  // Per-shot angular miss cone (rad, ~3.4°), resampled each shot. Projected to
+  // the target plane, a shot lands only if it falls within the body radius — so
+  // bots are lethal point-blank and increasingly sprayable with distance. This
+  // is what replaced the old guaranteed-chest-hit (an aimbot). See ai/aim.ts.
+  // ponytail: one spread for all bots (all 'normal'); make it per-Difficulty if
+  // easy/hard bots ever ship.
+  const BOT_AIM_SPREAD = 0.06;
+  type Team = 'T' | 'CT';
   interface Enemy {
+    readonly team: Team;
     readonly brain: BotBrain;
     readonly root: Group; // wraps the cloned armature+skinned-mesh so we can position/yaw
     readonly anim: BotAnimState;
@@ -381,23 +392,41 @@ async function main(): Promise<void> {
   // navmesh and routes around cover, so bots roam instead of standing at spawn.
   // y is the walkable-surface height the nav query snaps to.
   const F = CT_SPAWN[1];
-  const botSpawns: { s: Vector3; patrol: Vector3[] }[] = [
-    { s: new Vector3(-18, F, 25), patrol: [new Vector3(-16, F, 14), new Vector3(-12, F, 4), new Vector3(-16, F, 24)] },
-    { s: new Vector3(-13, F, 26), patrol: [new Vector3(-8, F, 8), new Vector3(-4, F, 0), new Vector3(-10, F, 24)] },
-    { s: new Vector3(-10, F, 24), patrol: [new Vector3(6, F, 12), new Vector3(14, F, 0), new Vector3(-10, F, 22)] },
+  // 3v3: the human is T; two bots fill out the T side, three defend as CT. T bots
+  // patrol north toward CT (mirror of the CT routes with z negated). Bots pick the
+  // nearest visible ENEMY each tick (human + opposing bots), so both sides fight.
+  const botDefs: { team: Team; s: Vector3; patrol: Vector3[] }[] = [
+    { team: 'CT', s: new Vector3(-18, F, 25), patrol: [new Vector3(-16, F, 14), new Vector3(-12, F, 4), new Vector3(-16, F, 24)] },
+    { team: 'CT', s: new Vector3(-13, F, 26), patrol: [new Vector3(-8, F, 8), new Vector3(-4, F, 0), new Vector3(-10, F, 24)] },
+    { team: 'CT', s: new Vector3(-10, F, 24), patrol: [new Vector3(6, F, 12), new Vector3(14, F, 0), new Vector3(-10, F, 22)] },
+    { team: 'T', s: new Vector3(-18, F, -25), patrol: [new Vector3(-16, F, -14), new Vector3(-12, F, -4), new Vector3(-16, F, -24)] },
+    { team: 'T', s: new Vector3(-13, F, -26), patrol: [new Vector3(-8, F, -8), new Vector3(-4, F, 0), new Vector3(-10, F, -24)] },
   ];
-  const enemies: Enemy[] = botSpawns.map(({ s, patrol }) => {
+  // Tint teammates so they read apart from enemies at a glance (one shared CT
+  // model). CT keep their baked colour; T get a warm tan.
+  const T_TINT = new Color(0xc8a06a);
+  const enemies: Enemy[] = botDefs.map(({ team, s, patrol }) => {
     const wasmIndex = sim_add_player(s.x, s.y, s.z);
     const bot = createBot(world, s, wasmIndex);
     const clone = cloneSkeleton(ctTemplateScene);
     clone.visible = true; // template is hidden; clones must be visible
     flattenMaterials(clone);
+    if (team === 'T') {
+      clone.traverse((o) => {
+        if (o instanceof SkinnedMesh) {
+          const m = o.material;
+          if (Array.isArray(m)) m.forEach((mm) => (mm as MeshBasicMaterial).color.copy(T_TINT));
+          else (m as MeshBasicMaterial).color.copy(T_TINT);
+        }
+      });
+    }
     const root = new Group();
     root.add(clone);
     root.position.set(s.x, s.y, s.z);
     root.rotation.y = bot.yaw;
     renderCtx.scene.add(root);
     return {
+      team,
       brain: createBrain(bot, DIFFICULTIES.normal, patrol),
       root,
       anim: createBotAnim(clone, ctTemplateClips),
@@ -409,6 +438,35 @@ async function main(): Promise<void> {
   });
   // Map each bot's collider back to its Enemy so a player hitscan can find it.
   const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.brain.bot.collider.handle, e]));
+
+  // The human plays T. Nearest ALIVE, VISIBLE enemy for a given bot (the human is
+  // an enemy of CT bots; opposing bots are enemies of both). Returns the human
+  // sentinel, an Enemy, or null (nobody in sight → the brain patrols/repositions).
+  const PLAYER_TEAM: Team = 'T';
+  type Target = Enemy | 'human' | null;
+  function pickTarget(me: Enemy): Target {
+    const from = me.brain.bot.position;
+    const yaw = me.brain.aim.yaw;
+    const coll = me.brain.bot.collider;
+    let best: Target = null;
+    let bestD = Infinity;
+    if (me.team !== PLAYER_TEAM && playerAlive) {
+      const d = from.distanceToSquared(playerFeet);
+      if (d < bestD && canSee(world, from, yaw, playerFeet, coll)) {
+        bestD = d;
+        best = 'human';
+      }
+    }
+    for (const other of enemies) {
+      if (other === me || !other.alive || other.team === me.team) continue;
+      const d = from.distanceToSquared(other.brain.bot.position);
+      if (d < bestD && canSee(world, from, yaw, other.brain.bot.position, coll)) {
+        bestD = d;
+        best = other;
+      }
+    }
+    return best;
+  }
   const rayHit: { collider: import('@dimforge/rapier3d-compat').Collider | null } = { collider: null };
   const botEye = new Vector3();
   const botToPlayer = new Vector3();
@@ -565,8 +623,14 @@ async function main(): Promise<void> {
 
       // Round loop drives freeze/live/reset. The human is T (1 alive when alive);
       // the bots are CT. Freezetime holds everyone still; reset respawns.
-      const ctAlive = enemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0);
-      const event = tickRound(round, DEFAULT_ROUND, playerAlive ? 1 : 0, ctAlive, fixedDt);
+      let tAlive = playerAlive ? 1 : 0;
+      let ctAlive = 0;
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        if (e.team === 'CT') ctAlive++;
+        else tAlive++;
+      }
+      const event = tickRound(round, DEFAULT_ROUND, tAlive, ctAlive, fixedDt);
       if (event === 'reset') respawn();
       const live = round.phase === 'live';
 
@@ -610,12 +674,16 @@ async function main(): Promise<void> {
         }
       }
 
-      // Bots: perceive the player, run the FSM, and shoot back.
+      // Bots (both teams): pick the nearest visible enemy, run the FSM, shoot.
       if (live) {
         for (const e of enemies) {
           if (!e.alive) continue;
           e.fireCooldown = Math.max(0, e.fireCooldown - fixedDt);
-          const { fire, buttons, yaw } = tickBrain(e.brain, world, nav, rng, playerFeet, playerAlive, fixedDt);
+          // Nearest visible enemy this tick (human or an opposing bot).
+          const target = pickTarget(e);
+          const targetAlive = target === 'human' ? playerAlive : target !== null && target.alive;
+          const targetFeet = target === 'human' ? playerFeet : target ? target.brain.bot.position : playerFeet;
+          const { fire, buttons, yaw } = tickBrain(e.brain, world, nav, rng, targetFeet, targetAlive, fixedDt);
           // Apply WASM movement for this bot, then sync the TS kinematic body
           // so perception and hit-detection are up-to-date.
           const bs = sim_tick(e.brain.bot.wasmIndex, buttons, yaw);
@@ -629,17 +697,32 @@ async function main(): Promise<void> {
           b.collider.setTranslation(bodyCenterScratch);
           const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
           driveBotAnim(e.anim, botSpeed, b.onGround, e.brain.mode, fixedDt);
-          if (fire && e.fireCooldown === 0 && playerAlive) {
+          if (fire && e.fireCooldown === 0 && target !== null && targetAlive) {
             e.fireCooldown = BOT_WEAPON.fireInterval;
             botEye.set(b.position.x, b.position.y + EYE_HEIGHT_STANDING, b.position.z);
-            botToPlayer.set(playerFeet.x, playerFeet.y + player.eyeHeight, playerFeet.z).sub(botEye);
+            const teye = target === 'human' ? player.eyeHeight : EYE_HEIGHT_STANDING;
+            botToPlayer.set(targetFeet.x, targetFeet.y + teye, targetFeet.z).sub(botEye);
             const dist = botToPlayer.length();
-            const dmg = computeDamage(BOT_WEAPON, dist, 'chest', armor);
-            health -= dmg.health;
-            armor -= dmg.armor;
-            if (health <= 0) {
-              health = 0;
-              playerAlive = false;
+            // Per-shot miss roll (deterministic via seeded rng). Only a landed
+            // shot deals damage — no more guaranteed chest hits.
+            if (botShotLands(dist, BOT_AIM_SPREAD, rng.next(), rng.next())) {
+              if (target === 'human') {
+                const dmg = computeDamage(BOT_WEAPON, dist, 'chest', armor);
+                health -= dmg.health;
+                armor -= dmg.armor;
+                if (health <= 0) {
+                  health = 0;
+                  playerAlive = false;
+                }
+              } else {
+                target.hp -= computeDamage(BOT_WEAPON, dist, 'chest', 0).health;
+                if (target.hp <= 0) {
+                  target.alive = false;
+                  target.root.visible = false;
+                  target.brain.bot.collider.setEnabled(false);
+                  killBot(target.brain);
+                }
+              }
             }
           }
         }
@@ -681,7 +764,7 @@ async function main(): Promise<void> {
             onFire(anim);
             playGunshot(active.id);
             // The shot is a sound bots can hear → they investigate from idle.
-            for (const e of enemies) if (e.alive) hearSound(e.brain, playerFeet);
+            for (const e of enemies) if (e.alive && e.team !== PLAYER_TEAM) hearSound(e.brain, playerFeet);
             // From the eye, not the muzzle (docs/weapon-feel.md §2) — the bullet
             // goes where the crosshair is, which is the point of the whole model.
             shotOrigin.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
@@ -705,7 +788,11 @@ async function main(): Promise<void> {
             if (distance !== null) {
               impact.copy(shotOrigin).addScaledVector(shot.direction, distance);
               const enemy = rayHit.collider ? byCollider.get(rayHit.collider.handle) : undefined;
-              if (enemy && enemy.alive) {
+              // Friendly fire off: teammate bullets pass through (no damage), but
+              // a hit on an enemy bot resolves the precise hitbox below.
+              if (enemy && enemy.alive && enemy.team === PLAYER_TEAM) {
+                // Teammate — bullet absorbed, no effect.
+              } else if (enemy && enemy.alive) {
                 // Precise per-bone zone from the shot ray in the bot's frame;
                 // fall back to the height band if it grazed the collider but
                 // missed every bone box (an edge clip that still counts).

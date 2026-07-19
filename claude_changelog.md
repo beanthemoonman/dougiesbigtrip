@@ -1600,3 +1600,36 @@ Files: sim/src/protocol.rs, sim/src/map.rs, sim/src/lib.rs (sim_set_player), ser
 src/net/{protocol.ts,protocol.test.ts,prediction.ts,prediction.test.ts,connection.ts}, src/main.ts,
 tests/harness/server.test.ts, tests/acceptance/ACC-012-server-movement.md, docs/netcode.md,
 claude_changelog.md.
+
+## 3v3 teams + bot miss model (fix: instakill / no teammates)
+
+**Symptom:** "None of my team spawns, and I lose within ~5 seconds" — in both
+single-player and connected mode.
+
+**Two root causes, one fix each:**
+
+1. **No teammates.** The game spawned the human as a lone T vs 3 CT bots; the
+   documented "3v3" (commit 912d7dc) was docs-only, never coded. Now `main.ts`
+   spawns 2 T teammate bots (warm-tan tint to tell them apart from CT) alongside
+   the 3 CT enemies. Bots pick the **nearest visible enemy each tick** via a new
+   `pickTarget()` (human is an enemy of CT bots; opposing bots are enemies of
+   both), so both sides actually fight. Round win-counts now tally per team
+   (`tAlive`/`ctAlive`). Friendly fire is off — the human's shots pass through T
+   teammates.
+
+2. **Guaranteed-hit bots (aimbot).** The bot fire path applied
+   `computeDamage(..., 'chest', ...)` *unconditionally* — the brain's `errorOffset`
+   only nudged the visible aim, never gating the hit. 36 dmg × 600 rpm × 3 bots =
+   dead in <1 s. Added `botShotLands()` (ai/aim.ts): a per-shot angular miss
+   (`BOT_AIM_SPREAD = 0.06 rad`, sampled from the seeded rng) projected to the
+   target plane — a shot lands only if within the body radius. Distance-scaled by
+   construction: lethal point-blank, sprayable at range. Bot damage (vs human and
+   vs bots) now flows through this roll.
+
+**Tests:** `src/ai/aim.test.ts` gains a `botShotLands` block (dead-centre always
+lands; max-error lands point-blank, misses at range; monotonic with distance).
+`pnpm test` green (163), `pnpm typecheck` green, `pnpm build` green.
+
+**Not touched:** WASM sim (no Rust change — `sim_add_player` already multi-player;
+bots are client-side in 6.3). Player-vs-player and bot-vs-bot movement collision
+is still 6.4 (bots pass through each other in the sim world).

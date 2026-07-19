@@ -1,6 +1,7 @@
 import { Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
-import { angleDelta, desiredYawPitch, onTarget, stepAim, stepAngle } from './aim';
+import { angleDelta, botShotLands, desiredYawPitch, onTarget, stepAim, stepAngle } from './aim';
+import { PLAYER_RADIUS } from '../player/constants';
 
 // T0: pure aim geometry. The load-bearing property is "never snaps": one step
 // moves at most turnRate*dt, and it takes the shortest way round the ±π wrap.
@@ -52,5 +53,32 @@ describe('aim: desiredYawPitch', () => {
     expect(out.pitch).toBeCloseTo(0);
     desiredYawPitch(new Vector3(0, 0, 0), new Vector3(0, 1, 0), out);
     expect(out.pitch).toBeCloseTo(Math.PI / 2);
+  });
+});
+
+describe('aim: botShotLands', () => {
+  const SPREAD = 0.06;
+  it('a dead-centre shot (r=0.5) always lands, any range', () => {
+    expect(botShotLands(2, SPREAD, 0.5, 0.5)).toBe(true);
+    expect(botShotLands(50, SPREAD, 0.5, 0.5)).toBe(true);
+  });
+  it('point-blank lands even at max angular error', () => {
+    // dist·spread·√2 must be within the body radius up close.
+    expect(botShotLands(1, SPREAD, 0, 0)).toBe(true);
+  });
+  it('the same max-error shot misses at long range', () => {
+    // 50 m · 0.06·√2 ≫ body radius → a miss.
+    expect(botShotLands(50, SPREAD, 0, 0)).toBe(false);
+  });
+  it('hit chance falls with distance for a fixed error', () => {
+    // Worst-case corner offset scales with distance; find where it crosses the
+    // body radius and check the boundary behaves monotonically.
+    const near = botShotLands(3, SPREAD, 0, 1);
+    const far = botShotLands(30, SPREAD, 0, 1);
+    expect(near).toBe(true);
+    expect(far).toBe(false);
+    // Just inside the boundary distance the max-error shot still lands.
+    const edge = PLAYER_RADIUS / (SPREAD * Math.SQRT2);
+    expect(botShotLands(edge * 0.99, SPREAD, 0, 0)).toBe(true);
   });
 });
