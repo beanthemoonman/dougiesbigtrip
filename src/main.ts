@@ -1,5 +1,6 @@
-import { Box3, Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, type MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
+import { Box3, Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, SkinnedMesh, type MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
 import navUrl from '../assets/maps/de_greybox.navmesh.bin?url';
 import mapKtx2Url from '../assets/maps/de_greybox/lightmap.ktx2?url';
@@ -14,6 +15,7 @@ import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
 import { createBot } from './ai/bot';
 import { createBrain, DIFFICULTIES, hearSound, killBot, tickBrain, type BotBrain } from './ai/brain';
 import { loadNav } from './ai/nav';
+import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './ai/anim';
 import { playGunshot, playReload, resumeAudio } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
@@ -259,22 +261,47 @@ async function main(): Promise<void> {
   const BOT_MAX_HP = 100;
   interface Enemy {
     readonly brain: BotBrain;
-    readonly body: Object3D;
+    readonly root: Group; // wraps the cloned armature+skinned-mesh so we can position/yaw
+    readonly anim: BotAnimState;
     readonly spawn: Vector3;
     alive: boolean;
     hp: number;
-    fireCooldown: number; // s until the bot may shoot again (cyclic rate)
+    fireCooldown: number;
   }
   // CT world-model (bots are CT). Baked-lighting world has no realtime lights,
-  // so flatten the glb's MeshStandardMaterials to unlit MeshBasicMaterial —
-  // same reason the old capsule used MeshBasic. Loaded once, cloned per bot.
-  const ctModel = (await new GLTFLoader().loadAsync(ctPlayerUrl)).scene;
-  ctModel.traverse((o) => {
-    if (o instanceof Mesh) {
-      const src = o.material as MeshStandardMaterial;
-      o.material = new MeshBasicMaterial({ color: src.color });
-    }
+  // so flatten the glb's MeshStandardMaterials to unlit MeshBasicMaterial.
+  // The .glb now carries a skinned armature + three animation clips (idle/walk/
+  // death). Loaded once; each bot clones the full skeleton+mesh hierarchy and
+  // gets its own AnimationMixer. Template clips are shared across all mixers.
+  // MeshBasicMaterial skins automatically for a SkinnedMesh in three r170 (no
+  // `skinning` flag). Keep single materials single: each bot submesh is one
+  // primitive with zero geometry groups, so a 1-element material *array* would
+  // draw nothing (the renderer iterates groups) — the model goes invisible.
+  const toBasic = (m: MeshStandardMaterial): MeshBasicMaterial => new MeshBasicMaterial({ color: m.color });
+  function flattenMaterials(root: Object3D): void {
+    root.traverse((o) => {
+      if (o instanceof SkinnedMesh) {
+        o.material = Array.isArray(o.material)
+          ? o.material.map((m) => toBasic(m as MeshStandardMaterial))
+          : toBasic(o.material as MeshStandardMaterial);
+      }
+    });
+  }
+  const ctGltf = await new GLTFLoader().loadAsync(ctPlayerUrl);
+  const ctTemplateScene = ctGltf.scene;
+  const ctTemplateClips = ctGltf.animations;
+  // We need the skinned mesh's skeleton alive on the loaded template so cloning
+  // can bind the clone's SkinnedMesh to the clone's own Bone tree. The template
+  // itself is never rendered; only its clones are.
+  ctTemplateScene.traverse((o) => {
+    if (o instanceof SkinnedMesh) o.frustumCulled = false;
   });
+  flattenMaterials(ctTemplateScene);
+  // Hide the template — it only exists so three.js can resolve the skeleton
+  // reference during clone.
+  ctTemplateScene.visible = false;
+  renderCtx.scene.add(ctTemplateScene);
+
   // Three CT spawns fanned across their end cover, each patrolling the open
   // centre corridor (x in [-3, 3]) down toward T and back. The flanks hold cover
   // (west crate cluster, east platform); the middle is the killing lane, so the
@@ -289,11 +316,18 @@ async function main(): Promise<void> {
   ];
   const enemies: Enemy[] = botSpawns.map(({ s, patrol }) => {
     const bot = createBot(world, s);
-    const body = ctModel.clone();
-    renderCtx.scene.add(body);
+    const clone = cloneSkeleton(ctTemplateScene);
+    clone.visible = true; // template is hidden; clones must be visible
+    flattenMaterials(clone);
+    const root = new Group();
+    root.add(clone);
+    root.position.set(s.x, s.y, s.z);
+    root.rotation.y = bot.yaw;
+    renderCtx.scene.add(root);
     return {
       brain: createBrain(bot, DIFFICULTIES.normal, patrol),
-      body,
+      root,
+      anim: createBotAnim(clone, ctTemplateClips),
       spawn: s,
       alive: true,
       hp: BOT_MAX_HP,
@@ -325,7 +359,7 @@ async function main(): Promise<void> {
       e.alive = true;
       e.hp = BOT_MAX_HP;
       e.fireCooldown = 0;
-      e.body.visible = true;
+      e.root.visible = true;
       e.brain.bot.ctx.collider.setEnabled(true);
       const b = e.brain.bot;
       b.state.position.copy(e.spawn);
@@ -335,6 +369,8 @@ async function main(): Promise<void> {
       e.brain.mode = 'idle';
       e.brain.lastKnown = null;
       e.brain.reactionTimer = 0;
+      e.root.position.set(e.spawn.x, e.spawn.y, e.spawn.z);
+      resetBotAnim(e.anim);
     }
   }
 
@@ -430,6 +466,9 @@ async function main(): Promise<void> {
           if (!e.alive) continue;
           e.fireCooldown = Math.max(0, e.fireCooldown - fixedDt);
           const { fire } = tickBrain(e.brain, world, nav, rng, playerFeet, playerAlive, fixedDt);
+          const botVel = e.brain.bot.state.velocity;
+          const botSpeed = Math.hypot(botVel.x, botVel.z);
+          driveBotAnim(e.anim, botSpeed, e.brain.bot.state.onGround, e.brain.mode, fixedDt);
           if (fire && e.fireCooldown === 0 && playerAlive) {
             e.fireCooldown = BOT_WEAPON.fireInterval;
             const b = e.brain.bot;
@@ -514,7 +553,7 @@ async function main(): Promise<void> {
                 enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
                 if (enemy.hp <= 0) {
                   enemy.alive = false;
-                  enemy.body.visible = false;
+                  enemy.root.visible = false;
                   enemy.brain.bot.ctx.collider.setEnabled(false); // corpse is a ghost
                   killBot(enemy.brain);
                 }
@@ -559,13 +598,13 @@ async function main(): Promise<void> {
       );
       active.root.rotation.set(animPose.pitch, active.rest.yaw, animPose.roll, 'YXZ');
 
-      // Bot world-models: feet sit on the glb origin, so position = feet (the
-      // bot's state position). rotation.y = aim yaw (model faces -Z = its forward).
+      // Bot world-models: position + yaw the wrapper group; the Bone
+      // hierarchy sits inside it and AnimationMixer drives the poses.
       for (const e of enemies) {
         if (!e.alive) continue;
         const p = e.brain.bot.state.position;
-        e.body.position.set(p.x, p.y, p.z);
-        e.body.rotation.y = e.brain.aim.yaw;
+        e.root.position.set(p.x, p.y, p.z);
+        e.root.rotation.y = e.brain.aim.yaw;
       }
 
       renderCtx.render();

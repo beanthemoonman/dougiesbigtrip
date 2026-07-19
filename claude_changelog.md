@@ -1002,3 +1002,72 @@ optional `stack` value for the crate stacked on top. typecheck green.
   notes replaced with their PASS dates+commits. Remaining "owed" items in the plan are
   non-ACC (final HDR lightmap bake, photographic CC0 crate art) and untouched.
 - Committed 7fc096f.
+
+## 2026-07-19 — Phase 5: Bot animation pipeline (skinned armature + Mixamo-compatible skeleton)
+
+- **Blender side** — Replaced the old static-mesh `build_characters.py` with a full
+  armature + skinning + procedural animation pipeline:
+  - 23-bone skeleton (`mixamorig:Hips`/`Spine`/`Spine1`/`Spine2`/`Neck`/`Head`,
+    left/right `Shoulder`/`Arm`/`ForeArm`/`Hand`, `UpLeg`/`Leg`/`Foot`/`ToeBase`) —
+    Mixamo naming convention so retargeted Mixamo clips would drop in without renaming.
+  - All pose bones set to `QUATERNION` rotation mode (no multi-mode export warnings).
+  - Each body-part box is rigid-skinned (weight 1.0) to its corresponding bone via
+    explicit vertex groups.
+  - Three procedural animation clips, keyframed at 30 fps:
+    - `idle` (2 s loop) — subtle breathing bob + slow side-to-side sway + minimal arm
+      movement.
+    - `walk` (1 s loop) — cyclic walk cycle: hip bob + twist, opposing leg + arm
+      swing, knee bend, foot roll, spine lean. Authored at ~2.5 m/s nominal pace
+      (scaled by `driveBotAnim` at runtime).
+    - `death` (1 s one-shot) — ease-in fall backward (hips rotate 90° on X while
+      translating -Z), arms go limp, legs crumple, head flops forward.
+  - Actions stashed to NLA tracks for glTF export with `export_animations=true`.
+  - CT (navy SWAT) and T (tan militia) now both export from the same script —
+    build once with CT palette, recolor materials with T palette, export again.
+  - Both `.glb` files carry all 3 animations (~6-9 KB per clip, 69 channels each).
+- **Three.js side** — Wired the skinned mesh + AnimationMixer into the bot pipeline:
+  - New `src/ai/anim.ts`: `BotAnimState` wraps a per-bot `AnimationMixer` + clip
+    actions. `driveBotAnim()` reads bot speed, `onGround`, and FSM `mode` to pick
+    idle/walk/death and crossfade between clips. Walk `timeScale` scales linearly
+    with ground speed (clamped ≥0.4×). Death plays `LoopOnce` and stops. `resetBotAnim()`
+    resets on respawn.
+  - `src/ai/anim.test.ts`: 6 T0 unit tests covering the clip-selection logic (dead,
+    walk threshold, airborne = idle, speed-scale bounds).
+  - `src/main.ts`:
+    - Uses `SkeletonUtils.clone()` (three/addons) for proper skinned-mesh cloning
+      (resolves the cloned SkinnedMesh's skeleton bones to the cloned Bone-hierarchy
+      objects — plain `Object3D.clone()` would leave them referencing the template's
+      bones).
+    - `flattenMaterials()` handles `SkinnedMesh` (multi-material array, sets
+      `skinning: true` via a type assertion — the property exists at runtime but
+      `@types/three@0.170.0` omits it from `MeshBasicMaterialParameters`).
+    - Each bot gets a wrapper `Group` positioned at its feet + yawed by aim yaw;
+      the cloned armature+SkinnedMesh sits inside it, and `AnimationMixer` drives
+      the bone poses within the group's local frame.
+    - Chat-bot rendering section replaced: `body.rotation.y = aim.yaw` → Group
+      position + rotation; bone animation handled by the mixer (updated in `tick()`).
+    - Respawn resets the mixer via `resetBotAnim()`.
+  - Template model is added to the scene (invisible) so `SkeletonUtils.clone()` can
+    resolve the skeleton reference. Only clones are visible.
+- **Gate**: typecheck, lint, 116 tests (all green), production build succeeds.
+  `ct_player.glb`: 318 KB, `t_player.glb`: 227 KB (both well within the 16 MB budget).
+
+## Bugfix: invisible bots after the skinned-armature switch
+
+- Symptom: bots rendered nothing after the animation work landed.
+- Root cause (found by a headless GLTFLoader probe, not by eye): the character glb
+  loads as **4 separate single-material `SkinnedMesh` objects, each with 0 geometry
+  groups** (GLTFLoader splits multi-material into one primitive per material).
+  `flattenMaterials()` did `o.material = mats.map(...)`, which **always** produced a
+  material *array* — even for a single material. Three's renderer, given a material
+  array, emits one draw call per `geometry.group`; with zero groups it draws nothing,
+  so every submesh was silently culled. The old capsule code assigned a single
+  material, so it never hit this.
+- Fix (`src/main.ts`, `flattenMaterials`): keep single materials single — only map to
+  an array when the source is an array. Also dropped the `skinning = true` cast:
+  `MeshBasicMaterial` skins automatically for a `SkinnedMesh` in three r170 (the flag
+  was removed back in r125), so the assertion was a misleading no-op. Verified the glb
+  loads as single-material submeshes and the rest-pose skinning matches the bind pose
+  (no explosion) via the probe. Typecheck/lint/build green.
+- **Owed (standing T3 blocker):** in-app visual confirm the bots now show + animate —
+  needs a real windowed browser, which isn't available here.
