@@ -1315,3 +1315,67 @@ typecheck clean; `src/ai/nav.test.ts` green (Detour-blob format unchanged, JS ru
 Files: tools/navbake/bake.ts, assets/maps/de_douglas.navmesh.tris.bin (new),
 docs/navmesh-pipeline.md, docs/netcode.md, docs/asset-pipeline.md, docs/testing.md,
 CLAUDE.md, AGENTS.md, claude_changelog.md
+
+## 2026-07-19 — Phase 6 pre-requisite: Determinism harness + trace recorder
+
+- Closed Phase 0 debt: built the **determinism harness** that testing.md calls "the enabling
+  idea" and that Phase 6's T1 tests depend on.
+  - `tests/harness/sim.ts`: `simulate(trace, spawnPoint?)` → flattened `SimResult` (position,
+    velocity, tick count). Creates a headless Rapier world with de_douglas colliders, ticks the
+    player movement controller at 64 Hz for the full trace, returns primitives-only result so
+    `toEqual` works in Vitest. `initPhysics()` is idempotent and memoised — called once per test
+    run.
+  - `tests/harness/sim.test.ts`: 5 T1 tests — **determinism** (identical trace × 2 → identical
+    result, the test that never gets deleted), explicit-spawn determinism, tick-count assertion,
+    **crate-face free-fall regression** (repro of movement_map.test.ts running-jump scenario
+    through the harness), and flat-floor grounding.
+  - Extended `vitest.config.ts` include pattern to `['src/**/*.test.ts', 'tests/**/*.test.ts']`
+    so tests outside `src/` are picked up.
+  - Total test count: 26 files, 129 tests (was 25/124).
+- Built the **trace recorder** — the recording half of the determinism infrastructure.
+  - `src/core/trace_recorder.ts`: defines canonical `TraceTick` and `InputTrace` types; exports
+    `createTraceRecorder()` that returns a ring-buffer recorder when `?record` is in the URL,
+    otherwise a no-op. Press F2 to dump the last ~30 s (1920 ticks at 64 Hz) to console as JSON.
+  - Wired into `src/main.ts` tick loop: `traceRecorder.push()` records every sim tick's
+    buttons and yaw. The no-op hot path has zero overhead (one cheap branch).
+  - `tests/harness/sim.ts` re-exports `TraceTick` from the canonical source.
+
+typecheck clean; `pnpm test` 129 green; `pnpm build` bundles clean.
+
+Files: tests/harness/sim.ts (new), tests/harness/sim.test.ts (new),
+src/core/trace_recorder.ts (new), src/main.ts (edited), vitest.config.ts (edited),
+claude_changelog.md
+
+## 2026-07-19 — Phase 6.0: Cargo workspace + WS echo
+
+- Installed Rust toolchain: rustc 1.97.1, cargo 1.97.1, wasm-pack 0.13.1,
+  wasm32-unknown-unknown target.
+- Created **Cargo workspace** at repo root: `sim/` (cdylib + rlib, wasm-bindgen
+  under feature "wasm") and `server/` (binary depending on sim).
+- **Shared wire format** (`sim/src/protocol.rs` ↔ `src/net/protocol.ts`):
+  message tags (WELCOME=0, BYE=1, CMD=2, SNAP=3), protocol version byte,
+  SPECTATOR=255 sentinel, Welcome struct (yourSlot, map, seed, serverTick).
+  4 Rust + 5 TS round-trip tests; cross-compatibility test on TS side.
+- **Server**: tokio + tokio-tungstenite, ws://127.0.0.1:9876, sends Welcome on
+  connect, echoes binary frames.
+- **Client** (`src/net/connection.ts`): `createConnection()` → `connect()` →
+  receives Welcome → state transition. Pure state machine.
+- **WASM pipeline**: `wasm-pack build` → `sim/pkg/`; `vite-plugin-wasm` handles
+  `.wasm` in prod build. `sim-wasm` local dep. `sim_greet()` imports clean.
+  `pnpm build` bundles clean with wasm.
+- **Integration tests** (`tests/harness/server.test.ts`): spawns Rust server,
+  connects via `ws`, verifies Welcome decode + binary echo. 2 tests pass.
+- Created `vite.config.ts` (wasm plugin + esnext target).
+- Added Rust artifacts to `.gitignore`.
+
+typecheck clean; `pnpm test` 137 green (28 files); `cargo test` 4 green;
+`cargo clippy` clean; `pnpm build` bundles clean.
+
+**6.0 exit test met**: server starts → browser connects → Welcome round-trips.
+
+Files: Cargo.toml (new), sim/Cargo.toml (new), sim/src/lib.rs (new),
+sim/src/protocol.rs (new), server/Cargo.toml (new), server/src/main.rs (new),
+src/net/protocol.ts (new), src/net/protocol.test.ts (new),
+src/net/connection.ts (new), tests/harness/server.test.ts (new),
+vite.config.ts (new), package.json (edited), .gitignore (edited),
+claude_changelog.md

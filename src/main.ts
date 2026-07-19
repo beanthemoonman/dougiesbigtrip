@@ -19,6 +19,7 @@ import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './
 import { playFootstep, playGunshot, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { createSettingsPanel, DEFAULT_SETTINGS } from './core/settings';
+import { createTraceRecorder } from './core/trace_recorder';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
 import { type Breakable, damageProp } from './game/breakables';
@@ -471,6 +472,10 @@ async function main(): Promise<void> {
 
   const hud = createHud(document.body);
 
+  // Input trace recorder — press F2 to dump the last ~30 s of input to console.
+  // Active only when ?record in the URL; otherwise a no-op on the hot path.
+  const traceRecorder = createTraceRecorder();
+
   const view = (): ViewState => ({
     position: player.position.clone(),
     eyeHeight: player.eyeHeight,
@@ -660,6 +665,8 @@ async function main(): Promise<void> {
       currView.viewPunch = player.viewPunch;
       currView.punchYaw = active.state.recoil.punch.yaw;
       currView.punchPitch = active.state.recoil.punch.pitch;
+
+      traceRecorder.push({ buttons: input.state.buttons, yaw: input.state.yaw });
     },
     render(alpha, frameDt): void {
       renderCtx.stats.begin();

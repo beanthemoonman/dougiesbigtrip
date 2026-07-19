@@ -33,3 +33,9 @@ assets/maps/*/lightmap.exr
 assets/maps/*/lightmap_ldr.png
 
 opencode.jsonc
+
+# Rust build artifacts
+sim/pkg/
+server/target/
+sim/target/
+target/
