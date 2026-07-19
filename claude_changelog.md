@@ -862,3 +862,17 @@ skipped: in-app ACC-005 (real windowed browser) still owed with the other T3 scr
 - New `M_Bakelite` material (orange-brown); pistol grip + curved mag now bakelite, not black/steel.
 - Warmed the wood to amber to match CS2 furniture.
 - Rebuilt: AK 323 polys / pistol unchanged 382. Frame convention untouched, main.ts wiring valid.
+
+## 2026-07-19 — Reference-driven curves: AK mag + grip traced from a side photo
+New workflow — reference image → curve JSON → 3D model:
+- `tools/refextract/outline.py`: segments a part from a flat-bg side photo and
+  traces its silhouette centerline/edges to a normalized curve JSON (PIL+numpy,
+  `--debug` overlay to verify the trace).
+- `swept_part()` in build_weapons.py lofts a rectangular cross-section along the
+  traced centerline (one continuous mesh — replaces the guessed banana arc and the
+  earlier disc-slice attempt that fanned apart on rotation).
+- AK magazine + pistol grip now follow curves traced from the CS2 AK side ref.
+- Licensing: source photos (assets/reference/**, e.g. ak-side.png — a CS2 skin
+  screenshot) are gitignored per non-negotiable #1. Only the extracted geometry
+  (tools/blender/curves/*.curve.json — plain numbers) is committed.
+- AK 385 polys.

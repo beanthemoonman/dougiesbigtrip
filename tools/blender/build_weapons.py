@@ -9,12 +9,17 @@ Or via the Blender MCP (exec the file's contents).
 """
 import bpy
 import bmesh
+import json
 import math
 import os
 from mathutils import Vector, Euler
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(ROOT, "assets", "weapons")
+# Curves traced from reference photos via tools/refextract/outline.py. The source
+# photos live under assets/reference/ (gitignored — may be copyrighted); only the
+# extracted geometry (these JSONs) is committed here.
+CURVES = os.path.join(ROOT, "tools", "blender", "curves")
 
 # ---- materials -------------------------------------------------------------
 
@@ -108,28 +113,55 @@ def tilted_box(name, center, size, material, tilt_deg, tilt_axis="X", bevel=0.00
     bpy.ops.object.transform_apply(rotation=True)
     return o
 
-def curved_mag(name, top, width, thickness, height, segments, material):
-    """Banana magazine: walk down-and-forward from the mag-well attach point `top`.
+def swept_part(name, curve_path, top, x_width, thickness, height_m, material,
+               head=0, tail=0, bevel=0.004):
+    """Build a curved part (mag, grip) by following the *centerline* of a reference
+    outline curve extracted from a side photo via tools/refextract/outline.py.
 
-    Segments hang from `top` (at the receiver underside), each tilting a little more
-    toward +Y (muzzle) so the stack sweeps into the AK banana curve.
+    The JSON gives, per height t (0=top→1=bottom), the part's centerline `c` as a
+    fraction of the reference bbox *width*. We map the photo into model space —
+    image −x (toward muzzle) → +Y forward, image +y (down) → −Z — preserving the
+    true aspect ratio, then hang `height_m` of constant-`thickness` box segments
+    from `top` following that curve. (The a..b span is the *slanted* cross-section
+    width, not true thickness, so it is not used for depth.)
     """
-    parts = []
-    arc_angle = math.radians(42)  # total sweep, top (vertical) -> bottom (forward)
-    seg_len = height / segments
-    py, pz = top[1], top[2]
-    for i in range(segments):
-        a = ((i + 0.5) / segments) * arc_angle  # 0 at top, grows going down
-        dy = math.sin(a) * seg_len
-        dz = -math.cos(a) * seg_len
-        seg = box(f"{name}_{i}", (top[0], py + dy / 2, pz + dz / 2),
-                  (width, thickness, seg_len * 1.08), material, bevel=0.004)
-        seg.rotation_euler = (a, 0, 0)
-        bpy.ops.object.transform_apply(rotation=True)
-        parts.append(seg)
-        py += dy
-        pz += dz
-    return parts
+    with open(curve_path) as f:
+        data = json.load(f)
+    s = data["samples"]
+    if head or tail:
+        s = s[head:len(s) - tail]
+    x0, y0, x1, y1 = data["bbox_px"]
+    aspect = (x1 - x0) / (y1 - y0)          # photo width : height
+    c_ref = s[0]["c"]
+    pts = [Vector((top[0],
+                   top[1] + (c_ref - p["c"]) * aspect * height_m,  # image −x -> +Y forward
+                   top[2] - p["t"] * height_m))                     # image +y -> −Z down
+           for p in s]
+    # Loft a rectangular cross-section (x_width × thickness) along the centerline:
+    # one continuous mesh so the curve stays gap-free. Cross-section stays in the
+    # plane perpendicular to the local tangent (which lies in Y-Z; X is constant).
+    hw, ht = x_width / 2, thickness / 2
+    corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+    rings = []
+    for i, P in enumerate(pts):
+        t = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)])
+        t.normalize()
+        n = Vector((0, t.z, -t.y))            # curve-normal in Y-Z plane
+        n = n.normalized() if n.length > 1e-6 else Vector((0, 0, 1))
+        rings.append([P + Vector((sx * hw, 0, 0)) + n * (sn * ht) for sx, sn in corners])
+    bm = bmesh.new()
+    vr = [[bm.verts.new(v) for v in ring] for ring in rings]
+    for i in range(len(vr) - 1):
+        for k in range(4):
+            bm.faces.new([vr[i][k], vr[i][(k + 1) % 4], vr[i + 1][(k + 1) % 4], vr[i + 1][k]])
+    bm.faces.new(vr[0][::-1])
+    bm.faces.new(vr[-1])
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    o = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(o)
+    return [_finish(o, material, smooth=False, bevel=bevel)]
 
 # ---- weapon builders -------------------------------------------------------
 
@@ -195,14 +227,16 @@ def build_ak(M):
     parts.append(box("AK_rsight_leaf", (0, 0.21, 0.060), (0.016, 0.034, 0.006), M["steel"], bevel=0.003))
     parts.append(box("AK_rsight_notch", (0, 0.21, 0.066), (0.018, 0.008, 0.008), M["steel"], bevel=0.003))
 
-    # --- curved banana magazine ---
-    parts.extend(curved_mag("AK_mag", (0, 0.10, -0.03), 0.022, 0.050, 0.22, 12, M["bakelite"]))
+    # --- curved banana magazine (curve traced from assets/reference/ak/ak-side.png) ---
+    parts.extend(swept_part("AK_mag", os.path.join(CURVES, "ak_mag.curve.json"),
+                            (0, 0.10, -0.010), 0.045, 0.050, 0.22, M["bakelite"], head=2))
 
     # --- mag catch ---
     parts.append(box("AK_magcatch", (0.018, -0.01, -0.070), (0.008, 0.025, 0.012), M["steel"], bevel=0.004))
 
-    # --- pistol grip ---
-    parts.append(tilted_box("AK_grip", (0, -0.05, -0.100), (0.032, 0.050, 0.14), M["bakelite"], tilt_deg=20, bevel=0.014))
+    # --- pistol grip (curve traced from assets/reference/ak/ak-side.png) ---
+    parts.extend(swept_part("AK_grip", os.path.join(CURVES, "ak_grip.curve.json"),
+                            (0, -0.01, -0.035), 0.032, 0.052, 0.15, M["bakelite"], head=1, bevel=0.010))
 
     # --- stock (wood) ---
     parts.append(box("AK_stock_neck", (0, -0.18, 0.0), (0.036, 0.16, 0.058), M["wood"], bevel=0.012))
