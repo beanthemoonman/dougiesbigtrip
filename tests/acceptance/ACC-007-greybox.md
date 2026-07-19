@@ -11,6 +11,7 @@ step here is look/movement dependent).
 
 - **Build:** `pnpm dev`, open the printed URL.
 - **Tester:** Alexander Bean Apmann  **Date:** 2026-07-18  **Commit:** 4725ae4  **Result:** ✅ PASS
+- **Re-run (post-texture/prop pass):** Alexander Bean Apmann  **Date:** 2026-07-19  **Commit:** 0e71ae2  **Result:** ✅ PASS
 
 Map: `de_greybox` (`src/game/map_greybox.ts`). You spawn at **T** (south). The **site** is the
 open area to the north; **CT** hold is behind it.
@@ -20,33 +21,33 @@ open area to the north; **CT** hold is behind it.
 1. **You spawn on the floor, facing into the map.** Click to lock the mouse. You are standing on
    the ground in the south spawn, not floating and not clipped into the floor. Looking north you
    see the three lane openings.
-   - [ ] Pass
+   - [x] Pass
 
 2. **Three routes reach the site.** Walk from T spawn to the site three times, once per lane:
    **West** (tunnels), **Mid** (through the doorway choke), **East** (long). Each lane gets you
    into the open site. None is a dead end.
-   - [ ] Pass
+   - [x] Pass
 
 3. **The mid choke is passable at speed.** Run through the mid doorway without ducking. You pass
    cleanly — no getting wedged, no juddering against the doorframe edges.
-   - [ ] Pass
+   - [x] Pass
 
 4. **Movement feel survives on the map.** In an open lane, bunnyhop-strafe and exceed the
    6.35 m/s ground cap (same as the Phase 1 room). Strafing into a wall at an angle slides along
    it without sticking.
-   - [ ] Pass
+   - [x] Pass
 
 5. **Step-up, not hop.** Walk onto the step→platform stack on the east side of the site. You walk
    up both rises smoothly; you do not have to jump.
-   - [ ] Pass
+   - [x] Pass
 
 6. **No slope slide.** Stand still on the ramp in the west of the site. You do not slide down it.
-   - [ ] Pass
+   - [x] Pass
 
 7. **Sightlines read.** From the site, the crates and pillars break the lines of sight enough that
    there are angles to hold and angles to peek — it is not one flat empty box. (Subjective; note
    anything that feels too open or too cramped for retuning.)
-   - [ ] Pass
+   - [x] Pass
 
 ## Notes / retune list
 _(record layout changes to make before texturing)_

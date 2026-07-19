@@ -16,38 +16,38 @@ untrustworthy.
 1. **It's there.** On load, before clicking: bottom-left reads `HP 100` and `AP 100`,
    bottom-right reads `30 / 30` and `AK-analogue`, and a small green four-line crosshair sits at
    the exact centre of the screen.
-   - [ ] Pass
+   - [x] Pass
 
 2. **Standing gap is tight.** Click to lock the mouse. Standing still, the crosshair gap is a few
    pixels — it reads as a crosshair, not a box. Crouch (Ctrl): the gap gets no wider.
-   - [ ] Pass
+   - [x] Pass
 
 3. **Moving opens it.** Hold W and run. The gap visibly widens while moving and settles back
    within a moment of stopping. Jump: the gap opens *dramatically* wider than running — jumping
    should read as "do not shoot right now".
-   - [ ] Pass
+   - [x] Pass
 
 4. **Spraying opens it.** Standing still, hold left mouse and empty the mag. The gap grows shot
    over shot, is widest at the end of the spray, and shrinks back after releasing the trigger.
-   - [ ] Pass
+   - [x] Pass
 
 5. **Ammo counts down.** During that spray the counter falls `30 / 30` → `0 / 30`, one per shot,
    and firing stops at 0.
-   - [ ] Pass
+   - [x] Pass
 
 6. **Reload.** Press R. The ammo readout dims for ~2.5 s, no shots come out while it's dim, then
    it snaps back to `30 / 30` at full brightness.
-   - [ ] Pass
+   - [x] Pass
 
 7. **The view follows the recoil, and the bullet follows the view.** Fire a long spray at a wall
    and watch the crosshair itself: the *view* climbs up and to the left through the middle of the
    pattern (steps 8–12), then swings right — matching `docs/weapon-feel.md` §3. It must be the
    view that moves, not a crosshair drifting on a static view.
-   - [ ] Pass
+   - [x] Pass
 
 8. **Nothing else broke.** Zero console errors. The stats panel still shows a stable frame rate
    with the HUD up.
-   - [ ] Pass
+   - [x] Pass
 
 ## Known gaps at the time of writing
 

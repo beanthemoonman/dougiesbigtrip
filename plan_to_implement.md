@@ -126,7 +126,8 @@ Read `docs/weapon-feel.md`.
       layer 1; `render()` does world pass → `clearDepth()` → viewmodel pass. Own light rig:
       RoomEnvironment PMREM so the full-metalness gunmetal isn't black + a key/fill
       directional. `main.ts` loads the glb, sets it to layer 1, welds it to the eye at a
-      hand-tuned lower-right offset. T3: `tests/acceptance/ACC-005-viewmodel.md`, not yet run.)
+      hand-tuned lower-right offset. T3: `tests/acceptance/ACC-005-viewmodel.md` PASS (2026-07-17,
+      re-run in-app 2026-07-19 @ 0e71ae2).)
 - [x] Weapon animation state machine: idle / fire / reload / draw / holster.
       (`src/weapons/viewmodel.ts` — procedural, since the models have no armature: draw/reload/
       holster are timed pose offsets, `fire` is an additive decaying kick layered on top (so
@@ -143,8 +144,7 @@ Read `docs/weapon-feel.md`.
       (`src/ui/hud.ts` — DOM overlay, no React. The crosshair gap is the *same*
       `computeSpread()` value the bullet's spread disc uses, projected to px:
       `(h/2)·tan(spread)/tan(vFov/2)`. T0 in `hud.test.ts`. T3 script:
-      `tests/acceptance/ACC-003-hud.md` — **written, not yet run**; needs a real windowed
-      browser, same blocker as the Phase 1 live pass. T2 doesn't apply to a DOM overlay
+      `tests/acceptance/ACC-003-hud.md` — **PASS** (2026-07-17 @ aafcb6b). T2 doesn't apply to a DOM overlay
       (rationale in the script). HP/AP are hardcoded 100 until Phase 4 gives them a source.
       Also wired the weapon into `main.ts`: LMB fires, R reloads, recoil punch now drives the
       view via `camera.ts` — so ammo/gap/view-kick are live.)
@@ -154,9 +154,8 @@ Read `docs/weapon-feel.md`.
 The viewmodel doesn't clip into walls and doesn't distort at the screen edges.
 
 Status: the decal half is now **observable** — `tests/acceptance/ACC-004-impacts.md` is the
-committed script for it, written before tuning, **not yet run** (needs a real windowed
-browser, same standing blocker as ACC-003 and the Phase 1 live pass — run all three
-together). A headless-Chrome smoke pass over CDP confirmed the wiring end-to-end: pointer
+committed script for it, written before tuning, **PASS** (2026-07-17 @ aafcb6b, alongside
+ACC-003). A headless-Chrome smoke pass over CDP confirmed the wiring end-to-end: pointer
 lock engaged, holding LMB drained 14 rounds off real weapon state, and the holes landed on
 the far wall flat to the surface as a structured cluster, not a cloud, with zero console
 errors. Judging the *shape* against `docs/weapon-feel.md` §3 is what ACC-004 is for; a
@@ -166,7 +165,7 @@ second pass (`render/renderer.ts`) with its own camera, its own ~60° FOV, and
 `clearDepth()` between passes so it's never clipped by the world (docs/weapon-feel.md §1).
 Its own light rig (RoomEnvironment for the metallic + a key/fill directional, all layer 1)
 since the world lightmap can't reach it. `tests/acceptance/ACC-005-viewmodel.md` is the
-committed script, **not yet run** (real windowed browser, same blocker). Live headless pass:
+committed script, **PASS** (2026-07-17, re-run in-app 2026-07-19 @ 0e71ae2). Live headless pass:
 the AK reads correctly in the lower-right, drawn on top of the stairs/walls, properly lit,
 survives firing, zero console errors.
 
@@ -264,15 +263,15 @@ and the character rig unblocks the hitbox debts left over from Phases 2–3.
       asserts the rotational symmetry (guards against reintroducing lopsidedness). Colliders +
       navmesh (`pnpm nav:bake`) + Blender glb/lightmap rebaked; bot patrols retargeted to the open
       centre lane; T1 movement traces re-pointed. All 95 tests + typecheck/lint/build green.
-      **Still owed: re-run ACC-007** (human greybox playtest) — timings/sightlines gate before art.
+      ACC-007 (human greybox playtest) re-run PASS post-texture/prop pass (2026-07-19 @ 0e71ae2).
 - [x] **Weapon models.** Replaced the faceted `ak_viewmodel.glb` / `pistol_viewmodel.glb` with
       curved, higher-fidelity models — smooth-shaded cylinder barrels/muzzle/gas tube, beveled
       receiver/stock/grip, a forward-tilted banana mag. Built reproducibly by
       `tools/blender/build_weapons.py` (companion to `build_map.py`) in the **same local frame**
       (dims 0.044×1.03×0.325 m vs. the old 0.05×1.02×0.34) so the hand-tuned layer-1 rest offsets
       in `main.ts` stay valid — viewmodel wiring untouched. Verified silhouettes in Blender ortho;
-      `pnpm build` bundles both clean. **Owed: in-app ACC-005 pass** (real windowed browser, same
-      standing T3 blocker) to confirm no edge distortion / wall clipping at the viewmodel FOV.
+      `pnpm build` bundles both clean. In-app ACC-005 pass PASS (2026-07-19 @ 0e71ae2) — no edge
+      distortion / wall clipping at the viewmodel FOV.
 - [~] **Character models.** Per-bone hitboxes **done**: `src/game/hitbox.ts` now ray-tests the
       shot against static per-bone AABBs (mirrored 1:1 from `build_characters.py`) in the bot's
       local frame, so a high shot off to the side is no longer a headshot the way the height band
