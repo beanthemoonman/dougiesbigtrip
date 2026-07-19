@@ -189,15 +189,25 @@ def build_ak(M):
     return join_as(parts, "ak_viewmodel")
 
 def build_pistol(M):
+    """USP-S: boxy slide, squared nose, front+rear cocking serrations, and the
+    signature threaded suppressor extending well past the muzzle."""
     parts = []
 
-    # --- slide (wider, taller) ---
-    parts.append(box("PST_slide", (0, 0.02, 0.02), (0.036, 0.20, 0.050), M["gunmetal"], bevel=0.007))
+    # --- slide (boxy USP profile) ---
+    parts.append(box("PST_slide", (0, 0.02, 0.02), (0.036, 0.20, 0.050), M["gunmetal"], bevel=0.006))
 
-    # --- slide serrations (rear) ---
+    # --- squared USP slide nose (slight step down at the muzzle end) ---
+    parts.append(box("PST_slide_nose", (0, 0.115, 0.014), (0.034, 0.030, 0.036), M["gunmetal"], bevel=0.004))
+
+    # --- rear cocking serrations ---
     for i in range(5):
-        y_pos = -0.035 + i * 0.012
-        parts.append(box(f"PST_serr_{i}", (0, y_pos, 0.032), (0.030, 0.005, 0.014), M["gunmetal"], bevel=0.002))
+        y_pos = -0.040 + i * 0.011
+        parts.append(box(f"PST_serr_r{i}", (0, y_pos, 0.032), (0.030, 0.004, 0.014), M["gunmetal"], bevel=0.0015))
+
+    # --- front cocking serrations (USP has them near the muzzle) ---
+    for i in range(4):
+        y_pos = 0.058 + i * 0.011
+        parts.append(box(f"PST_serr_f{i}", (0, y_pos, 0.032), (0.030, 0.004, 0.012), M["gunmetal"], bevel=0.0015))
 
     # --- ejection port ---
     parts.append(box("PST_ejport", (0.012, 0.06, 0.030), (0.010, 0.07, 0.010), M["gunmetal"]))
@@ -205,14 +215,22 @@ def build_pistol(M):
     # --- extractor ---
     parts.append(box("PST_extractor", (0.016, 0.08, 0.038), (0.004, 0.020, 0.006), M["steel"], bevel=0.002))
 
-    # --- barrel ---
-    parts.append(cyl("PST_barrel", (0, 0.15, 0.020), 0.012, 0.065, M["steel"], verts=28))
+    # --- threaded barrel collar poking out of the squared nose ---
+    parts.append(cyl("PST_thread", (0, 0.145, 0.014), 0.011, 0.030, M["steel"], verts=24))
 
-    # --- guide rod (visible under barrel from front) ---
-    parts.append(cyl("PST_guide", (0, 0.13, 0.002), 0.005, 0.04, M["steel"], verts=16))
+    # --- suppressor: the USP-S signature. Fat tube extending well past the muzzle ---
+    parts.append(cyl("PST_supp", (0, 0.255, 0.014), 0.021, 0.19, M["gunmetal"], verts=32))
+    parts.append(cyl("PST_supp_cap", (0, 0.352, 0.014), 0.021, 0.012, M["steel"], verts=32, cone=0.9))
+    # subtle knurl rings so the tube doesn't read as a bare cylinder
+    for i in range(3):
+        parts.append(cyl(f"PST_supp_ring{i}", (0, 0.185 + i * 0.055, 0.014),
+                         0.0225, 0.006, M["steel"], verts=32))
 
     # --- frame (wider) ---
     parts.append(box("PST_frame", (0, 0.0, -0.01), (0.030, 0.16, 0.035), M["polymer"], bevel=0.007))
+
+    # --- accessory rail ridge under the dust cover (USP frame detail) ---
+    parts.append(box("PST_rail", (0, 0.085, -0.026), (0.022, 0.055, 0.010), M["polymer"], bevel=0.003))
 
     # --- trigger ---
     parts.append(tilted_box("PST_trigger", (0, 0.02, -0.045), (0.006, 0.005, 0.022), M["steel"], tilt_deg=-15))
@@ -233,6 +251,9 @@ def build_pistol(M):
 
     # --- mainspring housing (back of grip) ---
     parts.append(tilted_box("PST_msh", (0, -0.05, -0.140), (0.010, 0.04, 0.06), M["polymer"], tilt_deg=-22))
+
+    # --- magazine floorplate poking out the bottom of the grip ---
+    parts.append(tilted_box("PST_magbase", (0, -0.038, -0.150), (0.032, 0.052, 0.014), M["steel"], tilt_deg=-22))
 
     # --- slide stop (right side) ---
     parts.append(box("PST_sstop", (0.016, 0.0, -0.018), (0.005, 0.025, 0.008), M["steel"], bevel=0.003))

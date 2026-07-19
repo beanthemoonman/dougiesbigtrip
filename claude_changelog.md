@@ -832,3 +832,17 @@ Character/prop/texture tracks of Phase 4.5 not yet started.
   (AK 0.061×1.048×0.354 m), so `main.ts` viewmodel rest offsets still hold.
 
 skipped: in-app ACC-005 (real windowed browser) still owed with the other T3 scripts.
+
+## 2026-07-19 — Pistol reshaped toward USP-S (CS2 reference)
+
+- Reworked `build_pistol()` in `tools/blender/build_weapons.py` to match the CS2 USP-S:
+  - **Suppressor** (the signature) — fat threaded tube (r=0.021) extending ~0.19 m past the
+    squared muzzle, end cap + three knurl rings so it doesn't read as a bare cylinder.
+  - Threaded barrel collar poking out of a new squared USP slide nose.
+  - **Front** cocking serrations added alongside the existing rear set.
+  - Frame accessory-rail ridge under the dust cover; magazine floorplate at the grip bottom.
+- Frame convention unchanged, so `main.ts` pistol rest offset still holds.
+- Pistol now 370 polys / 468 KB (was 180 / 316 KB). Total weapons ~0.95 MB, trivial vs 16 MB.
+- Verified silhouette in Blender left-ortho: reads unmistakably as a suppressed USP-S.
+
+skipped: in-app ACC-005 (real windowed browser) still owed with the other T3 scripts.
