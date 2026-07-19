@@ -738,3 +738,15 @@ All 93 tests green (movement_map crate-jump trace still lands on the floor).
 skipped: positional bot gunfire (Howler) — CLAUDE.md flags it Phase 4 but it's the "when it earns
 its keep" item; bot shots are silent for now. Add with third-person weapon audio. Player hitboxes
 are the same height-band placeholder as the bots (bots hit the player's torso flat).
+
+## 2026-07-18 — Phase 4: bots patrol the map
+
+- **`src/main.ts`**: the three CT bots now get patrol routes (the brain already
+  supported them; `createBrain` just wasn't given any), so they roam instead of
+  standing at spawn — closes the Phase 4 exit-test gap "path the whole map
+  without getting stuck". Three lanes: West x=-7, Mid x=0 (through the doorway),
+  East x=+7, each a there-and-back down the map (z 14 → -14). Verified every leg
+  against the baked navmesh with a throwaway reachability probe: the obvious
+  x=±10 lanes are dead pockets (paths truncate at z≈11.8 behind the platforms);
+  x=±7 and mid traverse fully. Spawns moved onto the lane heads.
+- typecheck / lint / build / test (95) green.

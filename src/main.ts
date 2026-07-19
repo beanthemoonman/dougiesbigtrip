@@ -119,18 +119,23 @@ async function main(): Promise<void> {
   }
   const botMat = new MeshBasicMaterial({ color: 0xb64d4d }); // unlit — no realtime lights
   const botGeo = new CapsuleGeometry(PLAYER_RADIUS, STANDING_HEIGHT - 2 * PLAYER_RADIUS, 6, 12);
-  // Three CT spawns fanned out around the CT_SPAWN point.
-  const botSpawns = [
-    new Vector3(CT_SPAWN[0] - 2.5, CT_SPAWN[1], CT_SPAWN[2]),
-    new Vector3(CT_SPAWN[0], CT_SPAWN[1], CT_SPAWN[2]),
-    new Vector3(CT_SPAWN[0] + 2.5, CT_SPAWN[1], CT_SPAWN[2]),
+  // Three CT spawns fanned out around the CT_SPAWN point, each with a there-and-
+  // back patrol down one of the map's three lanes (West x=-10 / Mid x=0 through
+  // the doorway / East x=+10). findPath snaps each waypoint to the navmesh and
+  // routes around cover, so bots roam instead of standing at spawn. y is the
+  // walkable-surface height the nav query snaps to.
+  const F = CT_SPAWN[1];
+  const botSpawns: { s: Vector3; patrol: Vector3[] }[] = [
+    { s: new Vector3(-7, F, 14), patrol: [new Vector3(-7, F, -2), new Vector3(-7, F, -14), new Vector3(-7, F, 14)] },
+    { s: new Vector3(0, F, CT_SPAWN[2]), patrol: [new Vector3(0, F, 12), new Vector3(0, F, -2), new Vector3(0, F, -14)] },
+    { s: new Vector3(7, F, 14), patrol: [new Vector3(7, F, -2), new Vector3(7, F, -14), new Vector3(7, F, 14)] },
   ];
-  const enemies: Enemy[] = botSpawns.map((s) => {
+  const enemies: Enemy[] = botSpawns.map(({ s, patrol }) => {
     const bot = createBot(world, s);
     const body = new Mesh(botGeo, botMat);
     renderCtx.scene.add(body);
     return {
-      brain: createBrain(bot, DIFFICULTIES.normal),
+      brain: createBrain(bot, DIFFICULTIES.normal, patrol),
       body,
       spawn: s,
       alive: true,
