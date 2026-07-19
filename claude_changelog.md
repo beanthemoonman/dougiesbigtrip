@@ -814,3 +814,21 @@ Weapon/character/prop/texture art tracks (rest of Phase 4.5) not started.
 skipped: in-app ACC-005 (viewmodel doesn't clip walls / distort at edges) — real windowed
 browser, same standing T3 blocker as ACC-003/004/005. Frame-matched + build-verified for now.
 Character/prop/texture tracks of Phase 4.5 not yet started.
+
+## 2026-07-19 — Phase 4.5: weapon detailing pass
+
+- Built on the enriched `build_weapons.py` (charging handle, ejection port, gas block,
+  stepped front/rear sights, slide serrations, extractor, decocker, etc.). Fixed two
+  attachment bugs the added detail exposed:
+  - **AK banana mag** was detached and curving the wrong way (a shallow horizontal arc floating
+    below the gun). Rewrote `curved_mag()` to walk **down-and-forward** from a mag-well attach
+    point: each of 12 segments tilts a little more toward the muzzle, so the stack sweeps into
+    the AK curve and the top seats against the receiver underside.
+  - **Pistol trigger guard** floated as a detached island under the frame. Reworked it into
+    three connected boxes (top overlaps the frame, bow loops under the trigger, rear ties back
+    toward the grip).
+- Verified both silhouettes in Blender left-ortho; `pnpm build` bundles clean
+  (AK 480 KB, pistol 316 KB — ~0.8 MB total, trivial vs the 16 MB budget). Frame unchanged
+  (AK 0.061×1.048×0.354 m), so `main.ts` viewmodel rest offsets still hold.
+
+skipped: in-app ACC-005 (real windowed browser) still owed with the other T3 scripts.
