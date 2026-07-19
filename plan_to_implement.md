@@ -321,7 +321,12 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
 - [ ] Slight bloom, film grain off, sharp shadows only from the bake.
 - [ ] Loading screen with real progress. Preload weapon/audio before spawn.
 - [ ] `pnpm assets:opt`: Meshopt + KTX2/Basis. Verify the 16 MB budget.
-- [ ] Settings: sensitivity, FOV (world), volume. Persist to a config object.
+- [x] Settings: sensitivity, FOV (world), volume. Persist to a config object.
+      (`src/core/settings.ts` — a `Settings` config object is the source of truth, no
+      localStorage per CLAUDE.md. A DOM panel of native range sliders mutates it and pushes
+      each value live: `input.state.sensitivity`, `renderCtx.setWorldFov`, audio `setMasterVolume`
+      (new master gain node all voices route through). Panel shows out of pointer lock, hides in
+      play. In-browser confirm owed, same standing blocker as the ACC runs.)
 - [ ] Deploy static to Pages/Netlify for the single-player build. (The real multiplayer target
       is the containerized client+server deploy in Phase 8; this is the interim static host.)
       Verify on a mid-range laptop, not just your desktop.

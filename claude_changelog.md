@@ -1118,3 +1118,31 @@ First slice of Phase 5 (Polish). Combat had no visual/audio feedback on a shot; 
 - `muzzleFlash` gained an optional `scale` (size + peak opacity). The suppressed USP-S pistol now
   fires at 0.3× — much smaller and dimmer than the rifle. main passes it per active weapon.
 - typecheck/lint/vfx tests green.
+
+## 2026-07-19 — Phase 5: Settings (sensitivity / FOV / volume)
+
+Next Phase 5 polish item. Three user-facing knobs, live-applied, config object as the
+source of truth (no localStorage — CLAUDE.md: may be embedded).
+
+- **`src/core/settings.ts`** (new) — `Settings` interface + `DEFAULT_SETTINGS` (sensitivity
+  0.0022 rad/px, worldFovDeg 90, volume 1) + `createSettingsPanel(settings, onChange)`: a DOM
+  overlay with one native `<input type=range>` per field. The sliders clamp to their ranges for
+  free (platform feature, no hand-rolled validation); each move mutates `settings` in place and
+  calls `onChange` so the game applies it live. `show()`/`hide()`.
+- **`src/render/renderer.ts`** — world FOV was a hard `WORLD_FOV_DEGREES` constant; now a
+  per-context `let` seeded from `DEFAULT_WORLD_FOV_DEGREES`, with a `setWorldFov(deg)` on
+  `RenderContext` that recomputes the vertical FOV + projection. Viewmodel FOV stays a fixed
+  separate taste dial (docs/weapon-feel.md §1) — the slider only touches the world camera.
+- **`src/core/audio.ts`** — added a master `GainNode` every voice routes through (swapped all
+  `.connect(c.destination)` → `.connect(out())`), plus `setMasterVolume(v)`. A `pendingVolume`
+  remembers a volume set before the first sound lazily creates the context.
+- **`src/main.ts`** — a `settings` object (copy of defaults), `applySettings()` pushes all three
+  into input/renderer/audio, and the panel shows out of pointer lock (the menu state) / hides in
+  play, driven off `pointerlockchange`. Shown on load.
+- **`src/core/settings.test.ts`** — one T0: defaults stay in a sane range. The panel is DOM glue
+  over native clamping sliders — no jsdom dependency pulled in just to test that (ponytail: the
+  ladder says don't add a browser-DOM dep for one test with no real logic branch).
+- **Gate**: typecheck, lint, **122 tests** (+1), production build all green.
+- **Owed** (standing browser blocker): in-app confirm the panel shows/hides and the three sliders
+  visibly change look sensitivity / FOV / loudness. Not an ACC script — this is a UI knob, not a
+  feel-tuned surface; the developer's next browser pass can eyeball it.

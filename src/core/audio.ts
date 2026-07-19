@@ -18,10 +18,19 @@ import { makeRng } from './rng';
 
 let ctx: AudioContext | null = null;
 let noise: AudioBuffer | null = null;
+// Master gain every voice routes through, so the Settings volume slider is one
+// knob instead of a scale factor threaded through every envelope. Set lazily
+// with the context; `pendingVolume` remembers a setMasterVolume() called before
+// the first sound created it.
+let master: GainNode | null = null;
+let pendingVolume = 1;
 
 function audio(): AudioContext {
   if (!ctx) {
     ctx = new AudioContext();
+    master = ctx.createGain();
+    master.gain.value = pendingVolume;
+    master.connect(ctx.destination);
     // 0.5 s of white noise, generated once from the seeded rng so Math.random
     // stays out of src/ (determinism rule). The buffer is reused for every shot.
     const rng = makeRng(0x5eed);
@@ -30,6 +39,18 @@ function audio(): AudioContext {
     for (let i = 0; i < data.length; i++) data[i] = rng.next() * 2 - 1;
   }
   return ctx;
+}
+
+/** Where every voice connects instead of ctx.destination — the master volume node. */
+function out(): AudioNode {
+  audio();
+  return master as GainNode;
+}
+
+/** Master volume, 0..1 (the Settings slider). Applies before the context exists. */
+export function setMasterVolume(v: number): void {
+  pendingVolume = v;
+  if (master) master.gain.value = v;
 }
 
 /** Must be called from a user gesture (the pointer-lock click) or the context
@@ -48,7 +69,7 @@ function burst(dur: number, cutoff: number, gain: number, when: number): void {
   const g = c.createGain();
   g.gain.setValueAtTime(gain, when);
   g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-  src.connect(lp).connect(g).connect(c.destination);
+  src.connect(lp).connect(g).connect(out());
   src.start(when, 0, dur);
 }
 
@@ -66,7 +87,7 @@ export function playGunshot(weapon: WeaponId): void {
   osc.frequency.exponentialRampToValueAtTime(60, t + 0.08);
   g.gain.setValueAtTime(rifle ? 0.6 : 0.45, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
-  osc.connect(g).connect(c.destination);
+  osc.connect(g).connect(out());
   osc.start(t);
   osc.stop(t + 0.14);
 }
@@ -98,7 +119,7 @@ export function playImpact(surface: 'concrete' | 'wood' | 'metal' | 'flesh'): vo
       osc.frequency.exponentialRampToValueAtTime(90, t + 0.06);
       g.gain.setValueAtTime(0.3, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
-      osc.connect(g).connect(c.destination);
+      osc.connect(g).connect(out());
       osc.start(t);
       osc.stop(t + 0.09);
       break;

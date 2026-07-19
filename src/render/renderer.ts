@@ -26,13 +26,16 @@ export interface RenderContext {
   viewmodelScene: Scene;
   stats: Stats;
   render: () => void;
+  /** Set the world (not viewmodel) horizontal FOV in degrees — the Settings
+   * FOV slider. Viewmodel FOV is a separate fixed taste dial. */
+  setWorldFov: (degrees: number) => void;
 }
 
 // CS default, non-negotiable for feel — see docs/art-direction.md. Three's
 // PerspectiveCamera takes *vertical* FOV, so this must be converted from our
-// fixed horizontal FOV and recomputed on resize, or ultrawide users see less,
-// not more.
-const WORLD_FOV_DEGREES = 90;
+// horizontal FOV and recomputed on resize, or ultrawide users see less, not
+// more. Now the Settings FOV slider's default rather than a hard constant.
+const DEFAULT_WORLD_FOV_DEGREES = 90;
 
 // Viewmodel is a separate taste dial (docs/weapon-feel.md §1): 54° large/forward
 // (CS 1.6), 68° small/back (CS:GO). 60° is the doc's default. Horizontal.
@@ -59,7 +62,8 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
 
   const scene = new Scene();
   const aspect = window.innerWidth / window.innerHeight;
-  const camera = new PerspectiveCamera(verticalFovFromHorizontal(WORLD_FOV_DEGREES, aspect), aspect, 0.1, 500);
+  let worldFovDegrees = DEFAULT_WORLD_FOV_DEGREES;
+  const camera = new PerspectiveCamera(verticalFovFromHorizontal(worldFovDegrees, aspect), aspect, 0.1, 500);
 
   // --- Viewmodel pass ---
   const viewmodelScene = new Scene();
@@ -99,7 +103,7 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
     const height = window.innerHeight;
     const asp = width / height;
     camera.aspect = asp;
-    camera.fov = verticalFovFromHorizontal(WORLD_FOV_DEGREES, asp);
+    camera.fov = verticalFovFromHorizontal(worldFovDegrees, asp);
     camera.updateProjectionMatrix();
     viewCamera.aspect = asp;
     viewCamera.fov = verticalFovFromHorizontal(VIEWMODEL_FOV_DEGREES, asp);
@@ -119,6 +123,11 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
       renderer.render(scene, camera);
       renderer.clearDepth(); // <- the gun is drawn on top of the world, never clipped by it
       renderer.render(viewmodelScene, viewCamera);
+    },
+    setWorldFov(degrees: number): void {
+      worldFovDegrees = degrees;
+      camera.fov = verticalFovFromHorizontal(worldFovDegrees, camera.aspect);
+      camera.updateProjectionMatrix();
     },
   };
 }

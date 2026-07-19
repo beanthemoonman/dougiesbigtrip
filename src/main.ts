@@ -16,8 +16,9 @@ import { createBot } from './ai/bot';
 import { createBrain, DIFFICULTIES, hearSound, killBot, tickBrain, type BotBrain } from './ai/brain';
 import { loadNav } from './ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './ai/anim';
-import { playFootstep, playGunshot, playImpact, playReload, resumeAudio } from './core/audio';
+import { playFootstep, playGunshot, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
+import { createSettingsPanel, DEFAULT_SETTINGS } from './core/settings';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
 import { type Breakable, damageProp } from './game/breakables';
@@ -203,6 +204,23 @@ async function main(): Promise<void> {
   // AudioContext starts suspended until a user gesture — the same click that
   // engages pointer lock unlocks audio (core/audio.ts).
   canvas.addEventListener('click', resumeAudio);
+
+  // Settings (sensitivity / world FOV / volume). The config object is the source
+  // of truth; the panel mutates it and pushes each value live. Shown while out of
+  // pointer lock (the menu state), hidden during play.
+  const settings = { ...DEFAULT_SETTINGS };
+  function applySettings(): void {
+    input.state.sensitivity = settings.sensitivity;
+    renderCtx.setWorldFov(settings.worldFovDeg);
+    setMasterVolume(settings.volume);
+  }
+  const settingsPanel = createSettingsPanel(settings, applySettings);
+  applySettings();
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement === canvas) settingsPanel.hide();
+    else settingsPanel.show();
+  });
+  settingsPanel.show();
 
   await initPhysics();
   const world = createWorld();
