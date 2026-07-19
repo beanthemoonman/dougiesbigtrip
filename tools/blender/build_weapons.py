@@ -193,8 +193,8 @@ def build_pistol(M):
     signature threaded suppressor extending well past the muzzle."""
     parts = []
 
-    # --- slide (boxy USP profile) ---
-    parts.append(box("PST_slide", (0, 0.02, 0.02), (0.036, 0.20, 0.050), M["gunmetal"], bevel=0.006))
+    # --- slide (boxy USP profile — slightly shorter in height so it isn't slab-heavy) ---
+    parts.append(box("PST_slide", (0, 0.02, 0.018), (0.036, 0.20, 0.044), M["gunmetal"], bevel=0.006))
 
     # --- squared USP slide nose (slight step down at the muzzle end) ---
     parts.append(box("PST_slide_nose", (0, 0.115, 0.014), (0.034, 0.030, 0.036), M["gunmetal"], bevel=0.004))
@@ -229,8 +229,14 @@ def build_pistol(M):
     # --- frame (wider) ---
     parts.append(box("PST_frame", (0, 0.0, -0.01), (0.030, 0.16, 0.035), M["polymer"], bevel=0.007))
 
+    # --- dust cover: frame extends forward under the front of the slide (USP squared cover) ---
+    parts.append(box("PST_dustcover", (0, 0.105, -0.010), (0.028, 0.060, 0.026), M["polymer"], bevel=0.005))
+
     # --- accessory rail ridge under the dust cover (USP frame detail) ---
-    parts.append(box("PST_rail", (0, 0.085, -0.026), (0.022, 0.055, 0.010), M["polymer"], bevel=0.003))
+    parts.append(box("PST_rail", (0, 0.100, -0.028), (0.022, 0.070, 0.010), M["polymer"], bevel=0.003))
+
+    # --- beavertail tang: fills the web behind the slide, shields the hand (USP signature) ---
+    parts.append(tilted_box("PST_beavertail", (0, -0.082, -0.004), (0.026, 0.050, 0.014), M["polymer"], tilt_deg=-32))
 
     # --- trigger ---
     parts.append(tilted_box("PST_trigger", (0, 0.02, -0.045), (0.006, 0.005, 0.022), M["steel"], tilt_deg=-15))

@@ -846,3 +846,13 @@ skipped: in-app ACC-005 (real windowed browser) still owed with the other T3 scr
 - Verified silhouette in Blender left-ortho: reads unmistakably as a suppressed USP-S.
 
 skipped: in-app ACC-005 (real windowed browser) still owed with the other T3 scripts.
+
+## 2026-07-19 — Pistol body refinement (USP-S)
+
+- Walked back the pistol *body* to match the USP-S frame/slide:
+  - Slide height trimmed slightly so it isn't slab-heavy.
+  - **Dust cover** — frame now extends forward under the front of the slide (was stopping short),
+    with the accessory rail lengthened to match.
+  - **Beavertail tang** added at the rear, filling the empty web behind the slide (USP signature).
+- Pistol now 382 polys / 495 KB. Frame convention unchanged, `main.ts` rest offset still holds.
+- Verified in Blender left-ortho: frame flows continuously; reads as a USP-S body.
