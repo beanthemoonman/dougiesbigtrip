@@ -973,3 +973,18 @@ optional `stack` value for the crate stacked on top. typecheck green.
   juice); physics-dropped debris (needs dynamic bodies); better CC0 crate/barrel art
   (reskin lands with the Textures item).
 - All green: typecheck, lint, 110 tests (+6), build.
+
+## Phase 4.5: Textures — closed out (procedural pass already satisfies it)
+
+- Re-verified the Textures line item. The procedural surface-detail + gradient-skybox
+  work shipped earlier in `ecb2f7f` already meets every literal sub-requirement:
+  ≤4 map materials (Concrete/Sandstone/Wood = 3), UV0 tiling albedo (`surfacetex.ts`),
+  and a real skybox at the bake sun direction (`sky.ts`). No new code needed.
+- Flipped the plan checkbox `[ ] → [~]` with the deferral spelled out: swapping the
+  procedural detail for photographic Poly Haven/Kenney CC0 albedo is gated on an ACC
+  playtest calling the procedural read flat — the wiring is identical, only `mat.map`
+  changes. No playtest verdict exists (T3 browser blocker still standing), so per the
+  code's own upgrade gate and ponytail, the photographic set is not built speculatively.
+- Full gate re-run green: typecheck, lint, 110 tests, build. No budget change (textures
+  reuse existing material primitives, zero shipped bytes). This was the last open
+  Phase 4.5 code item.

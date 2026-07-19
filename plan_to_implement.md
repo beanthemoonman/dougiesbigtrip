@@ -289,8 +289,14 @@ and the character rig unblocks the hitbox debts left over from Phases 2–3.
       damage (Phase-5 juice, needs VFX); physics-dropped debris (needs dynamic bodies). Solid
       scenery (pallets/cones/jerry-cans) unchanged. **Owed:** better CC0 crate/barrel models are
       still the greybox placeholders — reskin lands with the Textures item below.
-- [ ] **Textures.** Land the deferred Phase 3 texturing: Poly Haven / Kenney CC0 sets, ≤4 map
-      materials total, UV0 tiling albedo, and a real skybox matching the lightmap's sun direction.
+- [~] **Textures.** Every sub-requirement met, done in-repo rather than downloaded (`ecb2f7f`):
+      `src/render/surfacetex.ts` generates seamless value-noise tiling detail maps for the 3 map
+      materials (M_Concrete/M_Sandstone/M_Wood — under the ≤4 cap) on UV0, and `src/render/sky.ts`
+      is an equirect gradient skybox whose sun sits at the bake direction (0.44,0.64,0.63, ~40°).
+      Zero shipped bytes, zero licensing, no new draw calls. **Deferred:** swapping the procedural
+      detail for photographic Poly Haven / Kenney CC0 albedo — gated on the ACC playtest calling the
+      procedural read flat (the wiring stays identical; only `mat.map` changes). No playtest verdict
+      yet, so not built.
 - [ ] Every new asset gets a `CREDITS.md` row **at add-time** and a licence. No exceptions.
 - [ ] Stay inside budget: < 400 draw calls, < 60 MB total. Re-verify on integrated graphics.
 
