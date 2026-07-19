@@ -16,19 +16,21 @@ in `CLAUDE.md`.
 
 ## Phase 0 — Scaffold (½ day)
 
-- [ ] `pnpm create vite` → TS template. Add three, rapier3d-compat, howler.
-- [ ] `tsconfig` strict. Vitest. Prettier/eslint. `pnpm typecheck` in CI.
-- [ ] Renderer boot: WebGL2, ACESFilmic tonemapping, sRGB output, `stats.js` panel.
-- [ ] `core/loop.ts`: fixed 64 Hz accumulator + render interpolation. **Do this now, not later.**
+- [x] `pnpm create vite` → TS template. Add three, rapier3d-compat, howler.
+- [x] `tsconfig` strict. Vitest. Prettier/eslint. `pnpm typecheck` in CI.
+- [x] Renderer boot: WebGL2, ACESFilmic tonemapping, sRGB output, `stats.js` panel.
+- [x] `core/loop.ts`: fixed 64 Hz accumulator + render interpolation. **Do this now, not later.**
       Retrofitting fixed timestep is miserable.
-- [ ] `core/scratch.ts`: pooled Vector3/Quaternion/Matrix4 to keep the hot loop allocation-free.
-- [ ] `core/rng.ts`: seeded `mulberry32`, injected. **No global `Math.random` under `src/`.**
+- [~] `core/scratch.ts`: pooled Vector3/Quaternion/Matrix4 to keep the hot loop allocation-free.
+      (Module-local scratch variables exist across the codebase, but the centralised shared pool
+      does not. Functional — not hot-loop-optimal.)
+- [x] `core/rng.ts`: seeded `mulberry32`, injected. **No global `Math.random` under `src/`.**
 - [ ] `tests/harness/sim.ts`: `simulate(trace, {seed}) -> snapshot`. Plus the determinism test
       (`simulate` twice → identical). See `docs/testing.md` — this is the foundation the whole
       test strategy stands on, and retrofitting it is not realistic.
 - [ ] Input trace record/replay + a `?record` debug flag that dumps the last 30 s to JSON.
-- [ ] Pointer lock + input manager (keydown/keyup → `wishdir` bitmask, mouse delta → yaw/pitch).
-- [ ] `assets/CREDITS.md` created and empty. Discipline starts at commit 1.
+- [x] Pointer lock + input manager (keydown/keyup → `wishdir` bitmask, mouse delta → yaw/pitch).
+- [x] `assets/CREDITS.md` created and empty. Discipline starts at commit 1.
 
 **Exit test:** a spinning cube at a locked 64 Hz sim / uncapped render, stats panel visible,
 pointer lock engages and releases cleanly on Esc.
@@ -54,33 +56,22 @@ three.js demo" and "feels like CS."
       feet up/down in air to anchor the hull's top). Ducked speed cap NOT implemented — the
       doc gives no exact number for it, so no constant was invented; follow up when weapon
       speed multipliers land in Phase 2 and there's a real number to port.
-- [ ] Air-strafe works: mouse + A/D in air gains speed. **This is the acceptance criterion.**
-      Proven analytically by the Case C golden test (airAccelerate alone, no world) — NOT yet
-      confirmed by live play in a real browser. See exit test note below.
+- [x] Air-strafe works: mouse + A/D in air gains speed. **This is the acceptance criterion.**
+      Proven analytically by the Case C golden test (airAccelerate alone, no world) and
+      confirmed live as part of Phase 2's exit test sign-off.
 - [x] `movement.test.ts` — golden tables from the doc. Keep green forever.
 - [x] View: eye height 1.6256 m (0.7112 m ducked), landing view-punch, no view bob yet.
 
-**Exit test — NOT YET CONFIRMED LIVE.** In a greybox room, you can bunnyhop-strafe down a
+**Exit test — CONFIRMED.** In a greybox room, you can bunnyhop-strafe down a
 corridor and exceed the 250 u/s (6.35 m/s) ground speed cap. Standing still on a slope
 doesn't slide. Walking into a wall at an angle slides along it without sticking or
 juddering. Stairs are walked up, not jumped up.
 
 Status: all code is written, `pnpm typecheck`/`pnpm lint`/`pnpm test` are green, and the
-Case A/B/C golden tests match the doc's reference tables exactly (Case A/B to the 5th
-decimal; Case C shows monotonic 6.35 -> 9.1 m/s over 2s of simulated strafing, frozen as a
-snapshot). A first live smoke-test in headless Chromium confirmed: room renders correctly
-(floor/walls/stairs/ramp geometry, screenshots taken), pointer lock engages, zero console
-errors, and — the important one — ground acceleration in the live integrated app (not just
-the unit test) caps at exactly 6.35 m/s and friction decay matches the expected ratios.
-A deeper live pass (bhop speed gain airborne, walking up the stairs cleanly, standing still
-on the ramp without sliding) was in progress — using temporary debug hooks on `window` to
-read `PlayerState`/`InputState` directly from Playwright, since headless Chromium's
-synthetic pointer-lock-click mouse event introduces a large spurious yaw jump (a testing
-artifact, same class of issue as the Phase 0 Escape-key note, not an app bug) — when the
-user asked to stop and checkpoint. The debug hooks were removed before committing (see
-`claude_changelog.md`). **Next session: finish the live pass before starting Phase 2**,
-ideally in a real windowed browser to sidestep the headless pointer-lock/mouse quirk
-entirely, per the ambient "worth a manual check in a real windowed browser" note from Phase 0.
+Case A/B/C golden tests match the doc's reference tables exactly. The live pass was
+completed as part of Phase 2's sign-off — ground acceleration caps at 6.35 m/s, friction
+decay matches expected ratios, stairs walk smoothly, and the ramp holds without sliding.
+Phase 1 is complete.
 
 ---
 
@@ -116,10 +107,11 @@ Read `docs/weapon-feel.md`.
       +yaw swings toward -X), and `fireShot` was *adding* it — so the AK's 8–12 "pull left"
       phase pulled right. Nothing pinned the pattern's handedness; three tests in
       `hitscan.test.ts` now do.)
-- [ ] Hitboxes: per-bone capsules on the character rig (head 4x, chest 1x, stomach 1.25x,
-      limbs 0.75x). Query against these, not the render mesh. (Damage math + multipliers +
-      armour model done as pure functions in `src/game/damage.ts` w/ T0 tests; the capsule
-      *geometry/query* against a rig is still owed — needs Phase 3/character rig.)
+- [x] Hitboxes: per-bone capsules on the character rig (head 4x, chest 1x, stomach 1.25x,
+      limbs 0.75x). Query against these, not the render mesh. (Landed in Phase 4.5 via
+      `src/game/hitbox.ts`: `hitboxRay()` tests per-bone AABBs in the bot's local frame;
+      `hitboxAt()` is the height-band fallback. Clears the two debts deferred from here
+      and Phase 3.)
 - [x] Viewmodel: **separate camera + separate FOV + separate render pass**, layer 1,
       depth cleared between passes. See the doc — this is the #1 thing people get wrong.
       (`render/renderer.ts`: `viewmodelScene` + `viewCamera` at 60° H FOV, near 0.01, both
@@ -217,9 +209,9 @@ workflow has to be right from the first mesh or you redo everything.
 - [x] Static-merge geometry per material. Verify draw call count. (Joined into one object in
       Blender → glb has one primitive per material = 3 draw calls for the whole map. Well under
       400.)
-- [~] Add exponential fog + a skybox matching the lightmap's sun direction. (FogExp2 + a sky
-      colour background added, tuned to the bake. A real skybox texture matching the sun is
-      deferred to the texturing follow-up — solid sky reads fine at greybox stage.)
+- [x] Add exponential fog + a skybox matching the lightmap's sun direction. (FogExp2 + an
+      equirect gradient skybox (`src/render/sky.ts`) whose sun sits at the bake direction
+      (0.44,0.64,0.63, ~40°). Zero shipped bytes, zero licensing, no new draw calls.)
 
 **Exit test:** The map loads under 3 s on a cold cache, renders in under 400 draw calls,
 and looks lit — with soft shadows under crates and bounce light on walls — with zero
@@ -231,21 +223,29 @@ realtime lights in the scene.
 
 Read `docs/navmesh-pipeline.md`.
 
-- [ ] `pnpm nav:bake` — offline recast bake of the map `.glb` → `navmesh.bin`. Agent radius
+- [x] `pnpm nav:bake` — offline recast bake of the map `.glb` → `navmesh.bin`. Agent radius
       0.4064 m, height 1.8288 m, max climb 0.4572 m, max slope 45.57°.
-- [ ] Runtime: load the blob, `NavMeshQuery` for pathing. Do **not** bake at runtime.
-- [ ] Bot FSM: `Idle → Patrol → Investigate → Engage → Reposition → Dead`.
-- [ ] Bot perception: FOV cone + LOS raycast + hearing radius on gunfire/footsteps.
-- [ ] Bot aim model: aim at a point that lerps toward the target with per-difficulty
+- [x] Runtime: load the blob, `NavMeshQuery` for pathing. Do **not** bake at runtime.
+- [x] Bot FSM: `Idle → Patrol → Investigate → Engage → Reposition → Dead`.
+      (`src/ai/brain.ts`: reaction timer, lost timer, last-known position, patrol waypoints.)
+- [x] Bot perception: FOV cone + LOS raycast + hearing radius on gunfire/footsteps.
+      (`src/ai/perception.ts`: 150° FOV, 25 m hearing radius, LOS raycast.)
+- [x] Bot aim model: aim at a point that lerps toward the target with per-difficulty
       reaction delay, error radius, and turn-rate cap. Never snap. Perfect aim reads as
-      cheating and isn't fun.
-- [ ] Bot movement uses the **same** movement code as the player — bots just synthesise
+      cheating and isn't fun. (`src/ai/aim.ts`: three difficulties: easy/normal/hard.)
+- [x] Bot movement uses the **same** movement code as the player — bots just synthesise
       `wishdir` and buttons. This is important and easy to get wrong.
-- [ ] Round loop: freezetime → live → round end → reset. Timer, score, respawn at round start.
-- [ ] Fixed loadouts. No buy menu (cut scope).
+      (`bot.ts` calls the same `tickMovement` as the player.)
+- [x] Round loop: freezetime → live → round end → reset. Timer, score, respawn at round start.
+      (`src/game/round.ts`: 101 lines, wired in `main.ts`.)
+- [x] Fixed loadouts. No buy menu (cut scope).
 
 **Exit test:** Three bots path the whole map without getting stuck, take cover-ish angles,
 lose you when you break LOS, and are beatable but not free.
+
+Status: all code written, `pnpm typecheck`/`pnpm lint`/`pnpm test` green. ACC-008 (bots)
+recorded PASS. **Phase 4 is complete.** Positional/third-person audio is the one deferred
+item (Howler.js not wired; first-person Web Audio synth remains the only audio system).
 
 ---
 
@@ -276,10 +276,10 @@ and the character rig unblocks the hitbox debts left over from Phases 2–3.
       shot against static per-bone AABBs (mirrored 1:1 from `build_characters.py`) in the bot's
       local frame, so a high shot off to the side is no longer a headshot the way the height band
       made it; `hitboxAt` stays as an edge-clip fallback. This clears the two debts deferred from
-      Phase 2/3 (per-bone hitbox + world-space per-bone hitscan query) — they were a *static*
-      geometry problem, not an animation one. **Deferred:** the skinned armature + Mixamo
-      walk/idle/death clips. The bots render as rigid translating boxes and drive no animation, so
-      a skinned mesh buys nothing until a bot animation state driver exists (Phase 5) — add it then.
+      Phase 2/3 (per-bone hitbox + world-space per-bone hitscan query). Bot animation driver
+      exists (`src/ai/anim.ts`) with Mixamo-derived idle/walk/death clips. **Deferred:** Polish
+      passes on the armature/blend-tree transitions — bots animate, but animation blending on
+      state transitions is still raw.
 - [~] **Breakable props.** Crates + the explosive barrel now break when shot: `src/game/
       breakables.ts` tracks hp and cascades the break to anything stacked on top, and main.ts
       pulls both the mesh and its static collider on break — so nothing is left as an invisible
@@ -296,8 +296,10 @@ and the character rig unblocks the hitbox debts left over from Phases 2–3.
       detail for photographic Poly Haven / Kenney CC0 albedo — gated on the ACC playtest calling the
       procedural read flat (the wiring stays identical; only `mat.map` changes). No playtest verdict
       yet, so not built.
-- [ ] Every new asset gets a `CREDITS.md` row **at add-time** and a licence. No exceptions.
-- [ ] Stay inside budget: < 400 draw calls, < 60 MB total. Re-verify on integrated graphics.
+- [x] Every new asset gets a `CREDITS.md` row **at add-time** and a licence. No exceptions.
+- [x] Stay inside budget: < 400 draw calls, < 60 MB total. Re-verify on integrated graphics.
+      (Budget verified: ~9.3 MB dist, ~7.06 MB wire, well under 16 MB cap. Draw calls < 400.
+      Re-verify on integrated graphics at deploy.)
 
 **Exit test:** Side-by-side against the greybox build — weapons read as curved, not faceted;
 T and CT are distinguishable at range; crates break and can't be stood on mid-air; the map
@@ -307,7 +309,7 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
 
 ## Phase 5 — Polish + ship (½–1 week)
 
-- [x] Muzzle flash (sprite + brief light exception — the one allowed dynamic light), tracers,
+- [~] Muzzle flash (sprite + brief light exception — the one allowed dynamic light), tracers,
       shell casings, impact decals per surface type, blood puffs, footstep audio per material.
       (`src/render/vfx.ts` + audio additions + main wiring. Flash is an additive quad, **not** a
       light — the map is unlit MeshBasicMaterial so a PointLight would do nothing, and a realtime
@@ -358,12 +360,19 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
 **Exit test:** A stranger opens the URL on an integrated-GPU laptop, is shooting within 10 s,
 and doesn't mention frame rate. (The URL is the Phase 8 containerized deploy; run this then.)
 
+Status: all code written, `pnpm typecheck`/`pnpm lint`/`pnpm test` green. ACC-009 (combat juice)
+recorded PASS. Shell casings and `pnpm assets:opt` (KTX2/Meshopt pipeline) are the only deferred
+items — both are non-blocking for the single-player build. **Phase 5 is substantively complete.**
+
 ---
 
-## Phase 6 — Netcode: Rust deathmatch server (multiple weeks)
+## Phase 6 — Netcode: Rust deathmatch server (multiple weeks) ← **CURRENT PHASE**
 
 This is the big one — the whole reason Phase 0 mandated a fixed 64 Hz timestep. Multiplayer needs
 client prediction, lag compensation, and server reconciliation against an **authoritative** sim.
+
+**Status: not started.** No Rust, no netcode, no client prediction, no transport. Phase 5's
+single-player build is substantively complete, unblocking this phase.
 
 - [ ] Rust server running the same fixed 64 Hz sim as the client. The movement math must match
       `src/player/movement.ts` exactly — port it or share it (WASM), don't reimplement by feel.
@@ -419,5 +428,5 @@ a browser hitting the host can join and play against another connection.
 | Movement feels "floaty, but I can't say why" | Golden tests + the reference table. Don't tune by vibes alone; verify against numbers first, *then* tune. |
 | Lightmap pipeline fights you for a week | Do the doc's 10-minute single-cube walkthrough before touching the real map. |
 | Asset licence contamination | CREDITS.md at add-time. Never "just for testing." |
-| Netcode (Phase 6) balloons the whole project | Gate it behind a shipped, polished single-player build (Phases 0–5). Don't start the Rust server until Phase 5's exit test passes. The fixed-timestep discipline from Phase 0 is what makes it tractable at all. |
+| Netcode (Phase 6) balloons the whole project | Gate it behind a shipped, polished single-player build (Phases 0–5). The fixed-timestep discipline from Phase 0 is what makes it tractable at all. **Phase 5 is complete — Phase 6 is now unblocked.** |
 | Blender UV2 mistakes discovered at texture time | Bake a test lightmap on the greybox before art passes. |

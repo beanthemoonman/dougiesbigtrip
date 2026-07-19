@@ -1175,3 +1175,33 @@ progress bar tracks the real stages.
 - **Gate**: typecheck, lint, **124 tests** (unchanged), production build all green.
 - **Owed** (standing browser blocker): eyeball that the bar advances and fades on load.
   A UI knob, not a feel-tuned surface — no ACC script.
+
+### 2026-07-19 — Plan audit and update
+
+- **Audited the entire codebase** against `plan_to_implement.md` checklist to determine what's
+  actually implemented vs what was only planned.
+- **Phase 0:** checked off 7 of 10 items. Two remain unstarted (`tests/harness/sim.ts`, input trace
+  record/replay). One half-checked (`core/scratch.ts` — module-local scratch vars exist but no
+  centralised shared pool).
+- **Phase 1:** marked air-strafe as confirmed, updated exit test from "NOT YET CONFIRMED LIVE" to
+  "CONFIRMED" (live pass completed during Phase 2 sign-off). Condensed the stale status paragraph.
+- **Phase 2:** marked hitboxes as `[x]` (landed in Phase 4.5 via `src/game/hitbox.ts`). Audio
+  remains `[~]` (first-person done, positional still deferred).
+- **Phase 3:** marked skybox/fog as `[x]` (procedural skybox exists in `src/render/sky.ts`).
+  Modular kit and CC0 textures remain `[~]`.
+- **Phase 4:** checked all 8 items `[x]` — bots, nav, FSM, perception, aim, movement, round loop,
+  loadouts all fully implemented. Added status paragraph confirming ACC-008 PASS.
+- **Phase 4.5:** updated character models note (bot animation driver now exists via `src/ai/anim.ts`
+  with Mixamo clips). Marked CREDITS.md and budget items as `[x]`.
+- **Phase 5:** muzzle flash bullet marked `[~]` (shell casings deferred). Added conclusion status
+  paragraph confirming ACC-009 PASS and Phase 5 substantively complete.
+- **Phase 6:** added "CURRENT PHASE" banner and status note ("not started, unblocked by Phase 5").
+  Updated risk register entry to reflect Phase 5 completion.
+- **Phases 7–8:** unchanged — not started.
+- **Key remaining debts** surfaced:
+  - `tests/harness/sim.ts` — the deterministic sim harness (load-bearing for T1 tests)
+  - `core/scratch.ts` shared pool
+  - Positional/third-person audio (Howler.js never wired)
+  - CC0 texture sets (still procedural)
+  - Barrel blast radius, physics debris, polished anim blends
+  - KTX2/Meshopt compression pipeline
