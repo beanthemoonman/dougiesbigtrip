@@ -770,3 +770,26 @@ are the same height-band placeholder as the bots (bots hit the player's torso fl
     "Explicitly out of scope" (they now have phases); pointed Phase 5's static deploy at Phase 8;
     updated the risk-register row that assumed multiplayer was out of scope.
 - `pnpm typecheck` green.
+
+## 2026-07-18 — Phase 4.5: de-lopside the map (correct axis)
+
+- The map was mirror-symmetric across x=0 (left↔right) — the wrong axis. Reworked
+  `assets/maps/de_greybox.json` to **180° rotational symmetry** about the origin: every element
+  at (x,z) has a twin at (−x,−z), so the T half (south) and CT half (north) are identical → fair.
+  Cover sits at each spawn end; the **middle is open** (you cross exposed ground to close
+  distance). Flanks are deliberately *asymmetric* across x: **east = raised platform** (step-up,
+  height angle), **west = ground crate cluster**. Floor recentred at z=0 (was z=−1); perimeter
+  ±21 z / ±11.75 x; spawns unchanged at (0,±19).
+- **`src/game/map_greybox.test.ts`**: replaced the stale mid-choke/floor-centre assertions with a
+  **rotational-symmetry invariant** (every box has a 180° twin) — directly guards fairness — and
+  re-pointed the step-height check to the east flank step/platform (8.5, 6.7 → 8.5, 9).
+- **`src/player/movement_map.test.ts`**: re-pointed the crate-face collide-and-slide regression to
+  the mid crate at (−3,·,3.5); open-floor test spot unchanged (still clear).
+- **`src/main.ts`**: retargeted the three CT bot spawns + patrols to the open centre corridor
+  (x∈[−3,3]); the old x=±7 lanes now clip the new flank cover.
+- Rebaked: `navmesh.bin` (node, `pnpm nav:bake`), `de_greybox.glb` + `lightmap.exr`→`ktx2`
+  (Blender `build_all()` + `pnpm assets:lightmap`). Verified the symmetry in a Blender top/angled
+  ortho screenshot. 95 tests + typecheck + lint + build all green.
+
+skipped: ACC-007 re-run (human T3 playtest) — still the gate before art goes on the greybox.
+Weapon/character/prop/texture art tracks (rest of Phase 4.5) not started.

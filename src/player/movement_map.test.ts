@@ -40,9 +40,9 @@ describe('movement vs greybox colliders', () => {
     const world = createWorld();
     buildMapColliders(world);
 
-    // South of the wood crate at c=[3,·,10] s=1.5 (south face z=9.25). Run +Z
-    // (yaw=π) up to speed, jump, and keep pushing into the crate.
-    const spawn = new Vector3(3.4, 0.05, 6.0);
+    // South of the mid wood crate at c=[-3,·,3.5] s=1.5 (south face z=2.75). Run
+    // +Z (yaw=π) up to speed, jump, and keep pushing into the crate.
+    const spawn = new Vector3(-3, 0.05, -1.0);
     const ctx = createMovementContext(world, spawn);
     const player = createPlayerState(spawn);
     run(ctx, player, Math.PI, 120, 25);
@@ -52,7 +52,7 @@ describe('movement vs greybox colliders', () => {
     expect(player.position.y).toBeLessThan(0.15); // landed, not pinned mid-air
     expect(Math.abs(player.velocity.y)).toBeLessThan(GRAVITY_TERMINAL); // not accumulating
     // Never tunnelled into the crate: front of the capsule stays south of the face.
-    expect(player.position.z).toBeLessThan(9.25);
+    expect(player.position.z).toBeLessThan(2.75);
   });
 
 
@@ -61,7 +61,7 @@ describe('movement vs greybox colliders', () => {
     const world = createWorld();
     buildMapColliders(world);
 
-    // Open floor near CT hold, away from any crate. Walk forward; must stay put
+    // Open floor west of mid, away from any crate. Walk forward; must stay put
     // on the floor, not sink or lose grounding.
     const spawn = new Vector3(-8, 0.05, 2);
     const ctx = createMovementContext(world, spawn);

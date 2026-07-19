@@ -256,9 +256,15 @@ The greybox and the blocky placeholder models got us to "it plays right." This p
 *look* right. Everything deferred in Phase 3 (texturing, the modular kit, the skybox) lands here,
 and the character rig unblocks the hitbox debts left over from Phases 2–3.
 
-- [ ] **De-lopside the map.** `de_greybox` (`src/game/map_greybox.ts`) is awkwardly asymmetric.
-      Rework route/site geometry for balanced sightlines and cover, then **re-run ACC-007**
-      (greybox playtest) — timings and sightlines must still pass before art goes on top.
+- [x] **De-lopside the map.** Reworked `de_greybox` to **180° rotational symmetry** about the
+      origin: the T half (south) and CT half (north) are identical, so it's fair; cover sits at
+      each spawn end and the middle is open (cross exposed ground to close distance). Flanks are
+      deliberately *asymmetric* across x (east = raised platform for a height angle, west = ground
+      crate cluster) — earlier x-mirror symmetry was the wrong axis. `map_greybox.test.ts` now
+      asserts the rotational symmetry (guards against reintroducing lopsidedness). Colliders +
+      navmesh (`pnpm nav:bake`) + Blender glb/lightmap rebaked; bot patrols retargeted to the open
+      centre lane; T1 movement traces re-pointed. All 95 tests + typecheck/lint/build green.
+      **Still owed: re-run ACC-007** (human greybox playtest) — timings/sightlines gate before art.
 - [ ] **Weapon models.** Replace the faceted `ak_viewmodel.glb` / `pistol_viewmodel.glb` with
       properly curved, higher-fidelity models (Blender). Keep the layer-1 / separate-camera /
       separate-FOV viewmodel wiring untouched (`docs/weapon-feel.md`).

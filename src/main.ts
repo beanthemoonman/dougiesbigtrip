@@ -119,16 +119,17 @@ async function main(): Promise<void> {
   }
   const botMat = new MeshBasicMaterial({ color: 0xb64d4d }); // unlit — no realtime lights
   const botGeo = new CapsuleGeometry(PLAYER_RADIUS, STANDING_HEIGHT - 2 * PLAYER_RADIUS, 6, 12);
-  // Three CT spawns fanned out around the CT_SPAWN point, each with a there-and-
-  // back patrol down one of the map's three lanes (West x=-10 / Mid x=0 through
-  // the doorway / East x=+10). findPath snaps each waypoint to the navmesh and
-  // routes around cover, so bots roam instead of standing at spawn. y is the
+  // Three CT spawns fanned across their end cover, each patrolling the open
+  // centre corridor (x in [-3, 3]) down toward T and back. The flanks hold cover
+  // (west crate cluster, east platform); the middle is the killing lane, so the
+  // bots contest it. findPath snaps each waypoint to the navmesh and routes
+  // around cover, so bots roam instead of standing at spawn. y is the
   // walkable-surface height the nav query snaps to.
   const F = CT_SPAWN[1];
   const botSpawns: { s: Vector3; patrol: Vector3[] }[] = [
-    { s: new Vector3(-7, F, 14), patrol: [new Vector3(-7, F, -2), new Vector3(-7, F, -14), new Vector3(-7, F, 14)] },
-    { s: new Vector3(0, F, CT_SPAWN[2]), patrol: [new Vector3(0, F, 12), new Vector3(0, F, -2), new Vector3(0, F, -14)] },
-    { s: new Vector3(7, F, 14), patrol: [new Vector3(7, F, -2), new Vector3(7, F, -14), new Vector3(7, F, 14)] },
+    { s: new Vector3(-2, F, 16), patrol: [new Vector3(-1, F, 8), new Vector3(-1, F, -8), new Vector3(-2, F, 16)] },
+    { s: new Vector3(0, F, CT_SPAWN[2]), patrol: [new Vector3(0, F, 10), new Vector3(0, F, -10), new Vector3(0, F, 17)] },
+    { s: new Vector3(4, F, 16), patrol: [new Vector3(2, F, 8), new Vector3(2, F, -8), new Vector3(4, F, 16)] },
   ];
   const enemies: Enemy[] = botSpawns.map(({ s, patrol }) => {
     const bot = createBot(world, s);
