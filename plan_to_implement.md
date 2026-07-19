@@ -349,12 +349,14 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
       each value live: `input.state.sensitivity`, `renderCtx.setWorldFov`, audio `setMasterVolume`
       (new master gain node all voices route through). Panel shows out of pointer lock, hides in
       play. In-browser confirm owed, same standing blocker as the ACC runs.)
-- [ ] Deploy static to Pages/Netlify for the single-player build. (The real multiplayer target
-      is the containerized client+server deploy in Phase 8; this is the interim static host.)
-      Verify on a mid-range laptop, not just your desktop.
+- [→] ~~Deploy static to Pages/Netlify for the single-player build.~~ **Folded into Phase 8.**
+      Per the developer: no interim static host — the deploy is the containerized client(+server)
+      image built and deployed in Phase 8, which the developer will drive. This item was a
+      mis-scope. The integrated-GPU / mid-range-laptop verification the exit test wants still
+      applies; it just happens against the Phase 8 build.
 
 **Exit test:** A stranger opens the URL on an integrated-GPU laptop, is shooting within 10 s,
-and doesn't mention frame rate.
+and doesn't mention frame rate. (The URL is the Phase 8 containerized deploy; run this then.)
 
 ---
 
@@ -396,7 +398,8 @@ without snagging or getting shoved.
 
 - [ ] Dockerfile for the static client (built assets) and a Dockerfile for the Rust server.
 - [ ] Compose file wiring client + server for a one-command deploy to a real host.
-- [ ] Document the deploy in `docs/` and point Phase 5's interim static host at the real one.
+- [ ] Document the deploy in `docs/`. (This is the *only* deploy — Phase 5 had no interim static
+      host; the single-player client ships as part of this containerized deploy too.)
 
 **Exit test:** `docker compose up` on a fresh host serves the site and the deathmatch server;
 a browser hitting the host can join and play against another connection.
