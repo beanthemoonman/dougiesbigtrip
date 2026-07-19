@@ -713,3 +713,28 @@ at (±9,10)/(±9,12.75), and the wood ramp at both x=∓11→∓7. Dropped the s
 crate that would have stacked on/overlapped the (±3,10) pair.
 Rebaked: navmesh.bin, de_greybox.glb, lightmap.exr → ldr.png → lightmap.ktx2.
 All 93 tests green (movement_map crate-jump trace still lands on the floor).
+
+## 2026-07-18 — Phase 4: bots wired into the live game (main.ts)
+
+- **`src/main.ts`**: three CT bots (`createBot`+`createBrain`, difficulty `normal`) spawn fanned
+  around CT spawn as placeholder unlit `CapsuleGeometry` bodies (layer 0, no realtime light). Each
+  tick: `tickRound` drives freeze/live/over/reset; freezetime freezes the player (skips
+  `tickMovement`) and bots; `tickBrain` perceives the player (feet = target), and a `fire` intent
+  gated by a per-bot cyclic cooldown deals `computeDamage` to the player (torso, vs armour). The
+  player's hitscan now maps the hit collider → the owning bot via a handle map and applies
+  `computeDamage` with a height-derived hitbox; lethal hits hide the body + `killBot`. Player shots
+  also `hearSound` idle bots. HP/armour are live; death → `YOU LOSE`, wipe → `YOU WIN`, reset
+  respawns everyone.
+- **`src/game/hitbox.ts`** (T0) + test: placeholder height-band hitbox (`head`/`chest`/`stomach`/
+  `leg`) off impact height above the target's feet — stand-in until the character rig (Phase 5).
+- **`src/physics/shapecast.ts`**: `rayCast` gained an optional `outHit` out-param carrying the hit
+  collider, so the player's shot can tell *which* bot it struck.
+- **`src/ui/hud.ts`**: top-centre score (T:CT) + round number + a phase banner (FREEZE / WIN / LOSE
+  / DEAD).
+- **`tests/acceptance/ACC-008-bots.md`**: T3 script (bots react-not-snap, lose LOS, two-way damage,
+  round reset, score-once) — written before tuning, awaiting a run.
+- typecheck / lint / build / test (95) green.
+
+skipped: positional bot gunfire (Howler) — CLAUDE.md flags it Phase 4 but it's the "when it earns
+its keep" item; bot shots are silent for now. Add with third-person weapon audio. Player hitboxes
+are the same height-band placeholder as the bots (bots hit the player's torso flat).

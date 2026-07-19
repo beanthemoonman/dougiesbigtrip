@@ -31,6 +31,12 @@ export interface HudState {
   reloading: boolean;
   /** Current inaccuracy in radians — from weapons/spread.ts `computeSpread`. */
   spreadRad: number;
+  /** 1-based round number. */
+  round: number;
+  /** Score, T : CT. */
+  score: { t: number; ct: number };
+  /** Centre banner text (freezetime / round result). Empty = hidden. */
+  banner: string;
 }
 
 export interface Hud {
@@ -52,6 +58,14 @@ const CSS = `
 .hud-cross .down { top: var(--gap); }
 .hud-cross .left { right: var(--gap); }
 .hud-cross .right { left: var(--gap); }
+.hud-top { position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+  text-align: center; }
+.hud-score { font-size: 22px; letter-spacing: 1px; }
+.hud-score b { color: #4de04d; }
+.hud-round { font-size: 13px; font-weight: 400; opacity: .6; margin-top: 3px; }
+.hud-banner { position: absolute; left: 50%; top: 64px; transform: translateX(-50%);
+  font-size: 34px; letter-spacing: 2px; white-space: nowrap; }
+.hud-banner:empty { display: none; }
 `;
 
 /** Builds the overlay under `root`. Call `update` once per rendered frame. */
@@ -72,7 +86,12 @@ export function createHud(root: HTMLElement): Hud {
     </div>
     <div class="hud-cross" style="--len: 7px; --gap: ${MIN_GAP_PX}px">
       <i class="v up"></i><i class="v down"></i><i class="h left"></i><i class="h right"></i>
-    </div>`;
+    </div>
+    <div class="hud-top">
+      <div class="hud-score"><span data-hud="scoreT"></span> : <span data-hud="scoreCt"></span></div>
+      <div class="hud-round">ROUND <span data-hud="round"></span></div>
+    </div>
+    <div class="hud-banner" data-hud="banner"></div>`;
   root.appendChild(el);
 
   const find = (selector: string): HTMLElement => {
@@ -86,6 +105,10 @@ export function createHud(root: HTMLElement): Hud {
   const ammoBox = find('[data-hud="ammoBox"]');
   const weapon = find('[data-hud="weapon"]');
   const cross = find('.hud-cross');
+  const scoreT = find('[data-hud="scoreT"]');
+  const scoreCt = find('[data-hud="scoreCt"]');
+  const round = find('[data-hud="round"]');
+  const banner = find('[data-hud="banner"]');
 
   // ponytail: write every frame, no dirty-checking. These are ~5 textContent
   // assignments against unchanged strings — the DOM ignores them and it never
@@ -98,6 +121,10 @@ export function createHud(root: HTMLElement): Hud {
       weapon.textContent = state.weapon.name;
       ammoBox.classList.toggle('hud-reloading', state.reloading);
       cross.style.setProperty('--gap', `${crosshairGapPx(state.spreadRad, vFovRad, viewportHeightPx).toFixed(1)}px`);
+      scoreT.textContent = String(state.score.t);
+      scoreCt.textContent = String(state.score.ct);
+      round.textContent = String(state.round);
+      banner.textContent = state.banner;
     },
   };
 }

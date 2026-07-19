@@ -77,15 +77,20 @@ export function rayCast(
   maxDistance: number,
   outNormal: Vector3,
   excludeCollider?: RAPIER.Collider,
+  outHit?: { collider: RAPIER.Collider | null },
 ): number | null {
   scratchRay.origin = origin;
   scratchRay.dir = direction;
   // solid=true: a ray starting inside a collider impacts at distance 0 rather
   // than passing out through the far face.
   const hit = world.castRayAndGetNormal(scratchRay, maxDistance, true, undefined, undefined, excludeCollider);
-  if (!hit) return null;
+  if (!hit) {
+    if (outHit) outHit.collider = null;
+    return null;
+  }
 
   outNormal.set(hit.normal.x, hit.normal.y, hit.normal.z);
+  if (outHit) outHit.collider = hit.collider;
   return hit.timeOfImpact; // direction is unit, so toi is metres
 }
 

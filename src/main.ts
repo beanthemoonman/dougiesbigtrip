@@ -1,14 +1,22 @@
-import { Color, FogExp2, Group, MathUtils, Object3D, Vector3 } from 'three';
+import { CapsuleGeometry, Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, Object3D, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
+import navUrl from '../assets/maps/de_greybox.navmesh.bin?url';
 import mapKtx2Url from '../assets/maps/de_greybox/lightmap.ktx2?url';
 import rifleUrl from '../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
+import { createBot } from './ai/bot';
+import { createBrain, DIFFICULTIES, hearSound, killBot, tickBrain, type BotBrain } from './ai/brain';
+import { loadNav } from './ai/nav';
 import { playGunshot, playReload, resumeAudio } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
+import { computeDamage } from './game/damage';
+import { hitboxAt } from './game/hitbox';
 import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_greybox';
+import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
+import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HEIGHT } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
@@ -73,6 +81,8 @@ async function main(): Promise<void> {
   renderCtx.scene.fog = new FogExp2(SKY.getHex(), 0.012);
   renderCtx.scene.add(await loadLightmappedMap(mapGlbUrl, mapKtx2Url, renderCtx.renderer));
 
+  const nav = await loadNav(navUrl);
+
   const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
   // Face the player from their spawn toward the enemy spawn (the map), not the
   // wall 3 m behind them. forward at yaw θ is (-sinθ, -cosθ), so θ = atan2(-dx, -dz)
@@ -93,6 +103,77 @@ async function main(): Promise<void> {
   // in docs/weapon-feel.md §6 as explicitly optional for the demo — add it when
   // there are walls thin enough for it to matter (Phase 3).
   const MAX_SHOT_DISTANCE = 100; // m; the greybox is 20 m across
+
+  // --- Enemy bots (CT). The human is the lone T; bots defend from CT spawn. ---
+  // Placeholder capsule bodies until the character rig lands (Phase 5); each bot
+  // is a full second player driving the shared movement (ai/bot.ts) + brain FSM.
+  const BOT_WEAPON = WEAPONS.rifle;
+  const BOT_MAX_HP = 100;
+  interface Enemy {
+    readonly brain: BotBrain;
+    readonly body: Mesh;
+    readonly spawn: Vector3;
+    alive: boolean;
+    hp: number;
+    fireCooldown: number; // s until the bot may shoot again (cyclic rate)
+  }
+  const botMat = new MeshBasicMaterial({ color: 0xb64d4d }); // unlit — no realtime lights
+  const botGeo = new CapsuleGeometry(PLAYER_RADIUS, STANDING_HEIGHT - 2 * PLAYER_RADIUS, 6, 12);
+  // Three CT spawns fanned out around the CT_SPAWN point.
+  const botSpawns = [
+    new Vector3(CT_SPAWN[0] - 2.5, CT_SPAWN[1], CT_SPAWN[2]),
+    new Vector3(CT_SPAWN[0], CT_SPAWN[1], CT_SPAWN[2]),
+    new Vector3(CT_SPAWN[0] + 2.5, CT_SPAWN[1], CT_SPAWN[2]),
+  ];
+  const enemies: Enemy[] = botSpawns.map((s) => {
+    const bot = createBot(world, s);
+    const body = new Mesh(botGeo, botMat);
+    renderCtx.scene.add(body);
+    return {
+      brain: createBrain(bot, DIFFICULTIES.normal),
+      body,
+      spawn: s,
+      alive: true,
+      hp: BOT_MAX_HP,
+      fireCooldown: 0,
+    };
+  });
+  // Map each bot's collider back to its Enemy so a player hitscan can find it.
+  const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.brain.bot.ctx.collider.handle, e]));
+  const rayHit: { collider: import('@dimforge/rapier3d-compat').Collider | null } = { collider: null };
+  const botEye = new Vector3();
+  const botToPlayer = new Vector3();
+
+  const round = createRoundState();
+  let playerAlive = true;
+  let health = 100;
+  let armor = 100;
+
+  const playerFeet = new Vector3(); // scratch: player feet, the bots' target
+  const impact = new Vector3();
+
+  function respawn(): void {
+    playerAlive = true;
+    health = 100;
+    armor = 100;
+    player.position.copy(spawn);
+    player.velocity.set(0, 0, 0);
+    player.onGround = false;
+    for (const e of enemies) {
+      e.alive = true;
+      e.hp = BOT_MAX_HP;
+      e.fireCooldown = 0;
+      e.body.visible = true;
+      const b = e.brain.bot;
+      b.state.position.copy(e.spawn);
+      b.state.velocity.set(0, 0, 0);
+      b.path = [];
+      b.waypoint = 0;
+      e.brain.mode = 'idle';
+      e.brain.lastKnown = null;
+      e.brain.reactionTimer = 0;
+    }
+  }
 
   // Both weapons, welded to the eye on layer 1 (viewmodel pass, renderer.ts).
   // Each keeps its own rest pose (hand-tuned lower-right hold) and its own
@@ -140,10 +221,6 @@ async function main(): Promise<void> {
   const animPose: AnimPose = { x: 0, y: 0, z: 0, pitch: 0, roll: 0 };
 
   const hud = createHud(document.body);
-  // ponytail: health/armour are constants until the damage/round loop lands in
-  // Phase 4. game/damage.ts already has the math; nothing shoots back yet.
-  const HEALTH = 100;
-  const ARMOR = 100;
 
   const view = (): ViewState => ({
     position: player.position.clone(),
@@ -155,6 +232,14 @@ async function main(): Promise<void> {
   const prevView = view();
   const currView = view();
 
+  // Centre-banner text for the current phase (empty during normal play).
+  function bannerText(): string {
+    if (round.phase === 'freezetime') return `FREEZE  ${Math.ceil(round.timer)}`;
+    if (round.phase === 'over') return round.winner === 'T' ? 'YOU WIN' : 'YOU LOSE';
+    if (!playerAlive) return 'DEAD';
+    return '';
+  }
+
   startLoop({
     tick(fixedDt): void {
       prevView.position.copy(currView.position);
@@ -163,7 +248,43 @@ async function main(): Promise<void> {
       prevView.punchYaw = currView.punchYaw;
       prevView.punchPitch = currView.punchPitch;
 
-      tickMovement(movementCtx, player, { buttons: input.state.buttons, yaw: input.state.yaw }, fixedDt);
+      // Round loop drives freeze/live/reset. The human is T (1 alive when alive);
+      // the bots are CT. Freezetime holds everyone still; reset respawns.
+      const ctAlive = enemies.reduce((n, e) => n + (e.alive ? 1 : 0), 0);
+      const event = tickRound(round, DEFAULT_ROUND, playerAlive ? 1 : 0, ctAlive, fixedDt);
+      if (event === 'reset') respawn();
+      const live = round.phase === 'live';
+
+      playerFeet.copy(player.position);
+
+      if (live && playerAlive) {
+        tickMovement(movementCtx, player, { buttons: input.state.buttons, yaw: input.state.yaw }, fixedDt);
+      }
+
+      // Bots: perceive the player, run the FSM, and shoot back.
+      if (live) {
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          e.fireCooldown = Math.max(0, e.fireCooldown - fixedDt);
+          const { fire } = tickBrain(e.brain, world, nav, rng, playerFeet, playerAlive, fixedDt);
+          if (fire && e.fireCooldown === 0 && playerAlive) {
+            e.fireCooldown = BOT_WEAPON.fireInterval;
+            const b = e.brain.bot;
+            botEye.set(b.state.position.x, b.state.position.y + EYE_HEIGHT_STANDING, b.state.position.z);
+            botToPlayer.set(playerFeet.x, playerFeet.y + player.eyeHeight, playerFeet.z).sub(botEye);
+            const dist = botToPlayer.length();
+            // The brain only fires with LOS + on-target, so land the hit on the
+            // torso (no player hitboxes yet — placeholder like the bot bodies).
+            const dmg = computeDamage(BOT_WEAPON, dist, 'chest', armor);
+            health -= dmg.health;
+            armor -= dmg.armor;
+            if (health <= 0) {
+              health = 0;
+              playerAlive = false;
+            }
+          }
+        }
+      }
 
       const weapon = WEAPONS[active.id];
       tickWeapon(active.state, weapon, fixedDt);
@@ -186,8 +307,8 @@ async function main(): Promise<void> {
         beginDraw(anim);
       }
 
-      // Reload / fire only while idle (not mid-draw/holster/reload).
-      if (anim.state === 'idle') {
+      // Reload / fire only while idle (not mid-draw/holster/reload), alive, live.
+      if (anim.state === 'idle' && live && playerAlive) {
         if (input.state.buttons & Buttons.RELOAD && !active.state.reloading) {
           startReload(active.state, weapon);
           if (active.state.reloading) {
@@ -200,6 +321,8 @@ async function main(): Promise<void> {
           if (shot) {
             onFire(anim);
             playGunshot(active.id);
+            // The shot is a sound bots can hear → they investigate from idle.
+            for (const e of enemies) if (e.alive) hearSound(e.brain, playerFeet);
             // From the eye, not the muzzle (docs/weapon-feel.md §2) — the bullet
             // goes where the crosshair is, which is the point of the whole model.
             shotOrigin.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
@@ -210,12 +333,23 @@ async function main(): Promise<void> {
               MAX_SHOT_DISTANCE,
               hitNormal,
               movementCtx.collider, // the eye sits inside the player's own hull
+              rayHit,
             );
             if (distance !== null) {
-              decals.add(hitPoint.copy(shotOrigin).addScaledVector(shot.direction, distance), hitNormal);
+              impact.copy(shotOrigin).addScaledVector(shot.direction, distance);
+              const enemy = rayHit.collider ? byCollider.get(rayHit.collider.handle) : undefined;
+              if (enemy && enemy.alive) {
+                const hitbox = hitboxAt(enemy.brain.bot.state.position.y, impact.y);
+                enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
+                if (enemy.hp <= 0) {
+                  enemy.alive = false;
+                  enemy.body.visible = false;
+                  killBot(enemy.brain);
+                }
+              } else {
+                decals.add(hitPoint.copy(impact), hitNormal); // world hit → bullet mark
+              }
             }
-            // Damage is not applied here: nothing shoots or gets shot until the
-            // character rig gives game/damage.ts hitboxes to query (Phase 3/4).
           }
         }
       }
@@ -242,15 +376,26 @@ async function main(): Promise<void> {
       );
       active.root.rotation.set(animPose.pitch, active.rest.yaw, animPose.roll, 'YXZ');
 
+      // Move placeholder bot bodies to their capsule centre (feet + half height).
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        const p = e.brain.bot.state.position;
+        e.body.position.set(p.x, p.y + STANDING_HEIGHT / 2, p.z);
+        e.body.rotation.y = e.brain.aim.yaw;
+      }
+
       renderCtx.render();
       hud.update(
         {
-          health: HEALTH,
-          armor: ARMOR,
+          health,
+          armor,
           weapon,
           ammo: active.state.ammo,
           reloading: active.state.reloading,
           spreadRad: computeSpread(weapon, stanceOf(player), active.state.recoil.sprayIndex),
+          round: round.round,
+          score: round.score,
+          banner: bannerText(),
         },
         MathUtils.degToRad(renderCtx.camera.fov),
         renderCtx.renderer.domElement.clientHeight,
