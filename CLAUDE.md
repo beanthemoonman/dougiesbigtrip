@@ -94,6 +94,23 @@ pnpm assets:opt     # gltf-transform: draco/meshopt + ktx2 (see docs/asset-pipel
 pnpm nav:bake       # regenerate navmesh blob from assets/maps/*.glb
 ```
 
+### Rebuilding the shared WASM sim (`sim/pkg`)
+
+After editing the Rust WASM bindings (`sim/src/lib.rs` etc.), rebuilding `sim/pkg` is **not
+enough**. `sim-wasm` is a pnpm `file:` dependency, so pnpm keeps a **copy** at
+`node_modules/.pnpm/sim@file+sim+pkg/node_modules/sim/` that does **not** auto-update. Symptom:
+the JS glue exports the new function but you get `wasm.<fn> is not a function` at runtime (glue
+new, `.wasm` stale). Full ritual:
+
+```bash
+wasm-pack build sim --target bundler --features wasm
+cp -f sim/pkg/{sim_bg.wasm,sim.js,sim_bg.js,sim.d.ts,sim_bg.wasm.d.ts} \
+      node_modules/.pnpm/sim@file+sim+pkg/node_modules/sim/   # or: pnpm install
+rm -rf node_modules/.vite            # Vite pre-bundles the dep; cache goes stale
+# restart pnpm dev, then hard-reload the browser (Ctrl+Shift+R) — Vite immutable-caches
+# ?v=<hash> module URLs, so a plain reload can serve a bundle the browser cached mid-optimize.
+```
+
 ## Definition of Done
 
 A feature is done when **all applicable boxes are ticked**. Not "when it works." Full
