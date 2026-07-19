@@ -281,8 +281,14 @@ and the character rig unblocks the hitbox debts left over from Phases 2–3.
       geometry problem, not an animation one. **Deferred:** the skinned armature + Mixamo
       walk/idle/death clips. The bots render as rigid translating boxes and drive no animation, so
       a skinned mesh buys nothing until a bot animation state driver exists (Phase 5) — add it then.
-- [ ] **Breakable props.** Better crate/barrel models with CC0 textures, including the
-      destructible variants Phase 3 skipped. They must not become clip/collision hazards.
+- [~] **Breakable props.** Crates + the explosive barrel now break when shot: `src/game/
+      breakables.ts` tracks hp and cascades the break to anything stacked on top, and main.ts
+      pulls both the mesh and its static collider on break — so nothing is left as an invisible
+      box to bump into or a mid-air platform (the exit-test requirement, "can't be stood on
+      mid-air"). Crate ~90 hp (~3 rifle hits), barrel ~55. **Deferred:** barrel blast radius
+      damage (Phase-5 juice, needs VFX); physics-dropped debris (needs dynamic bodies). Solid
+      scenery (pallets/cones/jerry-cans) unchanged. **Owed:** better CC0 crate/barrel models are
+      still the greybox placeholders — reskin lands with the Textures item below.
 - [ ] **Textures.** Land the deferred Phase 3 texturing: Poly Haven / Kenney CC0 sets, ≤4 map
       materials total, UV0 tiling albedo, and a real skybox matching the lightmap's sun direction.
 - [ ] Every new asset gets a `CREDITS.md` row **at add-time** and a licence. No exceptions.

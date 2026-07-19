@@ -955,3 +955,21 @@ optional `stack` value for the crate stacked on top. typecheck green.
 - **Deferred (not a debt):** skinned armature + Mixamo walk/idle/death clips. Bots
   render as rigid translating boxes and play no animation, so a skinned mesh has no
   consumer until a bot animation driver lands (Phase 5). Wiring point noted in plan.
+
+## Phase 4.5: breakable props — shoot crates/barrels, cascade the break
+
+- New `src/game/breakables.ts`: pure hp accounting + support cascade. `damageProp`
+  deducts damage; at ≤0 the prop breaks and everything (transitively) resting on it
+  breaks too, so the bottom of a crate stack can't be shot out to leave the top one
+  floating mid-air (the exit-test requirement). 6 spec tests in `breakables.test.ts`.
+- `main.ts`: `placeProps` now returns each placed mesh+collider; `buildBreakables`
+  derives per-placement hp + `restsOn` (a stacked crate's support = the preceding
+  placement at the same x,z). Hitscan's world-hit branch damages the breakable it
+  struck and, on break, removes BOTH the scene mesh and the static collider — no
+  invisible box to bump into or stand on ("must not become clip/collision hazards").
+- Crate ~90 hp (~3 rifle hits), explosive barrel ~55. Solid scenery (pallets, cones,
+  jerry-cans) unchanged.
+- **Deferred (ponytail, noted in plan):** barrel blast-radius damage (Phase-5 VFX
+  juice); physics-dropped debris (needs dynamic bodies); better CC0 crate/barrel art
+  (reskin lands with the Textures item).
+- All green: typecheck, lint, 110 tests (+6), build.

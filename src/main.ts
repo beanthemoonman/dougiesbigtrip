@@ -18,6 +18,7 @@ import { playGunshot, playReload, resumeAudio } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
+import { type Breakable, damageProp } from './game/breakables';
 import { computeDamage } from './game/damage';
 import { hitboxAt, hitboxRay } from './game/hitbox';
 import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_greybox';
@@ -68,6 +69,17 @@ function stanceOf(player: PlayerState): Stance {
   return speed < 3.5 ? 'walking' : 'running';
 }
 
+// Props that break when shot (crates + the explosive barrel). Wood pallets,
+// cones and jerry-cans stay solid scenery. HP is tuned so a crate takes ~3 rifle
+// hits and the fragile barrel ~2.
+// ponytail: the barrel is "explosive" in name only — it just breaks. Radius
+// damage to nearby bots/props is Phase 5 juice; add it when there's blast VFX to
+// go with it, not a silent AoE.
+const BREAKABLE_HP = new Map<string, number>([
+  [crateUrl, 90],
+  [barrelUrl, 55],
+]);
+
 // [url, x, z, yawDeg, stack] per prop. Each prop is dropped so its base rests on
 // the floor (y=0) from its measured bounding box, so mesh origins don't matter.
 // `stack` (metres, default 0) lifts a prop to sit on top of another (crate stack).
@@ -97,11 +109,43 @@ const PROP_PLACEMENTS: readonly [string, number, number, number, number?][] = [
   [coneUrl, -0.7, -9.0, 0],
 ];
 
+// One placed prop: its scene mesh and static collider, so a shot that breaks it
+// can pull both. Index-aligned with PROP_PLACEMENTS.
+interface PlacedProp {
+  mesh: Object3D;
+  collider: import('@dimforge/rapier3d-compat').Collider;
+}
+
+/**
+ * Breakable metadata index-aligned with PROP_PLACEMENTS: null for solid scenery,
+ * else a { hp, broken, restsOn } record. `restsOn` is the placement index this
+ * prop is stacked on (a preceding placement at the same x,z with stack 0), so
+ * breaking the base cascades to the crate on top of it (breakables.ts).
+ */
+function buildBreakables(): (Breakable | null)[] {
+  return PROP_PLACEMENTS.map(([url, x, z, , stack = 0], i) => {
+    const hp = BREAKABLE_HP.get(url);
+    if (hp === undefined) return null;
+    let restsOn: number | null = null;
+    if (stack > 0) {
+      for (let j = i - 1; j >= 0; j--) {
+        const pj = PROP_PLACEMENTS[j];
+        if (pj && pj[1] === x && pj[2] === z) {
+          restsOn = j;
+          break;
+        }
+      }
+    }
+    return { hp, broken: false, restsOn };
+  });
+}
+
 /**
  * Load each distinct prop glb once, clone it to every placement, flatten to unlit,
  * drop it onto the floor, and give it a static box collider matching its footprint.
+ * Returns the placed props (mesh + collider) index-aligned with PROP_PLACEMENTS.
  */
-async function placeProps(scene: Object3D, world: import('@dimforge/rapier3d-compat').World): Promise<void> {
+async function placeProps(scene: Object3D, world: import('@dimforge/rapier3d-compat').World): Promise<PlacedProp[]> {
   const loader = new GLTFLoader();
   const urls = [...new Set(PROP_PLACEMENTS.map((p) => p[0]))];
   // Per model: the flattened root plus its local bounding box (measured once,
@@ -122,6 +166,7 @@ async function placeProps(scene: Object3D, world: import('@dimforge/rapier3d-com
   );
   const size = new Vector3();
   const localCenter = new Vector3();
+  const placed: PlacedProp[] = [];
   for (const [url, x, z, yaw, stack = 0] of PROP_PLACEMENTS) {
     const model = models.get(url);
     if (!model) continue;
@@ -140,8 +185,10 @@ async function placeProps(scene: Object3D, world: import('@dimforge/rapier3d-com
     const worldCenter = new Vector3(localCenter.x, 0, localCenter.z)
       .applyQuaternion(quat)
       .add(new Vector3(x, posY + localCenter.y, z));
-    addStaticBox(world, worldCenter, { x: size.x / 2, y: size.y / 2, z: size.z / 2 }, quat);
+    const collider = addStaticBox(world, worldCenter, { x: size.x / 2, y: size.y / 2, z: size.z / 2 }, quat);
+    placed.push({ mesh: prop, collider });
   }
+  return placed;
 }
 
 async function main(): Promise<void> {
@@ -173,7 +220,14 @@ async function main(): Promise<void> {
   // are a later phase (physics/world.ts). World has no realtime lights, so each
   // glb's MeshStandardMaterial is flattened to unlit MeshBasic (keeping its baked
   // texture), same as the bot model above.
-  await placeProps(renderCtx.scene, world);
+  const placedProps = await placeProps(renderCtx.scene, world);
+  const breakables = buildBreakables();
+  // Collider handle -> placement index, breakable props only, so a stray shot
+  // finds the crate/barrel it hit and applies damage (breakables.ts cascade).
+  const propByCollider = new Map<number, number>();
+  placedProps.forEach((p, i) => {
+    if (breakables[i]) propByCollider.set(p.collider.handle, i);
+  });
 
   const nav = await loadNav(navUrl);
 
@@ -465,7 +519,18 @@ async function main(): Promise<void> {
                   killBot(enemy.brain);
                 }
               } else {
-                decals.add(hitPoint.copy(impact), hitNormal); // world hit → bullet mark
+                // Not a bot: maybe a breakable prop. Damage it; break cascades to
+                // anything stacked on top so nothing is left standing mid-air.
+                const pi = rayHit.collider ? propByCollider.get(rayHit.collider.handle) : undefined;
+                const dmg = pi === undefined ? 0 : computeDamage(weapon, distance, 'chest', 0).health;
+                const broke = pi === undefined ? [] : damageProp(breakables, pi, dmg);
+                for (const bi of broke) {
+                  const pp = placedProps[bi];
+                  if (!pp) continue;
+                  renderCtx.scene.remove(pp.mesh);
+                  pp.collider.setEnabled(false); // gone: no invisible box to bump/stand on
+                }
+                if (broke.length === 0) decals.add(hitPoint.copy(impact), hitNormal); // bullet mark
               }
             }
           }
