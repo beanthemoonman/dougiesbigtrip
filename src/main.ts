@@ -19,7 +19,7 @@ import { Buttons, createInputManager } from './core/input';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
 import { computeDamage } from './game/damage';
-import { hitboxAt } from './game/hitbox';
+import { hitboxAt, hitboxRay } from './game/hitbox';
 import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_greybox';
 import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
 import { EYE_HEIGHT_STANDING } from './player/constants';
@@ -448,7 +448,15 @@ async function main(): Promise<void> {
               impact.copy(shotOrigin).addScaledVector(shot.direction, distance);
               const enemy = rayHit.collider ? byCollider.get(rayHit.collider.handle) : undefined;
               if (enemy && enemy.alive) {
-                const hitbox = hitboxAt(enemy.brain.bot.state.position.y, impact.y);
+                // Precise per-bone zone from the shot ray in the bot's frame;
+                // fall back to the height band if it grazed the collider but
+                // missed every bone box (an edge clip that still counts).
+                const bp = enemy.brain.bot.state.position;
+                const hitbox = hitboxRay(
+                  shotOrigin.x, shotOrigin.y, shotOrigin.z,
+                  shot.direction.x, shot.direction.y, shot.direction.z,
+                  bp.x, bp.y, bp.z, enemy.brain.aim.yaw,
+                ) ?? hitboxAt(bp.y, impact.y);
                 enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
                 if (enemy.hp <= 0) {
                   enemy.alive = false;

@@ -273,9 +273,14 @@ and the character rig unblocks the hitbox debts left over from Phases 2–3.
       in `main.ts` stay valid — viewmodel wiring untouched. Verified silhouettes in Blender ortho;
       `pnpm build` bundles both clean. **Owed: in-app ACC-005 pass** (real windowed browser, same
       standing T3 blocker) to confirm no edge distortion / wall clipping at the viewmodel FOV.
-- [ ] **Character models.** Rigged T and CT `.glb`s in `assets/characters/` (Mixamo-derived
-      clips per the repo layout). This unblocks two standing debts: the per-bone hitbox capsules
-      and the world-space per-bone hitscan query, both deferred from Phase 2/3 pending a rig.
+- [~] **Character models.** Per-bone hitboxes **done**: `src/game/hitbox.ts` now ray-tests the
+      shot against static per-bone AABBs (mirrored 1:1 from `build_characters.py`) in the bot's
+      local frame, so a high shot off to the side is no longer a headshot the way the height band
+      made it; `hitboxAt` stays as an edge-clip fallback. This clears the two debts deferred from
+      Phase 2/3 (per-bone hitbox + world-space per-bone hitscan query) — they were a *static*
+      geometry problem, not an animation one. **Deferred:** the skinned armature + Mixamo
+      walk/idle/death clips. The bots render as rigid translating boxes and drive no animation, so
+      a skinned mesh buys nothing until a bot animation state driver exists (Phase 5) — add it then.
 - [ ] **Breakable props.** Better crate/barrel models with CC0 textures, including the
       destructible variants Phase 3 skipped. They must not become clip/collision hazards.
 - [ ] **Textures.** Land the deferred Phase 3 texturing: Poly Haven / Kenney CC0 sets, ≤4 map

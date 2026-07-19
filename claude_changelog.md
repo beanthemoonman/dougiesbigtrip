@@ -935,3 +935,23 @@ optional `stack` value for the crate stacked on top. typecheck green.
 - **Owed (T3, standing blocker):** visual ACC pass in a real windowed browser —
   Chrome extension/Playwright both unavailable here. Repeats/tile scale, sun
   placement, and detail contrast are eyeball-tuned and want one playtest to dial in.
+
+## Phase 4.5: per-bone hitboxes (character-rig debt cleared)
+
+- **src/game/hitbox.ts:** added `hitboxRay()` — transforms the shot ray into the
+  bot's body-local frame (subtract feet, rotate by -yaw) and slab-tests it against
+  a table of static per-bone AABBs (`BONES`), returning the nearest zone or null.
+  The boxes mirror `tools/blender/build_characters.py` 1:1 (Blender Z-up center/size
+  → three-space AABB via (x,z,-y)). `hitboxAt` (height bands) kept as an edge-clip
+  fallback via `?? `. No allocation, pure scalars.
+- **src/main.ts:** hitscan now resolves zone with `hitboxRay(...) ?? hitboxAt(...)`
+  instead of height-band-only — a shot at head *height* but off to the side is no
+  longer a headshot.
+- **src/game/hitbox.test.ts:** +6 tests — head through the face, off-axis high shot
+  is null (the whole point), chest/stomach/arm/leg from geometry, body yaw, bot
+  position, below-feet/above-crown misses. 104 tests green; typecheck/lint/build clean.
+- This clears both Phase 2/3 debts the "character rig" line item existed for
+  (per-bone hitbox + world-space per-bone hitscan) — a *static* geometry problem.
+- **Deferred (not a debt):** skinned armature + Mixamo walk/idle/death clips. Bots
+  render as rigid translating boxes and play no animation, so a skinned mesh has no
+  consumer until a bot animation driver lands (Phase 5). Wiring point noted in plan.
