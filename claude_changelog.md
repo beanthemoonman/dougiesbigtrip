@@ -1146,3 +1146,11 @@ source of truth (no localStorage — CLAUDE.md: may be embedded).
 - **Owed** (standing browser blocker): in-app confirm the panel shows/hides and the three sliders
   visibly change look sensitivity / FOV / loudness. Not an ACC script — this is a UI knob, not a
   feel-tuned surface; the developer's next browser pass can eyeball it.
+
+## Phase 5: bloom post-processing
+- Added slight UnrealBloom via three's EffectComposer in `src/render/renderer.ts`.
+  Custom `ScenePass` keeps the two-pass world+viewmodel draw (clearDepth) feeding
+  a linear HDR buffer; OutputPass does ACESFilmic+sRGB at the end.
+- Params from doc spec (art-direction.md §Post-processing): threshold 0.9,
+  strength 0.15, radius 0.4 — exported as `BLOOM` with spec-derived test
+  `renderer.test.ts`. Only sky/muzzle-flash HDR (>1.0) blooms.

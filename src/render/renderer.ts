@@ -5,10 +5,22 @@ import {
   PMREMGenerator,
   Scene,
   SRGBColorSpace,
+  Vector2,
   WebGLRenderer,
 } from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { Pass } from 'three/addons/postprocessing/Pass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import Stats from 'stats.js';
+
+/**
+ * Bloom is *very slight* on purpose (docs/art-direction.md §Post-processing):
+ * only the sky and muzzle flashes should glow. High threshold, low strength.
+ * Nothing lit by the lightmap alone (i.e. < 1.0) crosses the threshold.
+ */
+export const BLOOM = { threshold: 0.9, strength: 0.15, radius: 0.4 } as const;
 
 /**
  * Two render passes, one frame (docs/weapon-feel.md §1):
@@ -44,6 +56,34 @@ const VIEWMODEL_FOV_DEGREES = 60;
 function verticalFovFromHorizontal(hFovDegrees: number, aspect: number): number {
   const hFovRad = (hFovDegrees * Math.PI) / 180;
   return (2 * Math.atan(Math.tan(hFovRad / 2) / aspect) * 180) / Math.PI;
+}
+
+/**
+ * The world+viewmodel two-pass draw (see class header), as a composer pass so
+ * bloom can run over the combined result. Renders into the composer's buffer,
+ * which is a linear HDR target — tone mapping / sRGB happen later in OutputPass,
+ * so muzzle-flash/sky values above 1.0 survive to feed the bloom threshold.
+ */
+class ScenePass extends Pass {
+  private scene: Scene;
+  private camera: PerspectiveCamera;
+  private viewScene: Scene;
+  private viewCamera: PerspectiveCamera;
+  constructor(scene: Scene, camera: PerspectiveCamera, viewScene: Scene, viewCamera: PerspectiveCamera) {
+    super();
+    this.scene = scene;
+    this.camera = camera;
+    this.viewScene = viewScene;
+    this.viewCamera = viewCamera;
+    this.needsSwap = false; // draws into readBuffer; nothing to ping-pong
+  }
+  override render(renderer: WebGLRenderer, _write: unknown, read: { texture: unknown }): void {
+    renderer.setRenderTarget(this.renderToScreen ? null : (read as never));
+    renderer.clear();
+    renderer.render(this.scene, this.camera);
+    renderer.clearDepth(); // gun drawn on top of the world, never clipped by it
+    renderer.render(this.viewScene, this.viewCamera);
+  }
 }
 
 export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
@@ -91,6 +131,20 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
   fill.layers.set(1);
   viewmodelScene.add(key, fill);
 
+  // --- Post: slight bloom (docs/art-direction.md). Composer target is linear
+  // HDR by default in r170, so ScenePass renders linear, bloom reads HDR, and
+  // OutputPass applies ACESFilmic + sRGB at the very end.
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new ScenePass(scene, camera, viewmodelScene, viewCamera));
+  const bloom = new UnrealBloomPass(
+    new Vector2(window.innerWidth, window.innerHeight),
+    BLOOM.strength,
+    BLOOM.radius,
+    BLOOM.threshold,
+  );
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+
   const stats = new Stats();
   stats.showPanel(0);
   stats.dom.style.position = 'absolute';
@@ -109,6 +163,7 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
     viewCamera.fov = verticalFovFromHorizontal(VIEWMODEL_FOV_DEGREES, asp);
     viewCamera.updateProjectionMatrix();
     renderer.setSize(width, height);
+    composer.setSize(width, height);
   }
   window.addEventListener('resize', resize);
 
@@ -119,10 +174,7 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
     viewmodelScene,
     stats,
     render(): void {
-      renderer.clear(); // colour + depth
-      renderer.render(scene, camera);
-      renderer.clearDepth(); // <- the gun is drawn on top of the world, never clipped by it
-      renderer.render(viewmodelScene, viewCamera);
+      composer.render();
     },
     setWorldFov(degrees: number): void {
       worldFovDegrees = degrees;
