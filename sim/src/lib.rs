@@ -135,6 +135,8 @@ mod wasm_bindings {
     static SIM: Mutex<Option<(SimWorld, PlayerState)>> = Mutex::new(None);
 
     /// Initialise the simulation world and spawn the local player.
+    /// Call this once at startup. On respawn, use sim_reset_player instead
+    /// so that map colliders are preserved.
     #[wasm_bindgen]
     pub fn sim_init(spawn_x: f64, spawn_y: f64, spawn_z: f64) {
         let mut sim = SIM.lock().unwrap();
@@ -143,6 +145,17 @@ mod wasm_bindings {
         // Sync the kinematic body to the initial position immediately.
         world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
         *sim = Some((world, state));
+    }
+
+    /// Reset the player to a spawn position without destroying the world
+    /// (preserves all map colliders).
+    #[wasm_bindgen]
+    pub fn sim_reset_player(spawn_x: f64, spawn_y: f64, spawn_z: f64) {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((world, state)) = sim.as_mut() {
+            state.reset(spawn_x, spawn_y, spawn_z);
+            world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
+        }
     }
 
     /// Add a static axis-aligned cuboid collider to the world.

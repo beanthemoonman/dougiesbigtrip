@@ -148,6 +148,18 @@ impl PlayerState {
             view_punch: 0.0,
         }
     }
+
+    pub fn reset(&mut self, spawn_x: f64, spawn_y: f64, spawn_z: f64) {
+        self.position = Vector3::new(spawn_x, spawn_y, spawn_z);
+        self.velocity = Vector3::zeros();
+        self.on_ground = false;
+        self.ground_normal = Vector3::new(0.0, 1.0, 0.0);
+        self.ducked = false;
+        self.duck_amount = 0.0;
+        self.jump_held = false;
+        self.eye_height = EYE_HEIGHT_STANDING;
+        self.view_punch = 0.0;
+    }
 }
 
 fn capsule_center_from_feet(feet: &Vector3<f64>, half_height: f64, radius: f64) -> Vector3<f64> {

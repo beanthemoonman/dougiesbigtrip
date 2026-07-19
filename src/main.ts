@@ -32,7 +32,7 @@ import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
-import { sim_add_box, sim_add_ramp, sim_get_state, sim_init, sim_tick } from 'sim-wasm';
+import { sim_add_box, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_tick } from 'sim-wasm';
 import { createDecals } from './render/decals';
 import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
 import { loadLightmappedMap } from './render/lightmap';
@@ -238,6 +238,12 @@ async function main(): Promise<void> {
   await initPhysics();
   const world = createWorld();
   buildMapColliders(world);
+
+  // WASM sim must be initialised before we add map colliders — sim_init creates
+  // the inner PhysicsWorld that sim_add_box/sim_add_ramp will populate.
+  const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
+  sim_init(spawn.x, spawn.y, spawn.z);
+
   // Load the same map colliders into the WASM sim world (Phase 6.2). These are
   // independent of the TS Rapier world — the sim crate has its own PhysicsWorld.
   for (const b of MAP_BOXES) {
@@ -277,7 +283,6 @@ async function main(): Promise<void> {
   const nav = await loadNav(navUrl);
   loading.step('Loading characters…');
 
-  const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
   // Face the player from their spawn toward the enemy spawn (the map), not the
   // wall 3 m behind them. forward at yaw θ is (-sinθ, -cosθ), so θ = atan2(-dx, -dz)
   // of the spawn→CT vector points the camera down that line.
@@ -287,7 +292,7 @@ async function main(): Promise<void> {
   // WASM sim owns the local player's movement (Phase 6.2). The TS player state
   // and kinematic body are still maintained for bot hit-detection and HUD reads,
   // but they are synced from sim_get_state() each tick rather than tickMovement().
-  sim_init(spawn.x, spawn.y, spawn.z);
+  // sim_init() is already called above (before map collider loading).
 
   // Fixed seed: the sim stays reproducible for a recorded trace. core/rng.ts is
   // the only randomness allowed under src/.
@@ -421,7 +426,7 @@ async function main(): Promise<void> {
     player.onGround = false;
     // Reset the WASM sim player to the spawn point as well, so the next tick
     // doesn't pick up the old (dead) position.
-    sim_init(spawn.x, spawn.y, spawn.z);
+    sim_reset_player(spawn.x, spawn.y, spawn.z);
     for (const e of enemies) {
       e.alive = true;
       e.hp = BOT_MAX_HP;
