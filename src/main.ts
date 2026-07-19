@@ -1,9 +1,14 @@
-import { Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, type MeshStandardMaterial, Object3D, Vector3 } from 'three';
+import { Box3, Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, type MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
 import navUrl from '../assets/maps/de_greybox.navmesh.bin?url';
 import mapKtx2Url from '../assets/maps/de_greybox/lightmap.ktx2?url';
 import ctPlayerUrl from '../assets/characters/ct_player.glb?url';
+import barrelUrl from '../assets/props/barrel_explosive.glb?url';
+import crateUrl from '../assets/props/crate_wood.glb?url';
+import jerryUrl from '../assets/props/jerry_can.glb?url';
+import palletUrl from '../assets/props/pallet_wood.glb?url';
+import coneUrl from '../assets/props/traffic_cone.glb?url';
 import rifleUrl from '../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
 import { createBot } from './ai/bot';
@@ -21,7 +26,7 @@ import { EYE_HEIGHT_STANDING } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
-import { createWorld, initPhysics } from './physics/world';
+import { addStaticBox, createWorld, initPhysics } from './physics/world';
 import { createDecals } from './render/decals';
 import { loadLightmappedMap } from './render/lightmap';
 import { createRenderContext } from './render/renderer';
@@ -61,6 +66,80 @@ function stanceOf(player: PlayerState): Stance {
   return speed < 3.5 ? 'walking' : 'running';
 }
 
+// [url, x, z, yawDeg, stack] per prop. Each prop is dropped so its base rests on
+// the floor (y=0) from its measured bounding box, so mesh origins don't matter.
+// `stack` (metres, default 0) lifts a prop to sit on top of another (crate stack).
+const PROP_PLACEMENTS: readonly [string, number, number, number, number?][] = [
+  // Barrel + jerry-can clutter tucked against the flank cover crates.
+  [barrelUrl, -5.3, 15.8, 0],
+  [barrelUrl, -4.7, 16.9, 0],
+  [barrelUrl, -5.9, 16.6, 0],
+  [jerryUrl, -6.3, 16.3, 25],
+  [barrelUrl, 5.3, -15.8, 0],
+  [barrelUrl, 4.7, -16.9, 0],
+  [jerryUrl, 5.9, -16.2, -30],
+  // Crate stack by the mid pillars + loose crates in the centre lane.
+  [crateUrl, 5.0, 4.2, 12],
+  [crateUrl, 5.0, 4.2, -8, 0.7],
+  [crateUrl, -5.0, -4.2, 12],
+  [crateUrl, -1.9, 2.4, 20],
+  [crateUrl, 1.9, -2.4, 20],
+  // Pallets flat along the long west/east walls.
+  [palletUrl, 10.9, 6.0, 90],
+  [palletUrl, 10.9, -5.5, 90],
+  [palletUrl, -10.9, 5.5, 90],
+  // Traffic cones marking the mid choke.
+  [coneUrl, 0.9, 9.0, 0],
+  [coneUrl, -1.0, 5.5, 0],
+  [coneUrl, 1.3, -6.0, 0],
+  [coneUrl, -0.7, -9.0, 0],
+];
+
+/**
+ * Load each distinct prop glb once, clone it to every placement, flatten to unlit,
+ * drop it onto the floor, and give it a static box collider matching its footprint.
+ */
+async function placeProps(scene: Object3D, world: import('@dimforge/rapier3d-compat').World): Promise<void> {
+  const loader = new GLTFLoader();
+  const urls = [...new Set(PROP_PLACEMENTS.map((p) => p[0]))];
+  // Per model: the flattened root plus its local bounding box (measured once,
+  // unrotated, at the origin — includes any node transforms baked into the glb).
+  const models = new Map(
+    await Promise.all(
+      urls.map(async (url): Promise<[string, { root: Object3D; box: Box3 }]> => {
+        const root = (await loader.loadAsync(url)).scene;
+        root.traverse((o) => {
+          if (o instanceof Mesh) {
+            const src = o.material as MeshStandardMaterial;
+            o.material = new MeshBasicMaterial({ map: src.map, color: src.color });
+          }
+        });
+        return [url, { root, box: new Box3().setFromObject(root) }];
+      }),
+    ),
+  );
+  const size = new Vector3();
+  const localCenter = new Vector3();
+  for (const [url, x, z, yaw, stack = 0] of PROP_PLACEMENTS) {
+    const { root, box } = models.get(url)!;
+    box.getSize(size);
+    box.getCenter(localCenter);
+    // Drop the base to the floor: shift so box.min.y + posY = stack.
+    const posY = stack - box.min.y;
+    const prop = root.clone();
+    prop.position.set(x, posY, z);
+    prop.rotation.y = MathUtils.degToRad(yaw);
+    scene.add(prop);
+    // Collider: the model's local box, rotated by yaw about the Y axis and placed
+    // at the prop's world position. Its horizontal centre offset rotates too.
+    const quat = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), MathUtils.degToRad(yaw));
+    const worldCenter = new Vector3(localCenter.x, 0, localCenter.z)
+      .applyQuaternion(quat)
+      .add(new Vector3(x, posY + localCenter.y, z));
+    addStaticBox(world, worldCenter, { x: size.x / 2, y: size.y / 2, z: size.z / 2 }, quat);
+  }
+}
+
 async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#viewport');
   if (!canvas) throw new Error('missing #viewport canvas');
@@ -81,6 +160,13 @@ async function main(): Promise<void> {
   renderCtx.scene.background = SKY;
   renderCtx.scene.fog = new FogExp2(SKY.getHex(), 0.012);
   renderCtx.scene.add(await loadLightmappedMap(mapGlbUrl, mapKtx2Url, renderCtx.renderer));
+
+  // Decorative props scattered near the existing cover. Each gets a static box
+  // collider from its measured footprint (see placeProps); dynamic prop bodies
+  // are a later phase (physics/world.ts). World has no realtime lights, so each
+  // glb's MeshStandardMaterial is flattened to unlit MeshBasic (keeping its baked
+  // texture), same as the bot model above.
+  await placeProps(renderCtx.scene, world);
 
   const nav = await loadNav(navUrl);
 

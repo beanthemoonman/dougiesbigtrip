@@ -4,6 +4,8 @@ One row per asset, added at the moment the asset is added. See `docs/licensing-a
 
 | File | Source | Author | Licence | URL | Added |
 |---|---|---|---|---|---|
+| assets/characters/ct_player.glb | Original (procedural, tools/blender/build_characters.py) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-19 |
+| assets/characters/t_player.glb | Original (procedural, tools/blender/build_characters.py) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-19 |
 | assets/weapons/ak_viewmodel.glb | Original (procedural, tools/blender/build_weapons.py) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-18 |
 | assets/weapons/pistol_viewmodel.glb | Original (procedural, tools/blender/build_weapons.py) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-18 |
 | assets/props/barrel_explosive.glb | Original (modeled in Blender) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-16 |

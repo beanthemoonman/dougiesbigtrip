@@ -892,3 +892,18 @@ New workflow — reference image → curve JSON → 3D model:
 
 ## Bugfix: dead bots become ghosts
 Disabled the Rapier collider on bot death (`setEnabled(false)`) so nothing — player movement or bullets — collides with a corpse. Re-enabled on respawn. `src/main.ts`.
+
+## Props placed around de_greybox
+Added `placeProps()` in src/main.ts: loads the 5 prop glbs once each, clones them
+to 19 placements (barrels/jerry cans by flank cover, crate stack + loose crates in
+mid lane, pallets along the long walls, cones marking the mid choke). Flattened to
+unlit MeshBasic (baked world, no realtime lights) like the bot model. Visual only —
+no colliders yet (world.ts flags dynamic prop bodies as a later phase). typecheck green.
+
+### Fix: props floating + no collision
+Reworked placeProps to measure each model's bounding box at load (Box3.setFromObject)
+instead of guessing mesh-origin y offsets, so every prop rests its base on the floor
+(node transforms in the glbs were the cause). Each placement now also gets a static
+Rapier box collider (addStaticBox) sized to the bbox and rotated by its yaw, so props
+block the player and bots. Dropped the manual y column from PROP_PLACEMENTS; added an
+optional `stack` value for the crate stacked on top. typecheck green.
