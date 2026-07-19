@@ -38,6 +38,7 @@ import { createRenderContext } from './render/renderer';
 import { makeSky } from './render/sky';
 import { applySurfaceTextures } from './render/surfacetex';
 import { createHud } from './ui/hud';
+import { createLoadingScreen } from './ui/loading';
 import { WEAPONS, type WeaponId } from './weapons/defs';
 import { createWeaponState, fireShot, startReload, tickWeapon, type WeaponState } from './weapons/hitscan';
 import { computeSpread, type Stance } from './weapons/spread';
@@ -199,6 +200,10 @@ async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#viewport');
   if (!canvas) throw new Error('missing #viewport canvas');
 
+  // Loading screen. Six real boot stages, one step() as each finishes; done()
+  // right before the loop starts, so the bar hits 100% only when we can spawn.
+  const loading = createLoadingScreen(document.body, 6);
+
   const renderCtx = createRenderContext(canvas);
   const input = createInputManager(canvas);
   // AudioContext starts suspended until a user gesture — the same click that
@@ -225,6 +230,7 @@ async function main(): Promise<void> {
   await initPhysics();
   const world = createWorld();
   buildMapColliders(world);
+  loading.step('Loading map…');
 
   // Map visuals: baked-lightmap glb (built by tools/blender/build_map.py) plus
   // procedural tiling surface detail (surfacetex.ts) and a gradient skybox
@@ -235,6 +241,7 @@ async function main(): Promise<void> {
   const mapRoot = await loadLightmappedMap(mapGlbUrl, mapKtx2Url, renderCtx.renderer);
   applySurfaceTextures(mapRoot);
   renderCtx.scene.add(mapRoot);
+  loading.step('Placing props…');
 
   // Decorative props scattered near the existing cover. Each gets a static box
   // collider from its measured footprint (see placeProps); dynamic prop bodies
@@ -250,7 +257,9 @@ async function main(): Promise<void> {
     if (breakables[i]) propByCollider.set(p.collider.handle, i);
   });
 
+  loading.step('Loading navmesh…');
   const nav = await loadNav(navUrl);
+  loading.step('Loading characters…');
 
   const spawn = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);
   // Face the player from their spawn toward the enemy spawn (the map), not the
@@ -321,6 +330,7 @@ async function main(): Promise<void> {
     });
   }
   const ctGltf = await new GLTFLoader().loadAsync(ctPlayerUrl);
+  loading.step('Loading weapons…');
   const ctTemplateScene = ctGltf.scene;
   const ctTemplateClips = ctGltf.animations;
   // We need the skinned mesh's skeleton alive on the loaded template so cloning
@@ -437,6 +447,7 @@ async function main(): Promise<void> {
       state: createWeaponState(WEAPONS.pistol),
     },
   };
+  loading.step('Ready');
   const slots: Record<number, WeaponId> = { 1: 'rifle', 2: 'pistol' };
   for (const held of Object.values(weapons)) {
     // Nest under a Group so the anim can offset the Group while each mesh keeps
@@ -473,6 +484,7 @@ async function main(): Promise<void> {
     return '';
   }
 
+  loading.done();
   startLoop({
     tick(fixedDt): void {
       prevView.position.copy(currView.position);

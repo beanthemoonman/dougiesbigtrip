@@ -1154,3 +1154,24 @@ source of truth (no localStorage — CLAUDE.md: may be embedded).
 - Params from doc spec (art-direction.md §Post-processing): threshold 0.9,
   strength 0.15, radius 0.4 — exported as `BLOOM` with spec-derived test
   `renderer.test.ts`. Only sky/muzzle-flash HDR (>1.0) blooms.
+
+## 2026-07-19 — Phase 5: Loading screen with real progress
+
+Next Phase 5 polish item. Boot was a black screen through ~1 s of async loading; now a
+progress bar tracks the real stages.
+
+- **`src/ui/loading.ts`** (new) — `createLoadingScreen(parent, totalSteps)` → a fixed
+  full-screen overlay (title + track/fill bar + status label). `step(label)` advances the
+  bar one stage and clamps at `totalSteps`; `done()` fills to 100%, fades, removes. CSS
+  transitions do the animation — no JS timer, no rAF.
+- **`src/main.ts`** — overlay created first thing in `main()` (6 steps). One `loading.step()`
+  after each discrete boot stage finishes: physics+world → map → props → navmesh → characters
+  → weapons. `loading.done()` fires immediately before `startLoop`. Weapons already load
+  before the loop starts, so they're preloaded before spawn; audio is synthesised (no files),
+  and the AudioContext stays lazy until the first click (can't create before a user gesture).
+- **No test** — DOM glue over a `Math.min` clamp; same call as `settings.ts`, no jsdom dep
+  pulled in for one non-branching UI knob (ponytail: the ladder says don't). The real boot
+  stages are exercised every run.
+- **Gate**: typecheck, lint, **124 tests** (unchanged), production build all green.
+- **Owed** (standing browser blocker): eyeball that the bar advances and fades on load.
+  A UI knob, not a feel-tuned surface — no ACC script.

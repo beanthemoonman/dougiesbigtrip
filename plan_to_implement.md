@@ -318,8 +318,20 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
       *what was hit* — bot→flesh, crate/pallet→wood, barrel/can→metal, else concrete — not in
       per-collider material data, which the abstract Rapier cuboids don't carry. `SURFACE_FX` table
       drives puff colour + whether a hole is stamped; `playImpact`/`playFootstep` vary by surface.)
-- [ ] Slight bloom, film grain off, sharp shadows only from the bake.
-- [ ] Loading screen with real progress. Preload weapon/audio before spawn.
+- [x] Slight bloom, film grain off, sharp shadows only from the bake.
+      (UnrealBloom via three's EffectComposer in `src/render/renderer.ts` — a custom
+      `ScenePass` keeps the two-pass world+viewmodel draw feeding a linear HDR buffer,
+      OutputPass does ACESFilmic+sRGB last. Spec-derived params from art-direction.md
+      §Post-processing: threshold 0.9, strength 0.15, radius 0.4, exported as `BLOOM`
+      with a T2 in `renderer.test.ts`; only sky/muzzle HDR (>1.0) blooms. No film grain;
+      shadows are baked-only (no realtime lights). Commit 5d6a8f8.)
+- [x] Loading screen with real progress. Preload weapon/audio before spawn.
+      (`src/ui/loading.ts` — a full-screen overlay with a step-granular progress bar,
+      advanced as each of the 6 real boot stages finishes (physics/world, map, props,
+      navmesh, characters, weapons). Weapons already load before `startLoop`, so they're
+      preloaded before spawn; audio is synthesised (no files → nothing to fetch), and the
+      AudioContext must stay lazy until the first user gesture. `done()` fades the overlay
+      out just before the loop starts. Step-granular not byte-granular per a ponytail note.)
 - [ ] `pnpm assets:opt`: Meshopt + KTX2/Basis. Verify the 16 MB budget.
 - [x] Settings: sensitivity, FOV (world), volume. Persist to a config object.
       (`src/core/settings.ts` — a `Settings` config object is the source of truth, no
