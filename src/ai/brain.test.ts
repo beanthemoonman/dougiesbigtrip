@@ -16,7 +16,7 @@ import { navFromBytes, type Nav } from './nav';
  */
 const DT = 1 / 64;
 const navBytes = new Uint8Array(
-  readFileSync(fileURLToPath(new URL('../../assets/maps/de_greybox.navmesh.bin', import.meta.url))),
+  readFileSync(fileURLToPath(new URL('../../assets/maps/de_douglas.navmesh.bin', import.meta.url))),
 );
 
 /** A floor so the bot stays grounded during the standing engage tests. */

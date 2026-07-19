@@ -1,9 +1,9 @@
 import { Box3, Color, FogExp2, Group, MathUtils, Mesh, MeshBasicMaterial, SkinnedMesh, type MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
-import mapGlbUrl from '../assets/maps/de_greybox.glb?url';
-import navUrl from '../assets/maps/de_greybox.navmesh.bin?url';
-import mapKtx2Url from '../assets/maps/de_greybox/lightmap.ktx2?url';
+import mapGlbUrl from '../assets/maps/de_douglas.glb?url';
+import navUrl from '../assets/maps/de_douglas.navmesh.bin?url';
+import mapKtx2Url from '../assets/maps/de_douglas/lightmap.ktx2?url';
 import ctPlayerUrl from '../assets/characters/ct_player.glb?url';
 import barrelUrl from '../assets/props/barrel_explosive.glb?url';
 import crateUrl from '../assets/props/crate_wood.glb?url';
@@ -24,7 +24,7 @@ import { makeRng } from './core/rng';
 import { type Breakable, damageProp } from './game/breakables';
 import { computeDamage } from './game/damage';
 import { hitboxAt, hitboxRay } from './game/hitbox';
-import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_greybox';
+import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_douglas';
 import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
 import { EYE_HEIGHT_STANDING } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
@@ -88,30 +88,36 @@ const BREAKABLE_HP = new Map<string, number>([
 // [url, x, z, yawDeg, stack] per prop. Each prop is dropped so its base rests on
 // the floor (y=0) from its measured bounding box, so mesh origins don't matter.
 // `stack` (metres, default 0) lifts a prop to sit on top of another (crate stack).
+// All placements clear the walled hole (x in [-9, inner curve], |z|<16) and sit
+// against the de_douglas cover: barrels/jerry by the west choke-B crates, crate
+// stacks by the choke-A crates, loose crates + a pallet in the east arc, cones
+// marking choke C and the connectors. Mirror-paired across z=0 like the map.
 const PROP_PLACEMENTS: readonly [string, number, number, number, number?][] = [
-  // Barrel + jerry-can clutter tucked against the flank cover crates.
-  [barrelUrl, -5.3, 15.8, 0],
-  [barrelUrl, -4.7, 16.9, 0],
-  [barrelUrl, -5.9, 16.6, 0],
-  [jerryUrl, -6.3, 16.3, 25],
-  [barrelUrl, 5.3, -15.8, 0],
-  [barrelUrl, 4.7, -16.9, 0],
-  [jerryUrl, 5.9, -16.2, -30],
-  // Crate stack by the mid pillars + loose crates in the centre lane.
-  [crateUrl, 5.0, 4.2, 12],
-  [crateUrl, 5.0, 4.2, -8, 0.7],
-  [crateUrl, -5.0, -4.2, 12],
-  [crateUrl, -1.9, 2.4, 20],
-  [crateUrl, 1.9, -2.4, 20],
-  // Pallets flat along the long west/east walls.
-  [palletUrl, 10.9, 6.0, 90],
-  [palletUrl, 10.9, -5.5, 90],
-  [palletUrl, -10.9, 5.5, 90],
-  // Traffic cones marking the mid choke.
-  [coneUrl, 0.9, 9.0, 0],
-  [coneUrl, -1.0, 5.5, 0],
-  [coneUrl, 1.3, -6.0, 0],
-  [coneUrl, -0.7, -9.0, 0],
+  // Barrel + jerry-can clutter tucked against the west choke-B crates.
+  [barrelUrl, -18.6, 4.4, 0],
+  [barrelUrl, -17.4, 4.9, 0],
+  [barrelUrl, -18.9, 5.7, 0],
+  [jerryUrl, -16.6, 5.1, 25],
+  [barrelUrl, -18.6, -4.4, 0],
+  [barrelUrl, -17.4, -4.9, 0],
+  [jerryUrl, -16.6, -5.1, -30],
+  // Crate stacks by the choke-A crates (both spine ends).
+  [crateUrl, -13.6, 12.4, 12],
+  [crateUrl, -13.6, 12.4, -8, 0.7],
+  [crateUrl, -13.6, -12.4, 12],
+  [crateUrl, -13.6, -12.4, -8, 0.7],
+  // Loose crates flanking the east arc centrepiece.
+  [crateUrl, 14.5, 2.6, 20],
+  [crateUrl, 14.5, -2.6, 20],
+  // Pallets flat against the west spine wall + east arc.
+  [palletUrl, -21, 8, 90],
+  [palletUrl, -21, -8, 90],
+  [palletUrl, 19, 0, 0],
+  // Traffic cones marking choke C (spine) and the connectors.
+  [coneUrl, -9.8, 2.5, 0],
+  [coneUrl, -9.8, -2.5, 0],
+  [coneUrl, 5, 19, 0],
+  [coneUrl, 5, -19, 0],
 ];
 
 // One placed prop: its scene mesh and static collider, so a shot that breaks it
@@ -345,17 +351,16 @@ async function main(): Promise<void> {
   ctTemplateScene.visible = false;
   renderCtx.scene.add(ctTemplateScene);
 
-  // Three CT spawns fanned across their end cover, each patrolling the open
-  // centre corridor (x in [-3, 3]) down toward T and back. The flanks hold cover
-  // (west crate cluster, east platform); the middle is the killing lane, so the
-  // bots contest it. findPath snaps each waypoint to the navmesh and routes
-  // around cover, so bots roam instead of standing at spawn. y is the
-  // walkable-surface height the nav query snaps to.
+  // Three CT bots spawn behind the CT spawn wall (west spine, +z end) and patrol
+  // out: one holds the dense spine chokepoints down toward T, one contests mid,
+  // one swings the sparse east curve flank. findPath snaps each waypoint to the
+  // navmesh and routes around cover, so bots roam instead of standing at spawn.
+  // y is the walkable-surface height the nav query snaps to.
   const F = CT_SPAWN[1];
   const botSpawns: { s: Vector3; patrol: Vector3[] }[] = [
-    { s: new Vector3(-2, F, 16), patrol: [new Vector3(-1, F, 8), new Vector3(-1, F, -8), new Vector3(-2, F, 16)] },
-    { s: new Vector3(0, F, CT_SPAWN[2]), patrol: [new Vector3(0, F, 10), new Vector3(0, F, -10), new Vector3(0, F, 17)] },
-    { s: new Vector3(4, F, 16), patrol: [new Vector3(2, F, 8), new Vector3(2, F, -8), new Vector3(4, F, 16)] },
+    { s: new Vector3(-18, F, 25), patrol: [new Vector3(-16, F, 14), new Vector3(-12, F, 4), new Vector3(-16, F, 24)] },
+    { s: new Vector3(-13, F, 26), patrol: [new Vector3(-8, F, 8), new Vector3(-4, F, 0), new Vector3(-10, F, 24)] },
+    { s: new Vector3(-10, F, 24), patrol: [new Vector3(6, F, 12), new Vector3(14, F, 0), new Vector3(-10, F, 22)] },
   ];
   const enemies: Enemy[] = botSpawns.map(({ s, patrol }) => {
     const bot = createBot(world, s);

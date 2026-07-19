@@ -1205,3 +1205,63 @@ progress bar tracks the real stages.
   - CC0 texture sets (still procedural)
   - Barrel blast radius, physics debris, polished anim blends
   - KTX2/Meshopt compression pipeline
+
+## Map redesign — "de_greybox" reshaped into a capital D (bigger, spine + curve)
+
+Replaced the old ~24×44 rotationally-symmetric greybox with a much larger
+(~44×60) capital-**D** arena, per the dev's spec:
+
+- **Shape**: straight WEST spine wall at x=-22 (z -30..30), closed by a half-
+  ellipse CURVE bulging EAST to x=22. T/CT spawn behind walls at the two ends of
+  the spine. Spine = dense chokepoint corridor (low walls, crate stacks, pillars);
+  curve = sparse open flank. Now MIRROR-symmetric across z=0 (the X axis) instead
+  of 180° rotational — so T half == CT half and the spawns mirror front-to-back.
+- **Yaw support added** to the box schema (optional `ry`, radians about Y) so the
+  curved wall renders as smooth angled segments, not a blocky staircase. Threaded
+  through `MapBox`/`mapCuboids` (colliders + nav tris) and `build_map.py`
+  (`make_box` already took a quat). Ramp path untouched.
+- **Generator**: `tools/maps/build_greybox.mjs` computes the parametric arc and
+  auto-mirrors the authored z>0 half — `de_greybox.json` is now generated, not
+  hand-typed. Regenerate with `node tools/maps/build_greybox.mjs`.
+- **Tests**: rewrote `map_greybox.test.ts` (rotational→mirror symmetry, spine/curve
+  invariants); fixed `movement_map.test.ts` crate-face regression to point at the
+  new choke-C crate. All 124 green.
+- **Bakes re-run**: `pnpm nav:bake` (navmesh), Blender `build_all()` (glb +
+  lightmap.exr, verified D-shape top-down), `pnpm assets:lightmap` (→ ktx2).
+- **Bots**: moved the 3 CT spawns/patrols in `main.ts` from the old open mid to
+  behind the CT spawn wall, pushing down the spine / swinging the curve.
+
+Files: src/game/map_greybox.ts, src/game/map_greybox.test.ts,
+src/player/movement_map.test.ts, src/main.ts, tools/blender/build_map.py,
+tools/maps/build_greybox.mjs, assets/maps/de_greybox.{json,glb},
+assets/maps/de_greybox/{lightmap.exr,lightmap_ldr.png,lightmap.ktx2},
+assets/maps/de_greybox.navmesh.bin
+
+## de_douglas — added the D's hole (counter) + renamed from de_greybox
+
+Per the dev: carve the letter D's inner counter (the "hole") and rename the map.
+
+- **The hole**: added a smaller, walled inner-D COUNTER (west wall x=-9, z±16,
+  apex x=10) inside the outer D. The interior is a sealed island, so the play
+  space is now a LOOP: the dense WEST SPINE corridor is the direct T↔CT lane,
+  the sparse EAST ARC is the long flank around the hole. Verified top-down in
+  Blender.
+- **Obstacle redistribution**: cover was clustered in the west corridor; spread
+  it around the whole loop at ~6 m intervals with alternating gap sides — 3
+  staggered west-spine chokes, cover at both N/S connectors, and along the east
+  arc. Added a validator (in the generator run) asserting no box is trapped in
+  the hole or outside the outer wall. Repositioned the decorative props in
+  main.ts (barrels/crates/pallets/cones), which were still on the old tiny-map
+  coords (several inside the new hole), onto the new cover, mirror-paired.
+- **Rename** de_greybox → de_douglas (D for Douglas) across the codebase:
+  src/game/map_greybox.ts → map_douglas.ts (+ test), the JSON, glb, navmesh,
+  lightmap dir, generator (build_douglas.mjs), build_map.py paths + object/image
+  names, package.json scripts, nav bake, CREDITS, docs, and the movement/nav/bot
+  test imports. No `greybox` map-name references remain.
+- **Bakes re-run**: nav (66,648 B), Blender build_all (glb + lightmap.exr),
+  assets:lightmap (→ ktx2). 124 tests green, typecheck + build clean.
+
+Files: src/game/map_douglas.{ts,test.ts}, src/main.ts, src/player/movement_map.test.ts,
+src/ai/{nav,bot,brain}.test.ts, tools/maps/build_douglas.mjs, tools/blender/build_map.py,
+tools/navbake/bake.ts, package.json, assets/CREDITS.md, docs/*, tests/acceptance/ACC-007-*,
+assets/maps/de_douglas.* (json/glb/navmesh + lightmap.{exr,ktx2,png})

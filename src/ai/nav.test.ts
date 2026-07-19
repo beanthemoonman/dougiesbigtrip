@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
-import { CT_SPAWN, T_SPAWN } from '../game/map_greybox';
+import { CT_SPAWN, T_SPAWN } from '../game/map_douglas';
 import { findPath, navFromBytes } from './nav';
 
 // T1: the baked navmesh must actually span the map. If the bake produced a
@@ -10,10 +10,10 @@ import { findPath, navFromBytes } from './nav';
 // spawn-to-spawn fails — the classic recast misconfiguration. Bake first:
 // `pnpm nav:bake`.
 const bytes = new Uint8Array(
-  readFileSync(fileURLToPath(new URL('../../assets/maps/de_greybox.navmesh.bin', import.meta.url))),
+  readFileSync(fileURLToPath(new URL('../../assets/maps/de_douglas.navmesh.bin', import.meta.url))),
 );
 
-describe('nav: baked de_greybox navmesh', () => {
+describe('nav: baked de_douglas navmesh', () => {
   it('paths from T spawn to CT spawn', async () => {
     const nav = await navFromBytes(bytes);
     const from = new Vector3(T_SPAWN[0], T_SPAWN[1], T_SPAWN[2]);

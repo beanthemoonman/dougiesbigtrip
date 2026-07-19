@@ -1,11 +1,11 @@
 /**
- * Offline recast bake: de_greybox collision triangles -> navmesh.bin.
+ * Offline recast bake: de_douglas collision triangles -> navmesh.bin.
  *
  * Run: `pnpm nav:bake`. Bake OFFLINE, ship the binary, query with Detour at
  * runtime (docs/navmesh-pipeline.md) — never bake at load time.
  *
  * The doc's example collects `UCX_` collision meshes out of the glb, but this
- * map's collision is authored as cuboid data (src/game/map_greybox.ts), not a
+ * map's collision is authored as cuboid data (src/game/map_douglas.ts), not a
  * collision mesh in the glb. So we bake the SAME triangles the player collides
  * with (collisionTriangles()) — nav and physics can't diverge.
  *
@@ -16,7 +16,7 @@ import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { init } from 'recast-navigation';
 import { generateSoloNavMesh } from 'recast-navigation/generators';
-import { collisionTriangles } from '../../src/game/map_greybox';
+import { collisionTriangles } from '../../src/game/map_douglas';
 import { PLAYER_RADIUS, STANDING_HEIGHT, STEP_HEIGHT } from '../../src/player/constants';
 
 const CS = 0.15; // cell size, m (~ agentRadius / 2.7)
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
 
   const { exportNavMesh } = await import('recast-navigation');
   const bin = exportNavMesh(navMesh);
-  const out = fileURLToPath(new URL('../../assets/maps/de_greybox.navmesh.bin', import.meta.url));
+  const out = fileURLToPath(new URL('../../assets/maps/de_douglas.navmesh.bin', import.meta.url));
   writeFileSync(out, bin);
   console.log(`baked ${bin.byteLength} bytes -> ${out}`);
 }

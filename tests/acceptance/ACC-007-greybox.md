@@ -13,7 +13,7 @@ step here is look/movement dependent).
 - **Tester:** Alexander Bean Apmann  **Date:** 2026-07-18  **Commit:** 4725ae4  **Result:** ✅ PASS
 - **Re-run (post-texture/prop pass):** Alexander Bean Apmann  **Date:** 2026-07-19  **Commit:** 0e71ae2  **Result:** ✅ PASS
 
-Map: `de_greybox` (`src/game/map_greybox.ts`). You spawn at **T** (south). The **site** is the
+Map: `de_douglas` (`src/game/map_douglas.ts`). You spawn at **T** (south). The **site** is the
 open area to the north; **CT** hold is behind it.
 
 ## Steps

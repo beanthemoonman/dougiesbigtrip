@@ -1,7 +1,7 @@
 import { Vector3 } from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Buttons } from '../core/input';
-import { buildMapColliders } from '../game/map_greybox';
+import { buildMapColliders } from '../game/map_douglas';
 import { createWorld, initPhysics } from '../physics/world';
 import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './movement';
 
@@ -40,19 +40,19 @@ describe('movement vs greybox colliders', () => {
     const world = createWorld();
     buildMapColliders(world);
 
-    // South of the mid wood crate at c=[-3,·,3.5] s=1.5 (south face z=2.75). Run
-    // +Z (yaw=π) up to speed, jump, and keep pushing into the crate.
-    const spawn = new Vector3(-3, 0.05, -1.0);
+    // South of the choke-A wood crate at c=[-12,·,13] s=1.5 (south face z=12.25).
+    // Run +Z (yaw=π) up to speed, jump, and keep pushing into the crate.
+    const spawn = new Vector3(-12, 0.05, 9.0);
     const ctx = createMovementContext(world, spawn);
     const player = createPlayerState(spawn);
     run(ctx, player, Math.PI, 120, 25);
 
-    // Pre-fix: y frozen at ~0.62 with vy accelerating past -30. Post-fix: the
+    // Pre-fix: y frozen mid-air with vy accelerating past -30. Post-fix: the
     // player slides down the face and rests on the floor (top y=0).
     expect(player.position.y).toBeLessThan(0.15); // landed, not pinned mid-air
     expect(Math.abs(player.velocity.y)).toBeLessThan(GRAVITY_TERMINAL); // not accumulating
     // Never tunnelled into the crate: front of the capsule stays south of the face.
-    expect(player.position.z).toBeLessThan(2.75);
+    expect(player.position.z).toBeLessThan(12.25);
   });
 
 

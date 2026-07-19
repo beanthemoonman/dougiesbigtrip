@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "nav:bake": "tsx tools/navbake/bake.ts",
-    "assets:lightmap": "oiiotool assets/maps/de_greybox/lightmap.exr --clamp:min=0:max=1 -d uint8 -o assets/maps/de_greybox/lightmap_ldr.png && toktx --t2 --encode uastc --uastc_quality 3 --zcmp 18 --assign_oetf linear assets/maps/de_greybox/lightmap.ktx2 assets/maps/de_greybox/lightmap_ldr.png"
+    "assets:lightmap": "oiiotool assets/maps/de_douglas/lightmap.exr --clamp:min=0:max=1 -d uint8 -o assets/maps/de_douglas/lightmap_ldr.png && toktx --t2 --encode uastc --uastc_quality 3 --zcmp 18 --assign_oetf linear assets/maps/de_douglas/lightmap.ktx2 assets/maps/de_douglas/lightmap_ldr.png"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

@@ -1,9 +1,9 @@
-# Build + lightmap-bake the greybox map from assets/maps/de_greybox.json.
+# Build + lightmap-bake the greybox map from assets/maps/de_douglas.json.
 #
 # Reads the SAME layout JSON the engine uses for colliders, so the baked render
 # geometry aligns with the Rapier cuboids. Produces:
-#   assets/maps/de_greybox.glb            (geometry + UVMap + UVMap_Lightmap)
-#   assets/maps/de_greybox/lightmap.exr   (baked diffuse lighting, no albedo)
+#   assets/maps/de_douglas.glb            (geometry + UVMap + UVMap_Lightmap)
+#   assets/maps/de_douglas/lightmap.exr   (baked diffuse lighting, no albedo)
 #
 # Baked lighting only — zero realtime lights ship (docs/blender-pipeline.md).
 # Run inside Blender: exec(open('.../tools/blender/build_map.py').read()); build_all()
@@ -18,9 +18,9 @@ import os
 import bpy
 
 REPO = "/home/upmoon/Development/dougysbigtrip"
-JSON_PATH = os.path.join(REPO, "assets/maps/de_greybox.json")
-GLB_PATH = os.path.join(REPO, "assets/maps/de_greybox.glb")
-EXR_PATH = os.path.join(REPO, "assets/maps/de_greybox/lightmap.exr")
+JSON_PATH = os.path.join(REPO, "assets/maps/de_douglas.json")
+GLB_PATH = os.path.join(REPO, "assets/maps/de_douglas.glb")
+EXR_PATH = os.path.join(REPO, "assets/maps/de_douglas/lightmap.exr")
 LM_SIZE = 1024
 BAKE_SAMPLES = 128  # iteration bake; bump to 2048 for the final.
 
@@ -91,7 +91,9 @@ def build_geometry():
     for i, b in enumerate(data["boxes"]):
         c, s = b["c"], b["s"]
         half = (s[0] / 2, s[1] / 2, s[2] / 2)
-        objs.append(make_box(f"box_{i}", c, half, b["color"], b["surface"]))
+        ry = b.get("ry", 0.0)  # yaw about three-Y (curved D wall segments)
+        q = (0.0, math.sin(ry / 2), 0.0, math.cos(ry / 2))
+        objs.append(make_box(f"box_{i}", c, half, b["color"], b["surface"], q))
     for i, r in enumerate(data["ramps"]):
         st, en = r["start"], r["end"]
         dx, dy = en[0] - st[0], en[1] - st[1]
@@ -112,7 +114,7 @@ def build_geometry():
     bpy.context.view_layer.objects.active = objs[0]
     bpy.ops.object.join()
     m = bpy.context.view_layer.objects.active
-    m.name = "de_greybox"
+    m.name = "de_douglas"
     # Recalc normals outward.
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
@@ -173,9 +175,9 @@ def setup_lighting():
     nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
 
 def setup_bake_targets(obj):
-    lm = bpy.data.images.get("LM_de_greybox")
+    lm = bpy.data.images.get("LM_de_douglas")
     if lm is None:
-        lm = bpy.data.images.new("LM_de_greybox", width=LM_SIZE, height=LM_SIZE, float_buffer=True)
+        lm = bpy.data.images.new("LM_de_douglas", width=LM_SIZE, height=LM_SIZE, float_buffer=True)
     for slot in obj.material_slots:
         mat = slot.material
         nt = mat.node_tree
@@ -207,7 +209,7 @@ def do_bake(obj):
 
 def save_exr():
     os.makedirs(os.path.dirname(EXR_PATH), exist_ok=True)
-    lm = bpy.data.images["LM_de_greybox"]
+    lm = bpy.data.images["LM_de_douglas"]
     lm.filepath_raw = EXR_PATH
     lm.file_format = "OPEN_EXR"
     lm.save()

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Vector3 } from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildMapColliders, CT_SPAWN, T_SPAWN } from '../game/map_greybox';
+import { buildMapColliders, CT_SPAWN, T_SPAWN } from '../game/map_douglas';
 import { createWorld, initPhysics } from '../physics/world';
 import { atGoal, createBot, setGoal, tickBot } from './bot';
 import { navFromBytes, type Nav } from './nav';
@@ -17,7 +17,7 @@ import { navFromBytes, type Nav } from './nav';
 const DT = 1 / 64;
 
 const navBytes = new Uint8Array(
-  readFileSync(fileURLToPath(new URL('../../assets/maps/de_greybox.navmesh.bin', import.meta.url))),
+  readFileSync(fileURLToPath(new URL('../../assets/maps/de_douglas.navmesh.bin', import.meta.url))),
 );
 
 describe('bot: nav-driven movement across the greybox', () => {
