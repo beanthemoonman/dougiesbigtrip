@@ -10,13 +10,17 @@
  * plus a reaction delay + aim error + turn-rate cap is what makes them beatable
  * and not-free, never an aimbot. All randomness comes from the injected seeded
  * rng (determinism rule).
+ *
+ * Phase 6.2: movement application (sim_tick) is the caller's responsibility.
+ * The brain only returns the desired buttons+yaw; the caller feeds them to the
+ * WASM sim and syncs state back into Bot.
  */
 import type { World } from '@dimforge/rapier3d-compat';
 import { Vector3 } from 'three';
 import type { Rng } from '../core/rng';
 import { EYE_HEIGHT_STANDING } from '../player/constants';
 import { desiredYawPitch, onTarget, stepAim, type AimState } from './aim';
-import { tickBot, type Bot } from './bot';
+import { botInput, type Bot } from './bot';
 import { findPath, type Nav } from './nav';
 import { canSee } from './perception';
 
@@ -91,20 +95,28 @@ const eye = new Vector3();
 const aimPoint = new Vector3();
 const desired: AimState = { yaw: 0, pitch: 0 };
 
+/** Result of one brain tick — the caller applies movement via sim_tick. */
+export interface TickResult {
+  fire: boolean;
+  /** WASM sim_tick buttons bitmask. */
+  buttons: number;
+  /** WASM sim_tick yaw (radians). */
+  yaw: number;
+}
+
 function acquire(brain: BotBrain, rng: Rng, targetFeet: Vector3): void {
   brain.mode = 'engage';
   brain.reactionTimer = brain.cfg.reactionTime;
   brain.lastKnown = targetFeet.clone();
-  // Resample aim error once per acquisition so it's steady during the burst,
-  // not jittering every tick.
   const r = brain.cfg.errorRadius;
   brain.errorOffset.set((rng.next() - 0.5) * 2 * r, (rng.next() - 0.5) * 2 * r, (rng.next() - 0.5) * 2 * r);
 }
 
 /**
  * One AI tick. Perceives `targetFeet` (the player), updates the FSM, aims, and
- * drives movement. Returns whether the bot wants to fire this tick — the caller
- * owns the actual shot (hitscan/damage), so the FSM stays decoupled from combat.
+ * synthesises a movement input. Returns whether the bot wants to fire this tick
+ * plus the buttons+yaw to feed to sim_tick — the caller owns the actual shot
+ * (hitscan/damage) and the WASM movement call.
  */
 export function tickBrain(
   brain: BotBrain,
@@ -114,12 +126,12 @@ export function tickBrain(
   targetFeet: Vector3,
   targetAlive: boolean,
   dt: number,
-): { fire: boolean } {
+): TickResult {
   const { bot, cfg } = brain;
-  if (brain.mode === 'dead') return { fire: false };
+  if (brain.mode === 'dead') return { fire: false, buttons: 0, yaw: bot.yaw };
 
   const sees =
-    targetAlive && canSee(world, bot.state.position, brain.aim.yaw, targetFeet, bot.ctx.collider);
+    targetAlive && canSee(world, bot.position, brain.aim.yaw, targetFeet, bot.collider);
 
   let fire = false;
 
@@ -139,7 +151,6 @@ export function tickBrain(
       if (sees) {
         brain.lastKnown = targetFeet.clone();
       } else {
-        // Lost LOS — go to where they were last seen.
         brain.mode = 'reposition';
         brain.lostTimer = 0;
       }
@@ -151,10 +162,10 @@ export function tickBrain(
 
   // --- Act on the (possibly new) mode ---
   if (brain.mode === 'engage') {
-    // Stand and aim: clear any movement goal so tickBot presses nothing.
+    // Stand and aim: clear any movement goal so botInput presses nothing.
     bot.path = [];
     bot.waypoint = 0;
-    eye.set(bot.state.position.x, bot.state.position.y + EYE_HEIGHT_STANDING, bot.state.position.z);
+    eye.set(bot.position.x, bot.position.y + EYE_HEIGHT_STANDING, bot.position.z);
     aimPoint.copy(targetFeet).add(brain.errorOffset);
     aimPoint.y += EYE_HEIGHT_STANDING;
     desiredYawPitch(eye, aimPoint, desired);
@@ -165,19 +176,18 @@ export function tickBrain(
       fire = onTarget(brain.aim, desired.yaw, desired.pitch, FIRE_TOL);
     }
     bot.yaw = brain.aim.yaw;
-    tickBot(bot, dt);
-    return { fire };
+    return { fire, buttons: 0, yaw: bot.yaw };
   }
 
-  // Moving states: pick/refresh a goal, walk it, keep aim looking where we go.
+  // Moving states: pick/refresh a goal, walk it.
   const goal = pickGoal(brain, nav);
   if (goal) {
     bot.path = goal;
     bot.waypoint = 0;
   }
-  tickBot(bot, dt);
+  const input = botInput(bot);
   brain.aim.yaw = bot.yaw; // aim follows movement facing while roaming
-  return { fire: false };
+  return { fire: false, buttons: input.buttons, yaw: input.yaw };
 }
 
 /**
@@ -190,12 +200,8 @@ function pickGoal(brain: BotBrain, nav: Nav): Vector3[] | null {
 
   if ((brain.mode === 'investigate' || brain.mode === 'reposition') && brain.lastKnown) {
     if (bot.path.length === 0) {
-      // No corridor yet — try to path to the last-known spot.
-      const p = findPath(nav, bot.state.position, brain.lastKnown);
+      const p = findPath(nav, bot.position, brain.lastKnown);
       if (p.length > 1) return p;
-      // Can't reach it. Reposition holds its ground and lets lostTimer give up
-      // (so it doesn't teleport back to idle the instant pathing fails);
-      // Investigate has no such timer, so it shrugs and resumes idle.
       if (brain.mode === 'investigate') {
         brain.mode = 'idle';
         brain.lastKnown = null;
@@ -203,7 +209,6 @@ function pickGoal(brain: BotBrain, nav: Nav): Vector3[] | null {
       return null;
     }
     if (bot.waypoint >= bot.path.length) {
-      // Arrived and still nothing → give up, resume idle.
       brain.mode = 'idle';
       brain.lastKnown = null;
     }
@@ -215,7 +220,7 @@ function pickGoal(brain: BotBrain, nav: Nav): Vector3[] | null {
   if (bot.waypoint >= bot.path.length) {
     const next = brain.patrol[brain.patrolIndex % brain.patrol.length];
     brain.patrolIndex++;
-    return next ? findPath(nav, bot.state.position, next) : null;
+    return next ? findPath(nav, bot.position, next) : null;
   }
   return null;
 }

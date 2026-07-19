@@ -1492,4 +1492,42 @@ respawn), claude_changelog.md
 
 ## Phase 6.7 plan: connect UI + Tab scoreboard
 - New doc `docs/connect-and-scoreboard.md`: plain-DOM connect overlay (default ws://127.0.0.1:9876 prefilled) + held-Tab 3v3 scoreboard with client-side K/D from kill events. Includes DoD (T0/T2/T3) and named wire-format gaps (names on wire, real 3v3 server).
+
+## Phase 6.2 complete: bots on WASM sim
+
+### Bugfix (before 6.2 completion)
+- `sim_init` was called *after* `sim_add_box`/`sim_add_ramp` in main.ts, so map colliders fell into `None` — the WASM world had no ground. Player fell through the floor on game start.
+- `respawn()` called `sim_init` which destroyed the world (including colliders) on every respawn.
+- Fix: moved `sim_init` before collider-loading loops; added `sim_reset_player` (Rust `PlayerState::reset`) that resets position/velocity without touching the world; use it in `respawn()` instead of `sim_init`.
+
+### Rust: multi-player SIM
+- Refactored `SIM` from `Mutex<Option<(SimWorld, PlayerState)>>` to `Mutex<Option<(SimWorld, Vec<PlayerState>)>>` — index 0 = human, 1+ = bots.
+- Added `sim_add_player`, `sim_remove_player` WASM bindings.
+- All `sim_tick`, `sim_get_state`, `sim_reset_player` now take `index: number` as first arg.
+- Human (index 0) gets `exclude = Some(world.player_collider_handle())` for shapecasts; bots get `exclude = None` (no kinematic bodies in WASM world — they only collide with map geometry).
+- `tick_movement`, `try_player_move`, `step_move`, `categorize_position`, `trace_straight`, `handle_duck` all accept `exclude: Option<ColliderHandle>`.
+- `shapecast` functions (`capsule_cast`, `capsule_overlaps_anything`, `ray_cast`) changed from `ColliderHandle` to `Option<ColliderHandle>`.
+- 19 Rust tests green.
+
+### TS: bot.ts / brain.ts / main.ts
+- `bot.ts`: New `Bot` interface — flat fields (`position`, `velocity`, `onGround`, `eyeHeight`, `duckAmount`, `collider`, `wasmIndex`). No more `ctx: MovementContext` or `state: PlayerState`. `createBot(world, spawn, wasmIndex)` creates a TS kinematic body for hitdet/perception. `botInput(bot)` returns `{ buttons, yaw }` — movement is the caller's job. Removed `tickBot`.
+- `brain.ts`: `tickBrain` now returns `TickResult { fire, buttons, yaw }` instead of calling `tickBot` internally. The caller feeds `sim_tick(index, buttons, yaw)`. `canSee` uses `bot.collider` (not `bot.ctx.collider`), reads `bot.position` (not `bot.state.position`).
+- `main.ts`: Bot creation calls `sim_add_player` to get a WASM slot → passes to `createBot`. Tick loop calls `tickBrain` → gets `{ fire, buttons, yaw }` → calls `sim_tick(bot.wasmIndex, buttons, yaw)` → syncs result into `bot.position`/`bot.velocity`/`bot.onGround` → syncs TS kinematic body. Respawn calls `sim_reset_player(b.wasmIndex, ...)` for each bot. Updated all `.ctx.collider` → `.collider`, `.state.position` → `.position` references.
+- `sim_reset_player(0, ...)` for human player respawn.
+- TS kinematic body sync: after WASM tick, `b.collider.setTranslation(bodyCenterScratch)` so TS hit-detection is up-to-date.
+
+### Tests
+- `bot.test.ts`: Rewritten to use WASM sim — loads map colliders into WASM world, walks bot from T spawn to CT spawn via `sim_tick` + `botInput`, verifies ground bounds, verifies goal reached.
+- `brain.test.ts`: `createBot(world, spawn, 1)` with explicit wasmIndex. FSM logic unchanged.
+- `movement_wasm_full.test.ts`: Updated `sim_tick(0, buttons, yaw)` and `sim_get_state(0)` for new indexed API.
+- All 150 JS tests + 19 Rust tests green. `pnpm typecheck` green. `pnpm build` succeeds.
+
+### Remaining (Phase 6.2 cleanup)
+- TS movement files (`src/player/movement.ts`, `constants.ts`, `src/physics/shapecast.ts`, `world.ts`, `rng.ts`) still exist — imported by main.ts for human player kinematic body and `PlayerState` type. These will be torn out in a follow-up once the human body sync is also migrated.
+- The `src/ai/anim.ts`, `render/` modules, `ui/` modules unaffected — they only read synced bot state.
+- Ready for manual playtest of bot movement.
 - Added phase 6.7 to `docs/netcode.md` §9 increment plan. Slotted after 6.6 (not the requested 6.5, which is taken by Full-AI) because the K/D feed depends on 6.6's kill events.
+
+## Black-screen fix + review (Phase 6.2 uncommitted)
+- **Root cause of black screen: stale Vite dep-optimizer cache.** `node_modules/.vite/deps/sim-wasm.js` had been pre-bundled before the Rust WASM crate exported `sim_add_player` / the indexed `sim_tick(index, …)` API, so `main.ts` threw `SyntaxError: … does not provide an export named 'sim_add_player'` at import and never rendered. The rebuilt `sim/pkg` was correct; only Vite's cache was stale. Fixed by clearing `node_modules/.vite` and restarting dev. No source change required.
+- Reviewed the uncommitted Phase 6.2 diff (Rust multi-player sim + TS bot/brain/main rewire): exclude-handle threading (`Option<ColliderHandle>`), indexed player vector, and bot WASM↔TS-body sync are all correct and internally consistent. 150 JS + 19 Rust tests green, `pnpm typecheck` green, app verified rendering in-browser with a clean console.

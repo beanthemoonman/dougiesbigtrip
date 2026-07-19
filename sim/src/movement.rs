@@ -6,6 +6,7 @@
 /// See docs/source-movement.md for the derivation of every formula here.
 /// Do not "improve" — these are a port, not an invention.
 use nalgebra::Vector3;
+use rapier3d::prelude::ColliderHandle;
 
 use crate::constants::*;
 use crate::shapecast;
@@ -178,10 +179,10 @@ fn categorize_position(
     radius: f64,
     feet: &Vector3<f64>,
     out_normal: &mut Vector3<f64>,
+    exclude: Option<ColliderHandle>,
 ) -> bool {
     let center = capsule_center_from_feet(feet, half_height, radius);
     let mut hit_normal = Vector3::zeros();
-    let exclude = world.player_collider_handle();
 
     // Always use standing_shape for ground probe — shape is identity-rotated
     // Y-up capsule with the same radius, just different half-height. The
@@ -212,9 +213,9 @@ fn trace_straight(
     feet: &mut Vector3<f64>,
     displacement: &Vector3<f64>,
     out_normal: &mut Vector3<f64>,
+    exclude: Option<ColliderHandle>,
 ) -> Option<f64> {
     let center = capsule_center_from_feet(feet, half_height, radius);
-    let exclude = world.player_collider_handle();
 
     let fraction = shapecast::capsule_cast(
         &world.physics,
@@ -246,6 +247,7 @@ fn try_player_move(
     feet: &mut Vector3<f64>,
     velocity: &mut Vector3<f64>,
     dt: f64,
+    exclude: Option<ColliderHandle>,
 ) {
     let mut remaining = dt;
     let mut plane_count: usize = 0;
@@ -265,7 +267,6 @@ fn try_player_move(
         let displacement = *velocity * remaining;
         let center = capsule_center_from_feet(feet, half_height, radius);
 
-        let exclude = world.player_collider_handle();
         let mut hit_normal = Vector3::zeros();
 
         let fraction = shapecast::capsule_cast(
@@ -347,22 +348,23 @@ fn step_move(
     radius: f64,
     state: &mut PlayerState,
     dt: f64,
+    exclude: Option<ColliderHandle>,
 ) {
     let start_pos = state.position;
 
     // Trace 1: down path
     let mut down_pos = start_pos;
     let mut down_vel = state.velocity;
-    try_player_move(world, half_height, radius, &mut down_pos, &mut down_vel, dt);
+    try_player_move(world, half_height, radius, &mut down_pos, &mut down_vel, dt, exclude);
 
     // Trace 2: step up
     let mut up_pos = start_pos;
     let step_disp = Vector3::new(0.0, STEP_HEIGHT, 0.0);
     let mut dummy_normal = Vector3::zeros();
-    trace_straight(world, half_height, radius, &mut up_pos, &step_disp, &mut dummy_normal);
+    trace_straight(world, half_height, radius, &mut up_pos, &step_disp, &mut dummy_normal, exclude);
 
     let mut up_vel = state.velocity;
-    try_player_move(world, half_height, radius, &mut up_pos, &mut up_vel, dt);
+    try_player_move(world, half_height, radius, &mut up_pos, &mut up_vel, dt, exclude);
 
     // Trace 3: step down
     let step_down = Vector3::new(0.0, -STEP_HEIGHT, 0.0);
@@ -371,6 +373,7 @@ fn step_move(
         world, half_height, radius,
         &mut up_pos, &step_down,
         &mut down_normal,
+        exclude,
     );
     let walkable = down_fraction.is_some() && down_normal.y >= GROUND_NORMAL_THRESHOLD;
 
@@ -392,6 +395,7 @@ fn handle_duck(
     want_duck: bool,
     on_ground: bool,
     dt: f64,
+    exclude: Option<ColliderHandle>,
 ) {
     if want_duck && !state.ducked {
         if !on_ground {
@@ -407,7 +411,6 @@ fn handle_duck(
         let check_feet = Vector3::new(state.position.x, candidate_y, state.position.z);
         let check_center = capsule_center_from_feet(&check_feet, STANDING_HALF_HEIGHT, PLAYER_RADIUS);
 
-        let exclude = world.player_collider_handle();
         let blocked = shapecast::capsule_overlaps_anything(
             &world.physics,
             &*world.standing_shape,
@@ -451,13 +454,12 @@ pub fn tick_movement(
     buttons: u16,
     yaw: f64,
     dt: f64,
+    exclude: Option<ColliderHandle>,
 ) {
     world.ensure_broad_phase_ready();
     let (wish_x, wish_z) = crate::input::wish_dir_from_buttons(buttons, yaw);
     let wishdir = Vector3::new(wish_x, 0.0, wish_z);
 
-    // Use standing shape for most queries (same radius, different half-height
-    // doesn't matter for shapecast since radius is what hits walls).
     let half_height = if state.ducked {
         DUCKED_HALF_HEIGHT
     } else {
@@ -466,7 +468,7 @@ pub fn tick_movement(
 
     let mut ground_normal = Vector3::zeros();
     let grounded_at_start =
-        categorize_position(world, half_height, PLAYER_RADIUS, &state.position, &mut ground_normal);
+        categorize_position(world, half_height, PLAYER_RADIUS, &state.position, &mut ground_normal, exclude);
     state.on_ground = grounded_at_start;
     if grounded_at_start {
         state.ground_normal = ground_normal;
@@ -475,7 +477,7 @@ pub fn tick_movement(
     }
 
     let want_duck = (buttons & crate::input::Buttons::DUCK) != 0;
-    handle_duck(world, state, want_duck, state.on_ground, dt);
+    handle_duck(world, state, want_duck, state.on_ground, dt, exclude);
 
     let jump_pressed = (buttons & crate::input::Buttons::JUMP) != 0;
     check_jump(state, jump_pressed);
@@ -518,9 +520,9 @@ pub fn tick_movement(
     };
 
     if state.on_ground {
-        step_move(world, half_height, PLAYER_RADIUS, state, dt);
+        step_move(world, half_height, PLAYER_RADIUS, state, dt, exclude);
     } else {
-        try_player_move(world, half_height, PLAYER_RADIUS, &mut state.position, &mut state.velocity, dt);
+        try_player_move(world, half_height, PLAYER_RADIUS, &mut state.position, &mut state.velocity, dt, exclude);
     }
 
     let mut post_ground_normal = Vector3::zeros();
@@ -530,6 +532,7 @@ pub fn tick_movement(
         PLAYER_RADIUS,
         &state.position,
         &mut post_ground_normal,
+        exclude,
     );
     state.on_ground = grounded_after;
     if grounded_after {
@@ -693,8 +696,9 @@ mod world_tests {
 
         world.add_static_box(0.0, -0.5, 0.0, 50.0, 0.5, 50.0, 0.0);
 
+        let exclude = Some(world.player_collider_handle());
         for _ in 0..32 {
-            tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT);
+            tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT, exclude);
         }
 
         assert!(state.on_ground, "player should be on ground after falling");
@@ -711,13 +715,14 @@ mod world_tests {
 
         world.add_static_box(0.0, -0.5, 0.0, 50.0, 0.5, 50.0, 0.0);
 
+        let exclude = Some(world.player_collider_handle());
         for _ in 0..32 {
-            tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT);
+            tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT, exclude);
         }
         assert!(state.on_ground, "should be grounded before movement");
 
         for _ in 0..32 {
-            tick_movement(&mut world, &mut state, 8, 0.0, FIXED_DT);
+            tick_movement(&mut world, &mut state, 8, 0.0, FIXED_DT, exclude);
         }
 
         assert!(state.on_ground, "should still be on ground");

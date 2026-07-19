@@ -36,7 +36,7 @@ describe('brain FSM', () => {
   it('acquires a visible target, waits out the reaction delay, then fires', () => {
     const world = worldWithFloor();
     world.step();
-    const bot = createBot(world, new Vector3(0, 0.05, 0));
+    const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.normal);
     const rng = makeRng(1);
     const target = new Vector3(0, 0.05, -5); // straight ahead, in the open
@@ -60,7 +60,7 @@ describe('brain FSM', () => {
     const world = worldWithFloor();
     addStaticBox(world, { x: 0, y: 1, z: -2.5 }, { x: 3, y: 2, z: 0.25 }); // wall
     world.step();
-    const bot = createBot(world, new Vector3(0, 0.05, 0));
+    const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.hard);
     const rng = makeRng(2);
     const target = new Vector3(0, 0.05, -5);
@@ -74,7 +74,7 @@ describe('brain FSM', () => {
   it('loses a target that dies mid-engage and gives up to idle', () => {
     const world = worldWithFloor();
     world.step();
-    const bot = createBot(world, new Vector3(0, 0.05, 0));
+    const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.easy);
     const rng = makeRng(3);
     const target = new Vector3(0, 0.05, -5);
@@ -96,7 +96,7 @@ describe('brain FSM', () => {
   it('a heard sound switches an idle bot to investigate', () => {
     const world = worldWithFloor();
     world.step();
-    const bot = createBot(world, new Vector3(0, 0.05, 0));
+    const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.normal);
     hearSound(brain, new Vector3(0, 0.05, -5));
     expect(brain.mode).toBe('investigate');
@@ -106,7 +106,7 @@ describe('brain FSM', () => {
   it('Dead is terminal: no fire, no state change', () => {
     const world = worldWithFloor();
     world.step();
-    const bot = createBot(world, new Vector3(0, 0.05, 0));
+    const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.hard);
     const rng = makeRng(4);
     killBot(brain);

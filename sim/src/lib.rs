@@ -132,9 +132,9 @@ mod wasm_bindings {
     use crate::world::SimWorld;
     use crate::constants::FIXED_DT;
 
-    static SIM: Mutex<Option<(SimWorld, PlayerState)>> = Mutex::new(None);
+    static SIM: Mutex<Option<(SimWorld, Vec<PlayerState>)>> = Mutex::new(None);
 
-    /// Initialise the simulation world and spawn the local player.
+    /// Initialise the simulation world and spawn the local player at index 0.
     /// Call this once at startup. On respawn, use sim_reset_player instead
     /// so that map colliders are preserved.
     #[wasm_bindgen]
@@ -144,17 +144,49 @@ mod wasm_bindings {
         let state = PlayerState::new(spawn_x, spawn_y, spawn_z);
         // Sync the kinematic body to the initial position immediately.
         world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
-        *sim = Some((world, state));
+        *sim = Some((world, vec![state]));
+    }
+
+    /// Add a player slot (e.g. for a bot) and return its index.
+    /// The caller is responsible for remembering which index maps to which bot.
+    #[wasm_bindgen]
+    pub fn sim_add_player(spawn_x: f64, spawn_y: f64, spawn_z: f64) -> u32 {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((_, states)) = sim.as_mut() {
+            let idx = states.len() as u32;
+            states.push(PlayerState::new(spawn_x, spawn_y, spawn_z));
+            idx
+        } else {
+            0
+        }
+    }
+
+    /// Remove a player slot. MUST be called from highest index downward
+    /// to avoid invalidating other indices (bots.remove(index) slides later ones).
+    #[wasm_bindgen]
+    pub fn sim_remove_player(index: u32) {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((_, states)) = sim.as_mut() {
+            let i = index as usize;
+            if i < states.len() {
+                states.remove(i);
+            }
+        }
     }
 
     /// Reset the player to a spawn position without destroying the world
     /// (preserves all map colliders).
     #[wasm_bindgen]
-    pub fn sim_reset_player(spawn_x: f64, spawn_y: f64, spawn_z: f64) {
+    pub fn sim_reset_player(index: u32, spawn_x: f64, spawn_y: f64, spawn_z: f64) {
         let mut sim = SIM.lock().unwrap();
-        if let Some((world, state)) = sim.as_mut() {
-            state.reset(spawn_x, spawn_y, spawn_z);
-            world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
+        if let Some((world, states)) = sim.as_mut() {
+            let i = index as usize;
+            if i < states.len() {
+                states[i].reset(spawn_x, spawn_y, spawn_z);
+                if i == 0 {
+                    world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
+                }
+            }
         }
     }
 
@@ -182,21 +214,39 @@ mod wasm_bindings {
         }
     }
 
-    /// Tick the simulation by one fixed dt (1/64 s). Returns a flat array:
+    /// Tick a specific player by index (0 = human, 1+ = bots).
+    /// Human player (index 0) excludes its own kinematic body from shapecasts;
+    /// bots (index 1+) use no exclusion (they have no kinematic bodies in the
+    /// WASM world — only map colliders).
+    /// Returns a flat array:
     /// [pos_x, pos_y, pos_z, vel_x, vel_y, vel_z, on_ground, eye_height, view_punch, duck_amount]
     #[wasm_bindgen]
-    pub fn sim_tick(buttons: u16, yaw: f64) -> Vec<f64> {
+    pub fn sim_tick(index: u32, buttons: u16, yaw: f64) -> Vec<f64> {
         let mut sim = SIM.lock().unwrap();
         match sim.as_mut() {
-            Some((world, state)) => {
-                tick_movement(world, state, buttons, yaw, FIXED_DT);
+            Some((world, states)) => {
+                let i = index as usize;
+                if i >= states.len() {
+                    return vec![];
+                }
+                let exclude = if i == 0 {
+                    Some(world.player_collider_handle())
+                } else {
+                    None
+                };
+                tick_movement(world, &mut states[i], buttons, yaw, FIXED_DT, exclude);
+                let s = &states[i];
+                // For the human player, sync the body so TS hit detection works.
+                if i == 0 {
+                    world.sync_player_body(s.position.x, s.position.y, s.position.z, s.ducked);
+                }
                 vec![
-                    state.position.x, state.position.y, state.position.z,
-                    state.velocity.x, state.velocity.y, state.velocity.z,
-                    if state.on_ground { 1.0 } else { 0.0 },
-                    state.eye_height,
-                    state.view_punch,
-                    state.duck_amount,
+                    s.position.x, s.position.y, s.position.z,
+                    s.velocity.x, s.velocity.y, s.velocity.z,
+                    if s.on_ground { 1.0 } else { 0.0 },
+                    s.eye_height,
+                    s.view_punch,
+                    s.duck_amount,
                 ]
             }
             None => vec![],
@@ -206,17 +256,24 @@ mod wasm_bindings {
     /// Get current player state without ticking.
     /// Returns same array format as sim_tick.
     #[wasm_bindgen]
-    pub fn sim_get_state() -> Vec<f64> {
+    pub fn sim_get_state(index: u32) -> Vec<f64> {
         let sim = SIM.lock().unwrap();
         match sim.as_ref() {
-            Some((_, state)) => vec![
-                state.position.x, state.position.y, state.position.z,
-                state.velocity.x, state.velocity.y, state.velocity.z,
-                if state.on_ground { 1.0 } else { 0.0 },
-                state.eye_height,
-                state.view_punch,
-                state.duck_amount,
-            ],
+            Some((_, states)) => {
+                let i = index as usize;
+                if i >= states.len() {
+                    return vec![];
+                }
+                let s = &states[i];
+                vec![
+                    s.position.x, s.position.y, s.position.z,
+                    s.velocity.x, s.velocity.y, s.velocity.z,
+                    if s.on_ground { 1.0 } else { 0.0 },
+                    s.eye_height,
+                    s.view_punch,
+                    s.duck_amount,
+                ]
+            }
             None => vec![],
         }
     }

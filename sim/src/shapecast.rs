@@ -22,7 +22,7 @@ pub fn capsule_cast(
     origin_x: f64, origin_y: f64, origin_z: f64,
     disp_x: f64, disp_y: f64, disp_z: f64,
     out_normal: &mut nalgebra::Vector3<f64>,
-    exclude_collider: ColliderHandle,
+    exclude_collider: Option<ColliderHandle>,
     stop_at_penetration: bool,
 ) -> Option<f64> {
     let disp_sq = (disp_x * disp_x + disp_y * disp_y + disp_z * disp_z) as f32;
@@ -43,7 +43,10 @@ pub fn capsule_cast(
         compute_impact_geometry_on_penetration: true,
     };
 
-    let filter = QueryFilter::default().exclude_collider(exclude_collider);
+    let mut filter = QueryFilter::default();
+    if let Some(h) = exclude_collider {
+        filter = filter.exclude_collider(h);
+    }
 
     let hit = physics.cast_shape(&shape_pos, shape_vel, shape, options, filter);
     match hit {
@@ -62,13 +65,16 @@ pub fn capsule_overlaps_anything(
     physics: &PhysicsWorld,
     shape: &dyn Shape,
     center_x: f64, center_y: f64, center_z: f64,
-    exclude_collider: ColliderHandle,
+    exclude_collider: Option<ColliderHandle>,
 ) -> bool {
     let shape_pos = Pose::from_parts(
         Vector::new(center_x as f32, center_y as f32, center_z as f32),
         Rotation::IDENTITY,
     );
-    let filter = QueryFilter::default().exclude_collider(exclude_collider);
+    let mut filter = QueryFilter::default();
+    if let Some(h) = exclude_collider {
+        filter = filter.exclude_collider(h);
+    }
 
     physics.intersect_shape(shape_pos, shape, filter).next().is_some()
 }
@@ -82,13 +88,16 @@ pub fn ray_cast(
     dir_x: f64, dir_y: f64, dir_z: f64,
     max_distance: f64,
     out_normal: &mut nalgebra::Vector3<f64>,
-    exclude_collider: ColliderHandle,
+    exclude_collider: Option<ColliderHandle>,
 ) -> Option<f64> {
     let ray = Ray::new(
         Vector::new(origin_x as f32, origin_y as f32, origin_z as f32),
         Vector::new(dir_x as f32, dir_y as f32, dir_z as f32),
     );
-    let filter = QueryFilter::default().exclude_collider(exclude_collider);
+    let mut filter = QueryFilter::default();
+    if let Some(h) = exclude_collider {
+        filter = filter.exclude_collider(h);
+    }
     let hit = physics.cast_ray_and_get_normal(&ray, max_distance as f32, true, filter);
     match hit {
         Some((_collider_handle, intersection)) => {

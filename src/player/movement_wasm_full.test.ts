@@ -15,9 +15,9 @@ describe('WASM sim full tick', () => {
     const dt = get_fixed_dt();
     const tickCount = Math.ceil(0.1 / dt);
 
-    for (let i = 0; i < tickCount; i++) sim_tick(0, 0);
+    for (let i = 0; i < tickCount; i++) sim_tick(0, 0, 0);
 
-    const result = sim_get_state();
+    const result = sim_get_state(0);
     const py: number = result[1]!;
     const onGround: number = result[6]!;
 
@@ -30,12 +30,12 @@ describe('WASM sim full tick', () => {
     sim_init(0, 0.03, 0);
     sim_add_box(0, -0.5, 0, 50, 0.5, 50, 0);
 
-    for (let i = 0; i < 7; i++) sim_tick(0, 0);
+    for (let i = 0; i < 7; i++) sim_tick(0, 0, 0);
 
     const forward = 8;
-    for (let i = 0; i < 32; i++) sim_tick(forward, 0);
+    for (let i = 0; i < 32; i++) sim_tick(0, forward, 0);
 
-    const result = sim_get_state();
+    const result = sim_get_state(0);
     const px: number = result[0]!;
     const pz: number = result[2]!;
     const onGround: number = result[6]!;
@@ -49,13 +49,13 @@ describe('WASM sim full tick', () => {
     sim_init(0, 0.03, 0);
     sim_add_box(0, -0.5, 0, 50, 0.5, 50, 0);
 
-    for (let i = 0; i < 7; i++) sim_tick(0, 0);
+    for (let i = 0; i < 7; i++) sim_tick(0, 0, 0);
 
-    const pre = sim_get_state();
+    const pre = sim_get_state(0);
     const preOnGround: number = pre[6]!;
 
     // Jump (JUMP = 2)
-    const result = sim_tick(2, 0);
+    const result = sim_tick(0, 2, 0);
     const onGround: number = result[6]!;
     const vy: number = result[4]!;
 

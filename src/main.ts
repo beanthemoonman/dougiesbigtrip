@@ -32,7 +32,7 @@ import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
-import { sim_add_box, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_tick } from 'sim-wasm';
+import { sim_add_box, sim_add_player, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_tick } from 'sim-wasm';
 import { createDecals } from './render/decals';
 import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
 import { loadLightmappedMap } from './render/lightmap';
@@ -383,7 +383,8 @@ async function main(): Promise<void> {
     { s: new Vector3(-10, F, 24), patrol: [new Vector3(6, F, 12), new Vector3(14, F, 0), new Vector3(-10, F, 22)] },
   ];
   const enemies: Enemy[] = botSpawns.map(({ s, patrol }) => {
-    const bot = createBot(world, s);
+    const wasmIndex = sim_add_player(s.x, s.y, s.z);
+    const bot = createBot(world, s, wasmIndex);
     const clone = cloneSkeleton(ctTemplateScene);
     clone.visible = true; // template is hidden; clones must be visible
     flattenMaterials(clone);
@@ -403,7 +404,7 @@ async function main(): Promise<void> {
     };
   });
   // Map each bot's collider back to its Enemy so a player hitscan can find it.
-  const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.brain.bot.ctx.collider.handle, e]));
+  const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.brain.bot.collider.handle, e]));
   const rayHit: { collider: import('@dimforge/rapier3d-compat').Collider | null } = { collider: null };
   const botEye = new Vector3();
   const botToPlayer = new Vector3();
@@ -426,18 +427,19 @@ async function main(): Promise<void> {
     player.onGround = false;
     // Reset the WASM sim player to the spawn point as well, so the next tick
     // doesn't pick up the old (dead) position.
-    sim_reset_player(spawn.x, spawn.y, spawn.z);
+    sim_reset_player(0, spawn.x, spawn.y, spawn.z);
     for (const e of enemies) {
       e.alive = true;
       e.hp = BOT_MAX_HP;
       e.fireCooldown = 0;
       e.root.visible = true;
-      e.brain.bot.ctx.collider.setEnabled(true);
       const b = e.brain.bot;
-      b.state.position.copy(e.spawn);
-      b.state.velocity.set(0, 0, 0);
+      b.collider.setEnabled(true);
+      b.position.copy(e.spawn);
+      b.velocity.set(0, 0, 0);
       b.path = [];
       b.waypoint = 0;
+      sim_reset_player(b.wasmIndex, e.spawn.x, e.spawn.y, e.spawn.z);
       e.brain.mode = 'idle';
       e.brain.lastKnown = null;
       e.brain.reactionTimer = 0;
@@ -535,8 +537,8 @@ async function main(): Promise<void> {
       playerFeet.copy(player.position);
 
       if (live && playerAlive) {
-        sim_tick(input.state.buttons, input.state.yaw);
-        const s = sim_get_state();
+        sim_tick(0, input.state.buttons, input.state.yaw);
+        const s = sim_get_state(0);
         player.position.set(s[0]!, s[1]!, s[2]!);
         player.velocity.set(s[3]!, s[4]!, s[5]!);
         player.onGround = s[6]! === 1;
@@ -569,18 +571,25 @@ async function main(): Promise<void> {
         for (const e of enemies) {
           if (!e.alive) continue;
           e.fireCooldown = Math.max(0, e.fireCooldown - fixedDt);
-          const { fire } = tickBrain(e.brain, world, nav, rng, playerFeet, playerAlive, fixedDt);
-          const botVel = e.brain.bot.state.velocity;
-          const botSpeed = Math.hypot(botVel.x, botVel.z);
-          driveBotAnim(e.anim, botSpeed, e.brain.bot.state.onGround, e.brain.mode, fixedDt);
+          const { fire, buttons, yaw } = tickBrain(e.brain, world, nav, rng, playerFeet, playerAlive, fixedDt);
+          // Apply WASM movement for this bot, then sync the TS kinematic body
+          // so perception and hit-detection are up-to-date.
+          const bs = sim_tick(e.brain.bot.wasmIndex, buttons, yaw);
+          const b = e.brain.bot;
+          b.position.set(bs[0]!, bs[1]!, bs[2]!);
+          b.velocity.set(bs[3]!, bs[4]!, bs[5]!);
+          b.onGround = bs[6]! === 1;
+          b.eyeHeight = bs[7]!;
+          b.duckAmount = bs[9]!;
+          bodyCenterScratch.set(b.position.x, b.position.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, b.position.z);
+          b.collider.setTranslation(bodyCenterScratch);
+          const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
+          driveBotAnim(e.anim, botSpeed, b.onGround, e.brain.mode, fixedDt);
           if (fire && e.fireCooldown === 0 && playerAlive) {
             e.fireCooldown = BOT_WEAPON.fireInterval;
-            const b = e.brain.bot;
-            botEye.set(b.state.position.x, b.state.position.y + EYE_HEIGHT_STANDING, b.state.position.z);
+            botEye.set(b.position.x, b.position.y + EYE_HEIGHT_STANDING, b.position.z);
             botToPlayer.set(playerFeet.x, playerFeet.y + player.eyeHeight, playerFeet.z).sub(botEye);
             const dist = botToPlayer.length();
-            // The brain only fires with LOS + on-target, so land the hit on the
-            // torso (no player hitboxes yet — placeholder like the bot bodies).
             const dmg = computeDamage(BOT_WEAPON, dist, 'chest', armor);
             health -= dmg.health;
             armor -= dmg.armor;
@@ -656,7 +665,7 @@ async function main(): Promise<void> {
                 // Precise per-bone zone from the shot ray in the bot's frame;
                 // fall back to the height band if it grazed the collider but
                 // missed every bone box (an edge clip that still counts).
-                const bp = enemy.brain.bot.state.position;
+                const bp = enemy.brain.bot.position;
                 const hitbox = hitboxRay(
                   shotOrigin.x, shotOrigin.y, shotOrigin.z,
                   shot.direction.x, shot.direction.y, shot.direction.z,
@@ -668,7 +677,7 @@ async function main(): Promise<void> {
                 if (enemy.hp <= 0) {
                   enemy.alive = false;
                   enemy.root.visible = false;
-                  enemy.brain.bot.ctx.collider.setEnabled(false); // corpse is a ghost
+                  enemy.brain.bot.collider.setEnabled(false); // corpse is a ghost
                   killBot(enemy.brain);
                 }
               } else {
@@ -726,7 +735,7 @@ async function main(): Promise<void> {
       // hierarchy sits inside it and AnimationMixer drives the poses.
       for (const e of enemies) {
         if (!e.alive) continue;
-        const p = e.brain.bot.state.position;
+        const p = e.brain.bot.position;
         e.root.position.set(p.x, p.y, p.z);
         e.root.rotation.y = e.brain.aim.yaw;
       }
