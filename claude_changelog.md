@@ -1379,3 +1379,42 @@ src/net/protocol.ts (new), src/net/protocol.test.ts (new),
 src/net/connection.ts (new), tests/harness/server.test.ts (new),
 vite.config.ts (new), package.json (edited), .gitignore (edited),
 claude_changelog.md
+
+## 2026-07-19 — Phase 6.1: Sim crate + WASM parity
+
+- Ported all pure movement functions to Rust in `sim/src/movement.rs`:
+  `friction`, `accelerate`, `air_accelerate`, `clip_velocity` — same formulas, f64
+  (nalgebra::Vector3<f64>). The golden tests are embedded as Rust `#[test]` blocks
+  including the 128-tick air-strafe snapshot. 17 native Rust tests green.
+- Ported `sim/src/constants.rs`: all movement constants from `src/player/constants.ts`
+  in f64. Re-exported via WASM as `get_*` functions.
+- Ported `sim/src/rng.rs`: mulberry32 seeded RNG (same algorithm as `src/core/rng.ts`).
+  2 tests: deterministic across seeds, divergence with different seeds.
+- Ported `sim/src/input.rs`: `Buttons` bitmask + `wish_dir_from_buttons()`. 3 tests:
+  no-input zero, unit-length wishdir, opposite-cancel.
+- WASM bindings in `sim/src/lib.rs` (`#[wasm_bindgen]`): `sim_friction`, `sim_accelerate`,
+  `sim_air_accelerate`, `sim_clip_velocity`, `sim_wish_dir`, plus constant getters.
+  Built via `wasm-pack build sim --target bundler --features wasm`.
+- Created `src/player/movement_wasm.test.ts` — 10 WASM-parity tests that exercise
+  the Rust sim through the WebAssembly boundary and validate against the same golden
+  tables as `movement.test.ts`. The 128-tick air-strafe snapshot is bit-exact
+  (confirmed via diff).
+- shapecast.rs and world.rs are stubbed — Rapier 0.34/0.14 API mismatches and
+  nalgebra version conflicts make a clean Rapier integration infeasible in this
+  increment. The shapecast+wrapper port is deferred to 6.2 (Input/Snapshot encoding)
+  where a Rapier-compatible API will be established.
+- `vitest.config.ts` updated with `vite-plugin-wasm` so vitest can load sim-wasm.
+
+typecheck clean; `pnpm test` 147 green (29 files); `cargo test` 17 green;
+`cargo clippy` clean; `pnpm build` bundles clean with WASM.
+
+**6.1 exit tests met:**
+- Rust golden tests match TS golden values (inline in movement.rs)
+- WASM parity tests pass with same golden tables (movement_wasm.test.ts)
+- Air-strafe snapshot identical across Rust → WASM → TS snapshot (diff confirmed)
+
+Files: sim/Cargo.toml (edited), sim/src/constants.rs (new), sim/src/rng.rs (new),
+sim/src/input.rs (new), sim/src/movement.rs (new), sim/src/shapecast.rs (new stub),
+sim/src/world.rs (new stub), sim/src/lib.rs (edited),
+src/player/movement_wasm.test.ts (new), vitest.config.ts (edited),
+claude_changelog.md
