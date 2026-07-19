@@ -25,13 +25,14 @@ import { makeRng } from './core/rng';
 import { type Breakable, damageProp } from './game/breakables';
 import { computeDamage } from './game/damage';
 import { hitboxAt, hitboxRay } from './game/hitbox';
-import { buildMapColliders, CT_SPAWN, T_SPAWN } from './game/map_douglas';
+import { buildMapColliders, CT_SPAWN, MAP_BOXES, MAP_RAMPS, T_SPAWN } from './game/map_douglas';
 import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
-import { EYE_HEIGHT_STANDING } from './player/constants';
+import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
-import { createMovementContext, createPlayerState, tickMovement, type PlayerState } from './player/movement';
+import { createMovementContext, createPlayerState, type PlayerState } from './player/movement';
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
+import { sim_add_box, sim_add_ramp, sim_get_state, sim_init, sim_tick } from 'sim-wasm';
 import { createDecals } from './render/decals';
 import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
 import { loadLightmappedMap } from './render/lightmap';
@@ -237,6 +238,14 @@ async function main(): Promise<void> {
   await initPhysics();
   const world = createWorld();
   buildMapColliders(world);
+  // Load the same map colliders into the WASM sim world (Phase 6.2). These are
+  // independent of the TS Rapier world — the sim crate has its own PhysicsWorld.
+  for (const b of MAP_BOXES) {
+    sim_add_box(b.c[0], b.c[1], b.c[2], b.s[0] / 2, b.s[1] / 2, b.s[2] / 2, b.ry ?? 0);
+  }
+  for (const r of MAP_RAMPS) {
+    sim_add_ramp(r.start[0], r.start[1], r.start[2], r.end[0], r.end[1], r.end[2], r.width, r.thickness);
+  }
   loading.step('Loading map…');
 
   // Map visuals: baked-lightmap glb (built by tools/blender/build_map.py) plus
@@ -275,6 +284,10 @@ async function main(): Promise<void> {
   input.state.yaw = Math.atan2(T_SPAWN[0] - CT_SPAWN[0], T_SPAWN[2] - CT_SPAWN[2]);
   const movementCtx = createMovementContext(world, spawn);
   const player = createPlayerState(spawn);
+  // WASM sim owns the local player's movement (Phase 6.2). The TS player state
+  // and kinematic body are still maintained for bot hit-detection and HUD reads,
+  // but they are synced from sim_get_state() each tick rather than tickMovement().
+  sim_init(spawn.x, spawn.y, spawn.z);
 
   // Fixed seed: the sim stays reproducible for a recorded trace. core/rng.ts is
   // the only randomness allowed under src/.
@@ -285,6 +298,7 @@ async function main(): Promise<void> {
   const hitPoint = new Vector3();
   const muzzle = new Vector3(); // tracer/flash origin, ~a barrel-length ahead of the eye
   const tracerEnd = new Vector3();
+  const bodyCenterScratch = new Vector3(); // feet→capsule-center for body sync
   const decals = createDecals(renderCtx.scene);
   const vfx = createVfx(renderCtx.scene);
 
@@ -405,6 +419,9 @@ async function main(): Promise<void> {
     player.position.copy(spawn);
     player.velocity.set(0, 0, 0);
     player.onGround = false;
+    // Reset the WASM sim player to the spawn point as well, so the next tick
+    // doesn't pick up the old (dead) position.
+    sim_init(spawn.x, spawn.y, spawn.z);
     for (const e of enemies) {
       e.alive = true;
       e.hp = BOT_MAX_HP;
@@ -513,7 +530,22 @@ async function main(): Promise<void> {
       playerFeet.copy(player.position);
 
       if (live && playerAlive) {
-        tickMovement(movementCtx, player, { buttons: input.state.buttons, yaw: input.state.yaw }, fixedDt);
+        sim_tick(input.state.buttons, input.state.yaw);
+        const s = sim_get_state();
+        player.position.set(s[0]!, s[1]!, s[2]!);
+        player.velocity.set(s[3]!, s[4]!, s[5]!);
+        player.onGround = s[6]! === 1;
+        player.eyeHeight = s[7]!;
+        player.viewPunch = s[8]!;
+        player.duckAmount = s[9]!;
+        player.ducked = player.duckAmount > 0.5;
+        // Sync kinematic body so bots can hit-detect the player.
+        bodyCenterScratch.set(
+          player.position.x,
+          player.position.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS,
+          player.position.z,
+        );
+        movementCtx.body.setTranslation(bodyCenterScratch, true);
         // Footsteps: a step every STEP_STRIDE metres of ground travel. Distance-
         // paced (not time-paced) so it speeds up when you run. The greybox floor
         // is concrete throughout — sample a real surface here if the map varies.

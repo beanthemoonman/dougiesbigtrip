@@ -124,4 +124,87 @@ mod wasm_bindings {
     // --- RNG ---
     // Note: RNG is stateful and will be exposed in 6.2 with the full sim tick.
     // For 6.1 parity, the pure functions are sufficient.
+
+    // --- Full sim (6.2) ---
+
+    use std::sync::Mutex;
+    use crate::movement::{PlayerState, tick_movement};
+    use crate::world::SimWorld;
+    use crate::constants::FIXED_DT;
+
+    static SIM: Mutex<Option<(SimWorld, PlayerState)>> = Mutex::new(None);
+
+    /// Initialise the simulation world and spawn the local player.
+    #[wasm_bindgen]
+    pub fn sim_init(spawn_x: f64, spawn_y: f64, spawn_z: f64) {
+        let mut sim = SIM.lock().unwrap();
+        let mut world = SimWorld::new();
+        let state = PlayerState::new(spawn_x, spawn_y, spawn_z);
+        // Sync the kinematic body to the initial position immediately.
+        world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
+        *sim = Some((world, state));
+    }
+
+    /// Add a static axis-aligned cuboid collider to the world.
+    /// rotation_yaw in radians; 0 = axis-aligned.
+    #[wasm_bindgen]
+    pub fn sim_add_box(cx: f64, cy: f64, cz: f64, hx: f64, hy: f64, hz: f64, ry: f64) {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((world, _)) = sim.as_mut() {
+            world.add_static_box(cx, cy, cz, hx, hy, hz, ry);
+        }
+    }
+
+    /// Add a ramp collider. start/end are the top-surface endpoints.
+    #[wasm_bindgen]
+    pub fn sim_add_ramp(
+        sx: f64, sy: f64, sz: f64,
+        ex: f64, ey: f64, ez: f64,
+        width: f64,
+        thickness: f64,
+    ) {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((world, _)) = sim.as_mut() {
+            world.add_ramp(sx, sy, sz, ex, ey, ez, width, thickness);
+        }
+    }
+
+    /// Tick the simulation by one fixed dt (1/64 s). Returns a flat array:
+    /// [pos_x, pos_y, pos_z, vel_x, vel_y, vel_z, on_ground, eye_height, view_punch, duck_amount]
+    #[wasm_bindgen]
+    pub fn sim_tick(buttons: u16, yaw: f64) -> Vec<f64> {
+        let mut sim = SIM.lock().unwrap();
+        match sim.as_mut() {
+            Some((world, state)) => {
+                tick_movement(world, state, buttons, yaw, FIXED_DT);
+                vec![
+                    state.position.x, state.position.y, state.position.z,
+                    state.velocity.x, state.velocity.y, state.velocity.z,
+                    if state.on_ground { 1.0 } else { 0.0 },
+                    state.eye_height,
+                    state.view_punch,
+                    state.duck_amount,
+                ]
+            }
+            None => vec![],
+        }
+    }
+
+    /// Get current player state without ticking.
+    /// Returns same array format as sim_tick.
+    #[wasm_bindgen]
+    pub fn sim_get_state() -> Vec<f64> {
+        let sim = SIM.lock().unwrap();
+        match sim.as_ref() {
+            Some((_, state)) => vec![
+                state.position.x, state.position.y, state.position.z,
+                state.velocity.x, state.velocity.y, state.velocity.z,
+                if state.on_ground { 1.0 } else { 0.0 },
+                state.eye_height,
+                state.view_punch,
+                state.duck_amount,
+            ],
+            None => vec![],
+        }
+    }
 }

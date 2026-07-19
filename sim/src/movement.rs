@@ -1,12 +1,15 @@
-/// Source-style movement functions — pure math, ported from src/player/movement.ts.
-/// All functions use f64 (nalgebra::Vector3<f64>) and are free of any Rapier or
-/// world-state dependencies. They are the TS golden-tested formulas, bit-exact.
+/// Source-style movement functions — pure math + world-touching collide-and-slide.
+/// Pure functions use f64 (nalgebra::Vector3<f64>) and are the TS golden-tested
+/// formulas, bit-exact. The world-touching section wraps Rapier shapecasts and
+/// ports the full tickMovement loop from src/player/movement.ts.
 ///
 /// See docs/source-movement.md for the derivation of every formula here.
 /// Do not "improve" — these are a port, not an invention.
 use nalgebra::Vector3;
 
 use crate::constants::*;
+use crate::shapecast;
+use crate::world::SimWorld;
 
 /// Ground friction. Note: below the 0.1 speed floor this returns WITHOUT zeroing
 /// velocity — that's Source's behaviour, not a bug.
@@ -113,6 +116,423 @@ pub fn clip_velocity(
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// World-touching state and functions.
+// ---------------------------------------------------------------------------
+
+pub struct PlayerState {
+    pub position: Vector3<f64>,
+    pub velocity: Vector3<f64>,
+    pub on_ground: bool,
+    pub ground_normal: Vector3<f64>,
+    pub ducked: bool,
+    pub duck_amount: f64,
+    pub jump_held: bool,
+    pub eye_height: f64,
+    pub view_punch: f64,
+}
+
+impl PlayerState {
+    pub fn new(spawn_x: f64, spawn_y: f64, spawn_z: f64) -> Self {
+        Self {
+            position: Vector3::new(spawn_x, spawn_y, spawn_z),
+            velocity: Vector3::zeros(),
+            on_ground: false,
+            ground_normal: Vector3::new(0.0, 1.0, 0.0),
+            ducked: false,
+            duck_amount: 0.0,
+            jump_held: false,
+            eye_height: EYE_HEIGHT_STANDING,
+            view_punch: 0.0,
+        }
+    }
+}
+
+fn capsule_center_from_feet(feet: &Vector3<f64>, half_height: f64, radius: f64) -> Vector3<f64> {
+    Vector3::new(feet.x, feet.y + half_height + radius, feet.z)
+}
+
+fn horizontal_dist_sq(a: &Vector3<f64>, b: &Vector3<f64>) -> f64 {
+    let dx = a.x - b.x;
+    let dz = a.z - b.z;
+    dx * dx + dz * dz
+}
+
+fn categorize_position(
+    world: &SimWorld,
+    half_height: f64,
+    radius: f64,
+    feet: &Vector3<f64>,
+    out_normal: &mut Vector3<f64>,
+) -> bool {
+    let center = capsule_center_from_feet(feet, half_height, radius);
+    let mut hit_normal = Vector3::zeros();
+    let exclude = world.player_collider_handle();
+
+    // Always use standing_shape for ground probe — shape is identity-rotated
+    // Y-up capsule with the same radius, just different half-height. The
+    // half-height difference doesn't matter for a straight-down probe; using
+    // the standing shape avoids tracking which shape to pass.
+    let fraction = shapecast::capsule_cast(
+        &world.physics,
+        &*world.standing_shape,
+        center.x, center.y, center.z,
+        0.0, -GROUND_TRACE_DISTANCE, 0.0,
+        &mut hit_normal,
+        exclude,
+        true, // stop_at_penetration for ground probe
+    );
+    match fraction {
+        Some(_) => {
+            *out_normal = hit_normal;
+            out_normal.y >= GROUND_NORMAL_THRESHOLD
+        }
+        None => false,
+    }
+}
+
+fn trace_straight(
+    world: &SimWorld,
+    half_height: f64,
+    radius: f64,
+    feet: &mut Vector3<f64>,
+    displacement: &Vector3<f64>,
+    out_normal: &mut Vector3<f64>,
+) -> Option<f64> {
+    let center = capsule_center_from_feet(feet, half_height, radius);
+    let exclude = world.player_collider_handle();
+
+    let fraction = shapecast::capsule_cast(
+        &world.physics,
+        &*world.standing_shape,
+        center.x, center.y, center.z,
+        displacement.x, displacement.y, displacement.z,
+        out_normal,
+        exclude,
+        false, // stop_at_penetration false for sliding
+    );
+    match fraction {
+        Some(f) => {
+            *feet += displacement * (f * 0.99);
+            Some(f)
+        }
+        None => {
+            *feet += displacement;
+            None
+        }
+    }
+}
+
+/// Collide-and-slide. Mutates `feet`/`velocity` in place. 4 iterations, 5 max
+/// clip planes, crease-handling for the 2-plane case — see docs/source-movement.md.
+fn try_player_move(
+    world: &SimWorld,
+    half_height: f64,
+    radius: f64,
+    feet: &mut Vector3<f64>,
+    velocity: &mut Vector3<f64>,
+    dt: f64,
+) {
+    let mut remaining = dt;
+    let mut plane_count: usize = 0;
+    let mut clip_planes: [Vector3<f64>; MAX_CLIP_PLANES] = [
+        Vector3::zeros(),
+        Vector3::zeros(),
+        Vector3::zeros(),
+        Vector3::zeros(),
+        Vector3::zeros(),
+    ];
+
+    for _iter in 0..CLIP_ITERATIONS {
+        if velocity.norm_squared() < 1e-16 {
+            break;
+        }
+
+        let displacement = *velocity * remaining;
+        let center = capsule_center_from_feet(feet, half_height, radius);
+
+        let exclude = world.player_collider_handle();
+        let mut hit_normal = Vector3::zeros();
+
+        let fraction = shapecast::capsule_cast(
+            &world.physics,
+            &*world.standing_shape,
+            center.x, center.y, center.z,
+            displacement.x, displacement.y, displacement.z,
+            &mut hit_normal,
+            exclude,
+            false, // stop_at_penetration false for slide
+        );
+
+        match fraction {
+            None => {
+                *feet += *velocity * remaining;
+                break;
+            }
+            Some(f) => {
+                *feet += displacement * (f * 0.99);
+                remaining *= 1.0 - f;
+
+                if plane_count >= MAX_CLIP_PLANES {
+                    *velocity = Vector3::zeros();
+                    break;
+                }
+                clip_planes[plane_count] = hit_normal;
+                plane_count += 1;
+
+                if plane_count == 1 {
+                    *velocity = clip_velocity(velocity, &clip_planes[0], OVERBOUNCE);
+                } else {
+                    let mut found = false;
+                    for j in 0..plane_count {
+                        let clipped = clip_velocity(velocity, &clip_planes[j], OVERBOUNCE);
+                        let mut valid = true;
+                        for k in 0..plane_count {
+                            if k == j {
+                                continue;
+                            }
+                            if clipped.dot(&clip_planes[k]) < 0.0 {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if valid {
+                            *velocity = clipped;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        if plane_count == 2 {
+                            let crease = clip_planes[0].cross(&clip_planes[1]);
+                            let crease_norm = match crease.try_normalize(1e-8) {
+                                Some(n) => n,
+                                None => {
+                                    *velocity = Vector3::zeros();
+                                    break;
+                                }
+                            };
+                            let speed = crease_norm.dot(velocity);
+                            *velocity = crease_norm * speed;
+                        } else {
+                            *velocity = Vector3::zeros();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Source's three-trace stair dance. Only valid when on_ground — running it
+/// in the air lets players climb walls.
+fn step_move(
+    world: &SimWorld,
+    half_height: f64,
+    radius: f64,
+    state: &mut PlayerState,
+    dt: f64,
+) {
+    let start_pos = state.position;
+
+    // Trace 1: down path
+    let mut down_pos = start_pos;
+    let mut down_vel = state.velocity;
+    try_player_move(world, half_height, radius, &mut down_pos, &mut down_vel, dt);
+
+    // Trace 2: step up
+    let mut up_pos = start_pos;
+    let step_disp = Vector3::new(0.0, STEP_HEIGHT, 0.0);
+    let mut dummy_normal = Vector3::zeros();
+    trace_straight(world, half_height, radius, &mut up_pos, &step_disp, &mut dummy_normal);
+
+    let mut up_vel = state.velocity;
+    try_player_move(world, half_height, radius, &mut up_pos, &mut up_vel, dt);
+
+    // Trace 3: step down
+    let step_down = Vector3::new(0.0, -STEP_HEIGHT, 0.0);
+    let mut down_normal = Vector3::zeros();
+    let down_fraction = trace_straight(
+        world, half_height, radius,
+        &mut up_pos, &step_down,
+        &mut down_normal,
+    );
+    let walkable = down_fraction.is_some() && down_normal.y >= GROUND_NORMAL_THRESHOLD;
+
+    let flat_dist_sq = horizontal_dist_sq(&start_pos, &down_pos);
+    let stepped_dist_sq = horizontal_dist_sq(&start_pos, &up_pos);
+
+    if walkable && stepped_dist_sq > flat_dist_sq {
+        state.position = up_pos;
+        state.velocity = up_vel;
+    } else {
+        state.position = down_pos;
+        state.velocity = down_vel;
+    }
+}
+
+fn handle_duck(
+    world: &SimWorld,
+    state: &mut PlayerState,
+    want_duck: bool,
+    on_ground: bool,
+    dt: f64,
+) {
+    if want_duck && !state.ducked {
+        if !on_ground {
+            state.position.y += DUCK_HEIGHT_DELTA;
+        }
+        state.ducked = true;
+    } else if !want_duck && state.ducked {
+        let candidate_y = if on_ground {
+            state.position.y
+        } else {
+            state.position.y - DUCK_HEIGHT_DELTA
+        };
+        let check_feet = Vector3::new(state.position.x, candidate_y, state.position.z);
+        let check_center = capsule_center_from_feet(&check_feet, STANDING_HALF_HEIGHT, PLAYER_RADIUS);
+
+        let exclude = world.player_collider_handle();
+        let blocked = shapecast::capsule_overlaps_anything(
+            &world.physics,
+            &*world.standing_shape,
+            check_center.x, check_center.y, check_center.z,
+            exclude,
+        );
+        if !blocked {
+            state.position.y = candidate_y;
+            state.ducked = false;
+        }
+    }
+
+    let target: f64 = if state.ducked { 1.0 } else { 0.0 };
+    let rate = dt / DUCK_TRANSITION_TIME;
+    if state.duck_amount < target {
+        state.duck_amount = (target).min(state.duck_amount + rate);
+    } else if state.duck_amount > target {
+        state.duck_amount = (target).max(state.duck_amount - rate);
+    }
+
+    state.eye_height = EYE_HEIGHT_STANDING + (EYE_HEIGHT_DUCKED - EYE_HEIGHT_STANDING) * state.duck_amount;
+}
+
+fn check_jump(state: &mut PlayerState, jump_pressed: bool) {
+    if !jump_pressed {
+        state.jump_held = false;
+    }
+    if jump_pressed && state.on_ground && !state.jump_held {
+        state.velocity.y = JUMP_IMPULSE;
+        state.on_ground = false;
+        state.jump_held = true;
+    }
+}
+
+/// Advances `state` by exactly `dt` seconds, following the per-tick order of
+/// operations in docs/source-movement.md. Call at TICK_RATE (64 Hz), never at
+/// render framerate.
+pub fn tick_movement(
+    world: &mut SimWorld,
+    state: &mut PlayerState,
+    buttons: u16,
+    yaw: f64,
+    dt: f64,
+) {
+    world.ensure_broad_phase_ready();
+    let (wish_x, wish_z) = crate::input::wish_dir_from_buttons(buttons, yaw);
+    let wishdir = Vector3::new(wish_x, 0.0, wish_z);
+
+    // Use standing shape for most queries (same radius, different half-height
+    // doesn't matter for shapecast since radius is what hits walls).
+    let half_height = if state.ducked {
+        DUCKED_HALF_HEIGHT
+    } else {
+        STANDING_HALF_HEIGHT
+    };
+
+    let mut ground_normal = Vector3::zeros();
+    let grounded_at_start =
+        categorize_position(world, half_height, PLAYER_RADIUS, &state.position, &mut ground_normal);
+    state.on_ground = grounded_at_start;
+    if grounded_at_start {
+        state.ground_normal = ground_normal;
+    } else {
+        state.ground_normal = Vector3::new(0.0, 1.0, 0.0);
+    }
+
+    let want_duck = (buttons & crate::input::Buttons::DUCK) != 0;
+    handle_duck(world, state, want_duck, state.on_ground, dt);
+
+    let jump_pressed = (buttons & crate::input::Buttons::JUMP) != 0;
+    check_jump(state, jump_pressed);
+
+    if state.on_ground {
+        friction(&mut state.velocity, dt, true, DEFAULT_SURFACE_FRICTION);
+    }
+
+    let wishspeed = DEFAULT_GROUND_SPEED.min(SV_MAXSPEED);
+    if state.on_ground {
+        accelerate(
+            &mut state.velocity,
+            &wishdir,
+            wishspeed,
+            SV_ACCELERATE,
+            dt,
+            DEFAULT_SURFACE_FRICTION,
+        );
+    } else {
+        air_accelerate(
+            &mut state.velocity,
+            &wishdir,
+            wishspeed,
+            SV_AIRACCELERATE,
+            dt,
+            DEFAULT_SURFACE_FRICTION,
+        );
+    }
+
+    if !state.on_ground {
+        state.velocity.y -= GRAVITY * dt;
+    }
+
+    let pre_move_vel_y = state.velocity.y;
+    // Re-evaluate half_height after possible duck state change
+    let half_height = if state.ducked {
+        DUCKED_HALF_HEIGHT
+    } else {
+        STANDING_HALF_HEIGHT
+    };
+
+    if state.on_ground {
+        step_move(world, half_height, PLAYER_RADIUS, state, dt);
+    } else {
+        try_player_move(world, half_height, PLAYER_RADIUS, &mut state.position, &mut state.velocity, dt);
+    }
+
+    let mut post_ground_normal = Vector3::zeros();
+    let grounded_after = categorize_position(
+        world,
+        half_height,
+        PLAYER_RADIUS,
+        &state.position,
+        &mut post_ground_normal,
+    );
+    state.on_ground = grounded_after;
+    if grounded_after {
+        state.ground_normal = post_ground_normal;
+    }
+
+    if grounded_after && !grounded_at_start {
+        let impact_speed = (-pre_move_vel_y).max(0.0);
+        state.view_punch = (MAX_VIEW_PUNCH)
+            .min(state.view_punch + impact_speed * VIEW_PUNCH_PER_MPS);
+    }
+    state.view_punch = (0.0f64).max(state.view_punch - state.view_punch * VIEW_PUNCH_DECAY_RATE * dt);
+
+    world.sync_player_body(state.position.x, state.position.y, state.position.z, state.ducked);
+    world.update_scene_queries();
 }
 
 #[cfg(test)]
@@ -247,5 +667,49 @@ mod tests {
                 "tick {i}: expected {expected}, got {actual:.3}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+
+    #[test]
+    fn player_lands_on_floor() {
+        let mut world = SimWorld::new();
+        let mut state = PlayerState::new(0.0, 0.03, 0.0);
+
+        world.add_static_box(0.0, -0.5, 0.0, 50.0, 0.5, 50.0, 0.0);
+
+        for _ in 0..32 {
+            tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT);
+        }
+
+        assert!(state.on_ground, "player should be on ground after falling");
+        assert!(state.position.y >= -0.02 && state.position.y < 0.1,
+                "feet y={} should be near 0", state.position.y);
+        assert!(state.velocity.y.abs() < 1.0,
+                "vel.y={} should be near 0 after landing", state.velocity.y);
+    }
+
+    #[test]
+    fn player_moves_forward_on_ground() {
+        let mut world = SimWorld::new();
+        let mut state = PlayerState::new(0.0, 0.03, 0.0);
+
+        world.add_static_box(0.0, -0.5, 0.0, 50.0, 0.5, 50.0, 0.0);
+
+        for _ in 0..32 {
+            tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT);
+        }
+        assert!(state.on_ground, "should be grounded before movement");
+
+        for _ in 0..32 {
+            tick_movement(&mut world, &mut state, 8, 0.0, FIXED_DT);
+        }
+
+        assert!(state.on_ground, "should still be on ground");
+        assert!(state.position.x > 0.5, "should have moved forward: x={}", state.position.x);
+        assert!(state.position.z.abs() < 0.1, "should have no lateral drift: z={}", state.position.z);
     }
 }

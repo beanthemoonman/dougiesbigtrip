@@ -1418,3 +1418,65 @@ sim/src/input.rs (new), sim/src/movement.rs (new), sim/src/shapecast.rs (new stu
 sim/src/world.rs (new stub), sim/src/lib.rs (edited),
 src/player/movement_wasm.test.ts (new), vitest.config.ts (edited),
 claude_changelog.md
+
+## 2026-07-19 — Phase 6.1 cont: Rapier integration + full WASM sim tick
+
+- Resolved the Rapier 0.34 API mismatch from 6.1. rapier3d 0.34 uses glam types
+  (`Vector`, `Pose`, `Rotation`, `SharedShape`) not nalgebra directly. Upgraded
+  the sim crate's nalgebra from 0.33 → 0.35 for compatibility.
+- Ported `sim/src/world.rs` with full Rapier integration:
+  `SimWorld` wraps `PhysicsWorld`, creates standing/ducked `SharedShape` capsule
+  shapes, manages a kinematic player body+handle, and exposes `add_static_box` /
+  `add_ramp` for map collider loading. Stores `standing_shape`/`ducked_shape` as
+  `SharedShape` (Arc<dyn Shape>) so shapecast can borrow them alongside `physics`.
+- Critical bug found: rapier3d 0.34's broad phase BVH is only built during `step()`,
+  not on collider insert. Queries return nothing until `step()` is called. Fixed by
+  adding `SimWorld::ensure_broad_phase_ready()` which calls `physics.step()` once
+  after all static colliders are loaded, invoked lazily on first `tick_movement`.
+- Ported `sim/src/shapecast.rs`: `capsule_cast`, `capsule_overlaps_anything`,
+  `ray_cast` — f64 boundary, `ShapeCastOptions` from `parry::query::details`,
+  `QueryFilter` with `exclude_collider`, identity `Rotation::IDENTITY`.
+- Ported world-touching movement in `sim/src/movement.rs`: `PlayerState`,
+  `categorize_position`, `trace_straight`, `try_player_move` (4-iteration
+  collide-and-slide with 5-plane crease handling), `step_move` (3-trace stair
+  dance), `handle_duck`, `check_jump`, and `tick_movement` — same order as TS.
+- Added WASM full-sim bindings (`sim_init`, `sim_add_box`, `sim_add_ramp`,
+  `sim_tick`, `sim_get_state`) using a global `Mutex<Option<(SimWorld, PlayerState)>>`
+  for persistent state across WASM calls.
+- 2 native world tests (player lands on floor, forward movement) + 3 WASM integration
+  tests (floor landing, forward movement, jump) — all green.
+- Added `.idea/runConfigurations/` for Cargo (Check, Clippy, Test, Test Sim, Run
+  Server), Build Wasm (shell script `tools/build_wasm.sh`), and compound `All Tests`.
+  Updated `.iml` with proper source roots and exclusions.
+
+19 Rust tests green; `cargo clippy` clean; 30 JS test files / 150 tests green;
+`wasm-pack build` → `pnpm build` bundles clean.
+
+Files: sim/Cargo.toml (edited), sim/src/world.rs (rewritten), sim/src/shapecast.rs
+(rewritten), sim/src/movement.rs (extended), sim/src/lib.rs (extended),
+src/player/movement_wasm_full.test.ts (new), tools/build_wasm.sh (new),
+.idea/runConfigurations/{Cargo_Check,Cargo_Clippy,Cargo_Test,Cargo_Test_Sim,
+Run_Server,Build_Wasm,All_Tests}.xml (new), .idea/dougysbigtrip.iml (edited),
+claude_changelog.md
+
+## 2026-07-19 — Phase 6.2: Client wired to WASM sim for local player
+
+- Wired `src/main.ts` to drive the local (human) player through the Rust WASM sim
+  instead of the TypeScript `tickMovement`. Bots still use the TS path (they'll move
+  to WASM in Phase 6.3 when the server owns all simulation).
+- At init: after `buildMapColliders(world)`, iterate `MAP_BOXES`/`MAP_RAMPS` from
+  `de_douglas.json` and call `sim_add_box`/`sim_add_ramp` to load the identical
+  map colliders into the WASM sim's independent Rapier world.
+- Per tick: `sim_tick(buttons, yaw)` runs the full Source movement model in Rust,
+  then `sim_get_state()` returns `[px,py,pz,vx,vy,vz,onGround,eyeHeight,viewPunch,
+  duckAmount]` which is written back into the TS `player` state and synced to the
+  kinematic Rapier body (so bot hit detection still works).
+- `sim_init(spawn)` is called on startup and on every `respawn()` (round reset).
+- Removed `tickMovement` import from main.ts (no longer called there; bots import
+  it independently in `ai/bot.ts`).
+- `sim-wasm` (782 KB) now appears in the production `dist/` bundle.
+- TypeScript strict: no new `any`, typecheck clean.
+- Full test suite: 19 Rust + 150 JS tests green. `pnpm build` bundles successfully.
+
+Files: src/main.ts (edited — imports, map collider loading, sim_init, tick loop,
+respawn), claude_changelog.md
