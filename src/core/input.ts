@@ -45,6 +45,8 @@ export interface InputState {
   /** Weapon slot requested since last read (1 = rifle, 2 = pistol), or 0.
    * A latched edge, not a held state — main.ts consumes it and resets to 0. */
   weaponSlot: number;
+  /** Held while Tab is pressed; toggles the scoreboard overlay. */
+  scoreboard: boolean;
 }
 
 export interface InputManager {
@@ -59,9 +61,15 @@ export function createInputManager(target: HTMLElement): InputManager {
     sensitivity: 0.0022,
     pointerLocked: false,
     weaponSlot: 0,
+    scoreboard: false,
   };
 
   function onKeyDown(e: KeyboardEvent): void {
+    if (e.code === 'Tab') {
+      e.preventDefault();
+      if (document.pointerLockElement === target) state.scoreboard = true;
+      return;
+    }
     if (e.code === 'Digit1') state.weaponSlot = 1;
     else if (e.code === 'Digit2') state.weaponSlot = 2;
     const bit = KEY_TO_BUTTON[e.code];
@@ -69,6 +77,7 @@ export function createInputManager(target: HTMLElement): InputManager {
   }
 
   function onKeyUp(e: KeyboardEvent): void {
+    if (e.code === 'Tab') { state.scoreboard = false; return; }
     const bit = KEY_TO_BUTTON[e.code];
     if (bit !== undefined) state.buttons &= ~bit;
   }
@@ -84,7 +93,10 @@ export function createInputManager(target: HTMLElement): InputManager {
   function onPointerLockChange(): void {
     const locked = document.pointerLockElement === target;
     state.pointerLocked = locked;
-    if (!locked) state.buttons = 0; // releasing focus shouldn't leave keys "stuck" held
+    if (!locked) {
+      state.buttons = 0; // releasing focus shouldn't leave keys "stuck" held
+      state.scoreboard = false;
+    }
   }
 
   // Only once locked, so the click that *engages* pointer lock doesn't also

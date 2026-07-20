@@ -49,6 +49,7 @@ import { makeSky } from './render/sky';
 import { applySurfaceTextures } from './render/surfacetex';
 import { createHud } from './ui/hud';
 import { createLoadingScreen } from './ui/loading';
+import { createScoreboard, type PlayerScore } from './ui/scoreboard';
 import { WEAPONS, type WeaponId } from './weapons/defs';
 import { createWeaponState, fireShot, startReload, tickWeapon, type WeaponState } from './weapons/hitscan';
 import { computeSpread, type Stance } from './weapons/spread';
@@ -82,6 +83,13 @@ function stanceOf(player: PlayerState): Stance {
   const speed = Math.hypot(player.velocity.x, player.velocity.z);
   if (speed < 0.1) return player.ducked ? 'crouchStill' : 'still';
   return speed < 3.5 ? 'walking' : 'running';
+}
+
+// Bot gunshot audibility: linear falloff from full volume at 0 m to silence at
+// this range. Mono Web Audio, no spatial panning — distance tail only.
+const AUDIBLE_RANGE = 40; // m, matches SIGHT_RANGE
+function falloff(dist: number): number {
+  return MathUtils.clamp(1 - dist / AUDIBLE_RANGE, 0, 1);
 }
 
 // Props that break when shot (crates + the explosive barrel). Wood pallets,
@@ -379,9 +387,12 @@ async function main(): Promise<void> {
   // ponytail: grip offset is a hand-tuned calibration knob, not derivable — nudge
   // these if the gun clips the hand or points wrong. Add a real low-poly
   // world-model + per-bot weapon matching when art budget allows.
+  // The viewmodel barrel runs along +X (away from camera); yaw -π/2 rotates it
+  // down the arm so the barrel points forward out of the bot's chest. Verify with
+  // ACC-014 step 2 after any change.
   const rifleWorldTemplate = (await new GLTFLoader().loadAsync(rifleUrl)).scene;
   const BOT_GUN_POS = new Vector3(0, 0.02, 0.08); // metres, in hand-bone space
-  const BOT_GUN_ROT = new Vector3(0, Math.PI / 2, 0); // yaw the barrel down the arm
+  const BOT_GUN_ROT = new Vector3(0, -Math.PI / 2, 0); // yaw barrel down the arm
   function attachBotWeapon(character: Object3D): void {
     let hand: Object3D | undefined;
     character.traverse((o) => {
@@ -557,6 +568,12 @@ async function main(): Promise<void> {
     // Reset the WASM sim player to the spawn point as well, so the next tick
     // doesn't pick up the old (dead) position.
     sim_reset_player(0, spawn.x, spawn.y, spawn.z);
+    // Sync the human kinematic body so bot perception queries see the
+    // capsule at the fresh spawn position, not the death spot.
+    bodyCenterScratch.set(
+      spawn.x, spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, spawn.z,
+    );
+    movementCtx.body.setTranslation(bodyCenterScratch, true);
     for (const e of enemies) {
       e.alive = true;
       e.hp = BOT_MAX_HP;
@@ -574,7 +591,17 @@ async function main(): Promise<void> {
       e.brain.reactionTimer = 0;
       e.root.position.set(e.spawn.x, e.spawn.y, e.spawn.z);
       resetBotAnim(e.anim);
+      // Sync the collider to the spawn position now. Without this
+      // setTranslation the re-enabled collider sits at its last-known
+      // (death-site) position for a full tick, where it blocks nothing.
+      bodyCenterScratch.set(
+        e.spawn.x, e.spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, e.spawn.z,
+      );
+      b.collider.setTranslation(bodyCenterScratch);
     }
+    // Flush the query BVH so the very next raycast (human fire or bot
+    // perception) sees every capsule at its fresh spawn position.
+    world.updateSceneQueries();
   }
 
   // Both weapons, welded to the eye on layer 1 (viewmodel pass, renderer.ts).
@@ -624,6 +651,8 @@ async function main(): Promise<void> {
   const animPose: AnimPose = { x: 0, y: 0, z: 0, pitch: 0, roll: 0 };
 
   const hud = createHud(document.body);
+  const scoreboard = createScoreboard();
+  document.body.appendChild(scoreboard.el);
 
   // Input trace recorder — press F2 to dump the last ~30 s of input to console.
   // Active only when ?record in the URL; otherwise a no-op on the hot path.
@@ -684,12 +713,11 @@ async function main(): Promise<void> {
   loading.done();
   startLoop({
     tick(fixedDt): void {
-      // Bug 1: refresh the TS Rapier query pipeline. Only sim_tick drives the
-      // WASM world; without this step() the static map colliders are never in
-      // the BVH, so LOS (canSee) and bullet raycasts pass straight through walls.
-      // No dynamic bodies exist (statics + kinematic capsules), so this only
-      // rebuilds the query structures — deterministic, no feel change.
-      world.step();
+      // updateSceneQueries is called AFTER the human sync (so bots can see
+      // the player at the current position) and AGAIN after the bot sync (so
+      // the player's raycast sees bots at the current position). The BVH
+      // must be rebuilt after colliders move — building it first means
+      // every query works on stale (previous-tick) positions.
 
       // Bug 4: fixed match clock. Counts total elapsed sim time; at zero the
       // match freezes (see the !matchOver guards below). Accumulated fixedDt →
@@ -734,12 +762,12 @@ async function main(): Promise<void> {
           sim_tick(0, input.state.buttons, input.state.yaw);
         }
         const s = sim_get_state(0);
-        player.position.set(s[0]!, s[1]!, s[2]!);
-        player.velocity.set(s[3]!, s[4]!, s[5]!);
-        player.onGround = s[6]! === 1;
-        player.eyeHeight = s[7]!;
-        player.viewPunch = s[8]!;
-        player.duckAmount = s[9]!;
+        player.position.set(s[0], s[1], s[2]);
+        player.velocity.set(s[3], s[4], s[5]);
+        player.onGround = s[6] === 1;
+        player.eyeHeight = s[7];
+        player.viewPunch = s[8];
+        player.duckAmount = s[9];
         player.ducked = player.duckAmount > 0.5;
         // Sync kinematic body so bots can hit-detect the player.
         bodyCenterScratch.set(
@@ -760,6 +788,7 @@ async function main(): Promise<void> {
           stepDist = 0; // reset so the first step after stopping isn't instant
         }
       }
+      world.updateSceneQueries(); // bot perception: human body at current tick position
 
       // Bug 3: while dead, free-fly the spectator cam (noclip). Does not touch
       // the WASM sim or player state — purely a render-camera position.
@@ -781,11 +810,11 @@ async function main(): Promise<void> {
           // so perception and hit-detection are up-to-date.
           const bs = sim_tick(e.brain.bot.wasmIndex, buttons, yaw);
           const b = e.brain.bot;
-          b.position.set(bs[0]!, bs[1]!, bs[2]!);
-          b.velocity.set(bs[3]!, bs[4]!, bs[5]!);
-          b.onGround = bs[6]! === 1;
-          b.eyeHeight = bs[7]!;
-          b.duckAmount = bs[9]!;
+          b.position.set(bs[0], bs[1], bs[2]);
+          b.velocity.set(bs[3], bs[4], bs[5]);
+          b.onGround = bs[6] === 1;
+          b.eyeHeight = bs[7];
+          b.duckAmount = bs[9];
           bodyCenterScratch.set(b.position.x, b.position.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, b.position.z);
           b.collider.setTranslation(bodyCenterScratch);
           const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
@@ -819,9 +848,14 @@ async function main(): Promise<void> {
                 }
               }
             }
+            // Bot gunshot audio: distance-attenuated mono. A whiff is still a
+            // bang — play for every shot, not only landed hits. Gate on
+            // AUDIBLE_RANGE so the far side of the map stays quiet.
+            if (dist < AUDIBLE_RANGE) playGunshot('rifle', falloff(dist));
           }
         }
       }
+      world.updateSceneQueries(); // player fire: bot colliders at current tick position
 
       const weapon = WEAPONS[active.id];
       tickWeapon(active.state, weapon, fixedDt);
@@ -1014,6 +1048,23 @@ async function main(): Promise<void> {
         MathUtils.degToRad(renderCtx.camera.fov),
         renderCtx.renderer.domElement.clientHeight,
       );
+      // Scoreboard roster built from live game state. ponytail: static "Bot N"
+      // + "You" labels; no per-entity K/D until kill bookkeeping exists.
+      const roster: PlayerScore[] = [
+        { slot: 0, team: 'T', name: 'You', kills: round.score.t, deaths: 0, alive: playerAlive },
+      ];
+      enemies.forEach((e, i) => {
+        roster.push({
+          slot: i + 1,
+          team: e.team,
+          name: `Bot ${i + 1}`,
+          kills: 0,
+          deaths: 0,
+          alive: e.alive,
+        });
+      });
+      scoreboard.render(roster);
+      scoreboard.visible = input.state.scoreboard;
       renderCtx.stats.end();
     },
   });

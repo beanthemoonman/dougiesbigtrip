@@ -10,6 +10,7 @@ export interface PlayerScore {
   name: string;
   kills: number;
   deaths: number;
+  alive?: boolean;
 }
 
 /**
@@ -26,6 +27,7 @@ export function defaultRoster(): PlayerScore[] {
       name: `Bot ${i + 1}`,
       kills: 0,
       deaths: 0,
+      alive: true,
     });
   }
   return out;
@@ -41,7 +43,7 @@ export interface Scoreboard {
 export function createScoreboard(): Scoreboard {
   const el = document.createElement('div');
   el.style.cssText =
-    'position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);color:#ccc;font:13px monospace;z-index:900;pointer-events:none;';
+    'position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);color:#ccc;font:18px monospace;z-index:900;pointer-events:none;';
 
   let visible = false;
 
@@ -55,27 +57,28 @@ export function createScoreboard(): Scoreboard {
         return b.kills - a.kills;
       });
       const wrap = document.createElement('div');
-      wrap.style.cssText = 'display:flex;gap:48px;';
+      wrap.style.cssText = 'display:flex;gap:64px;';
 
       for (const team of ['T', 'CT'] as const) {
         const col = document.createElement('div');
-        col.style.cssText = 'display:flex;flex-direction:column;gap:4px;min-width:160px;';
+        col.style.cssText = 'display:flex;flex-direction:column;gap:4px;min-width:220px;';
         const head = document.createElement('div');
         head.textContent = `=== ${team} ===`;
         head.style.cssText = 'color:#aaa;border-bottom:1px solid #555;margin-bottom:4px;';
         col.appendChild(head);
 
         const headerRow = document.createElement('div');
-        headerRow.style.cssText = 'display:flex;justify-content:space-between;color:#888;font-size:11px;';
+        headerRow.style.cssText = 'display:flex;justify-content:space-between;color:#888;font-size:14px;';
         headerRow.innerHTML = '<span>NAME</span><span>K</span><span>D</span>';
         col.appendChild(headerRow);
 
         for (const p of sorted.filter((p) => p.team === team)) {
           const row = document.createElement('div');
-          row.style.cssText = 'display:flex;justify-content:space-between;';
+          const dead = p.alive === false;
+          row.style.cssText = `display:flex;justify-content:space-between;${dead ? 'color:#666;' : ''}`;
           row.innerHTML =
-            `<span>${p.name}</span><span style="width:24px;text-align:right">${p.kills}</span>` +
-            `<span style="width:24px;text-align:right">${p.deaths}</span>`;
+            `<span>${p.name}${dead ? ' (DEAD)' : ''}</span><span style="width:32px;text-align:right">${p.kills}</span>` +
+            `<span style="width:32px;text-align:right">${p.deaths}</span>`;
           col.appendChild(row);
         }
         wrap.appendChild(col);

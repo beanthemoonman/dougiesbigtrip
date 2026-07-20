@@ -15,12 +15,12 @@ describe('scoreboard', () => {
   it('render produces two columns (T and CT) with correct text', () => {
     const sb = createScoreboard();
     const players: PlayerScore[] = [
-      { slot: 0, team: 'T', name: 'Player 1', kills: 5, deaths: 2 },
-      { slot: 1, team: 'T', name: 'Player 2', kills: 3, deaths: 4 },
-      { slot: 2, team: 'T', name: 'Player 3', kills: 1, deaths: 6 },
-      { slot: 3, team: 'CT', name: 'Bot 1', kills: 8, deaths: 1 },
-      { slot: 4, team: 'CT', name: 'Bot 2', kills: 4, deaths: 3 },
-      { slot: 5, team: 'CT', name: 'Bot 3', kills: 2, deaths: 5 },
+      { slot: 0, team: 'T', name: 'Player 1', kills: 5, deaths: 2, alive: true },
+      { slot: 1, team: 'T', name: 'Player 2', kills: 3, deaths: 4, alive: true },
+      { slot: 2, team: 'T', name: 'Player 3', kills: 1, deaths: 6, alive: false },
+      { slot: 3, team: 'CT', name: 'Bot 1', kills: 8, deaths: 1, alive: true },
+      { slot: 4, team: 'CT', name: 'Bot 2', kills: 4, deaths: 3, alive: true },
+      { slot: 5, team: 'CT', name: 'Bot 3', kills: 2, deaths: 5, alive: true },
     ];
     sb.render(players);
     const html = sb.el.innerHTML;
@@ -28,6 +28,7 @@ describe('scoreboard', () => {
     expect(html).toContain('=== T ===');
     expect(html).toContain('Bot 1');
     expect(html).toContain('Player 1');
+    expect(html).toContain('(DEAD)');
   });
 
   it('scoreboard visibility toggle', () => {

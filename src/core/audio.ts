@@ -73,19 +73,19 @@ function burst(dur: number, cutoff: number, gain: number, when: number): void {
   src.start(when, 0, dur);
 }
 
-export function playGunshot(weapon: WeaponId): void {
+export function playGunshot(weapon: WeaponId, gain = 1): void {
   const c = audio();
   const t = c.currentTime;
   // Rifle: louder, a touch longer and brighter. Pistol: shorter, drier.
   const rifle = weapon === 'rifle';
-  burst(rifle ? 0.18 : 0.12, rifle ? 3200 : 2600, rifle ? 0.9 : 0.7, t);
+  burst(rifle ? 0.18 : 0.12, rifle ? 3200 : 2600, (rifle ? 0.9 : 0.7) * gain, t);
   // Low body thump so it has weight, not just a hiss.
   const osc = c.createOscillator();
   const g = c.createGain();
   osc.type = 'sine';
   osc.frequency.setValueAtTime(rifle ? 150 : 190, t);
   osc.frequency.exponentialRampToValueAtTime(60, t + 0.08);
-  g.gain.setValueAtTime(rifle ? 0.6 : 0.45, t);
+  g.gain.setValueAtTime((rifle ? 0.6 : 0.45) * gain, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
   osc.connect(g).connect(out());
   osc.start(t);

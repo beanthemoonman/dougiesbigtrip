@@ -1740,3 +1740,59 @@ is still 6.4 (bots pass through each other in the sim world).
   - `pnpm typecheck` green; `pnpm test` green (176 tests).
   - Skipped: drop-on-death weapon, per-bot weapon matching, dedicated low-poly world-model,
     spectate-a-teammate/killcam, overtime/match-restart. Add when art budget / menu exist.
+
+## 2026-07-19 — round 2: post-netcode regression fixes
+
+- Implemented `docs/plan-bugfixes-round2.md` (five bugs, four code changes, one calibration):
+  - **Bug 1+3 — bullets miss bots / bots ignore player (one root cause):** replaced
+    `world.step()` with `world.updateSceneQueries()` at `main.ts:692`. `step()` recomputes
+    every kinematic collider's world transform from its parent rigid body, snapping bots back
+    to spawn in the query BVH. `updateSceneQueries()` rebuilds from each collider's *current*
+    transform (including manual `collider.setTranslation` bot moves). Added a T1 regression
+    guard in `perception.test.ts` pinning the invariant that a kinematic capsule moved by
+    `setTranslation` is queried at its new position after `updateSceneQueries()`.
+  - **Bug 2 — bots silent when firing:** extended `playGunshot(weapon, gain?)` in
+    `core/audio.ts` to multiply both envelope gains by an optional `gain` parameter. In the
+    bot fire block at `main.ts`, `playGunshot('rifle', falloff(dist))` is called for every
+    bot shot (landed or whiff) within `AUDIBLE_RANGE` (40 m). Linear distance falloff; mono
+    Web Audio, no spatial panning.
+  - **Bug 4 — Tab opens settings instead of a scoreboard:** Tab now handled in
+    `core/input.ts`: `e.preventDefault()` on keydown (stops focus stealing, which drops
+    pointer lock and shows the settings panel), sets `InputState.scoreboard` in keydown,
+    clears in keyup and `onPointerLockChange`. Existing `src/ui/scoreboard.ts` wired into
+    `main.ts` render loop: roster built from live state (human "You" + "Bot N"), toggled
+    with `scoreboard.visible = input.state.scoreboard`. Added `alive?` field to `PlayerScore`
+    and (DEAD) marker for dead players.
+  - **Bug 5 — bot rifle orientation (calibration):** flipped `BOT_GUN_ROT` yaw from `π/2`
+    to `-π/2`. The viewmodel barrel runs along +X; `-π/2` yaw rotates it to point forward
+    down the arm. Updated the comment block with the axis rationale. Visual verification
+    still needs ACC-014 step 2 in a running build.
+  - `pnpm typecheck` green; `pnpm test` green (177 tests).
+  - Skipped: ACC-017 scoreboard T3 script (write when the build runs in a browser).
+
+## 2026-07-19 — round 2 follow-up: stale BVH after round reset
+
+- **Hit-detection regression (bullets miss after first round):** `world.updateSceneQueries()` was
+  called at the top of `tick()`, BEFORE the human kinematic body sync and the bot collider sync.
+  Every raycast from that point onward used the BVH built from the PREVIOUS tick's collider
+  transforms — a 1-frame lag that was imperceptible during normal movement but catastrophic
+  after a round reset, when re-enabled colliders sat at their death-site positions.
+
+  Fixes in `src/main.ts`:
+  - **Removed** the single `updateSceneQueries()` call at tick top. Added TWO calls instead:
+    one after the human sync block (so `canSee`/bot perception sees the player at the current
+    position) and one after the bot sync loop (so player fire raycasts see bots at their
+    current position).
+  - **`respawn()`** now syncs the human kinematic body via `movementCtx.body.setTranslation()`
+    and each bot collider via `b.collider.setTranslation()` immediately after re-enabling,
+    then calls `world.updateSceneQueries()` to flush the BVH. Without the explicit sync the
+    re-enabled colliders entered the next tick's BVH at their death-site transforms.
+  - Added a T0 **regression guard** in `perception.test.ts`: disable → re-enable →
+    `setTranslation` → `updateSceneQueries` → the collider still blocks LOS at the set
+    position (not the rigid body's creation position).
+
+- **Scoreboard size:** increased font from 13px to 18px, column min-width from 160px to 220px,
+  gap from 48px to 64px, header from 11px to 14px, K/D cells from 24px to 32px
+  (`src/ui/scoreboard.ts`).
+
+- `pnpm typecheck` green; `pnpm test` green (178 tests).
