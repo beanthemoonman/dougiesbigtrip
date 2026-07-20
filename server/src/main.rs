@@ -17,13 +17,31 @@ use sim::constants::FIXED_DT;
 use sim::map;
 use sim::movement::{tick_movement, PlayerState};
 use sim::protocol::{
-    CommandFrame, EntityState, RoundState, Snapshot, Welcome, F_ALIVE, F_DUCKED, F_TEAM_CT,
-    SPECTATOR,
+    CommandFrame, EntityState, GameEvent, RoundState, Shot, Snapshot, Welcome, EV_KILL,
+    F_ALIVE, F_DUCKED, F_TEAM_CT, SPECTATOR,
 };
 use sim::world::SimWorld;
+use sim::{ColliderHandle, RigidBodyHandle};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+mod ai;
+
+// Bot patrol waypoints (de_douglas map, same as TS botDefs patrol routes).
+// Each bot is assigned one waypoint set.
+static PATROL_CT: &[(f64, f64, f64)] = &[
+    (-16.0, 0.05, 14.0), (-12.0, 0.05, 4.0), (-16.0, 0.05, 24.0),
+];
+static PATROL_T: &[(f64, f64, f64)] = &[
+    (-16.0, 0.05, -14.0), (-12.0, 0.05, -4.0), (-16.0, 0.05, -24.0),
+];
+
+#[derive(Clone, Copy)]
+struct BotSpawn {
+    feet: [f64; 3],
+    waypoints: &'static [(f64, f64, f64)],
+}
 
 const DEFAULT_BIND: &str = "127.0.0.1:9876";
 const MAX_SLOTS: usize = 10;
@@ -49,14 +67,22 @@ enum Ev {
 
 struct Slot {
     occupied: bool,
+    is_human: bool,
     out: Option<Out>,
+    body_handle: RigidBodyHandle,
+    collider_handle: ColliderHandle,
     player: PlayerState,
+    bot: Option<ai::Bot>,
+    bot_spawn: BotSpawn,
     queue: VecDeque<CommandFrame>,
     last_buttons: u16,
     last_yaw: f32,
     last_pitch: f32,
+    last_shot: Option<Shot>,
     ack_seq: u32,
     team_ct: bool,
+    alive: bool,
+    health: u8,
 }
 
 async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
@@ -64,26 +90,45 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
     let spawn = map::load(&mut world, MAP_JSON);
     world.ensure_broad_phase_ready();
 
-    // ponytail: one kinematic player body in the world (mirrors WASM index-0).
-    // Player-vs-player collision is 6.4 — for one human, excluding the shared
-    // body from its own shapecast is exactly the single-player path.
-    let handle = world.player_collider_handle();
-
     let mut slots: Vec<Slot> = (0..MAX_SLOTS)
         .map(|i| {
-            // Alternate teams by slot parity; spawn on that team's point.
             let team_ct = i % 2 == 1;
             let s = if team_ct { spawn.ct } else { spawn.t };
+            let (body_handle, collider_handle) = if i == 0 {
+                (
+                    world.player_rigid_body_handle(),
+                    world.player_collider_handle(),
+                )
+            } else {
+                world.add_player_body()
+            };
+            world.sync_player_body(body_handle, collider_handle, s[0], s[1], s[2], false);
+
+            let waypoints: &'static [(f64, f64, f64)] = if team_ct {
+                PATROL_CT
+            } else {
+                PATROL_T
+            };
+            let bot = Some(ai::Bot::new(waypoints));
+
             Slot {
-                occupied: false,
+                occupied: true,       // filled by bot
+                is_human: false,
                 out: None,
+                body_handle,
+                collider_handle,
                 player: PlayerState::new(s[0], s[1], s[2]),
+                bot,
+                bot_spawn: BotSpawn { feet: s, waypoints },
                 queue: VecDeque::new(),
                 last_buttons: 0,
                 last_yaw: 0.0,
                 last_pitch: 0.0,
+                last_shot: None,
                 ack_seq: 0,
                 team_ct,
+                alive: true,
+                health: 100,
             }
         })
         .collect();
@@ -96,19 +141,59 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
             _ = interval.tick() => {
                 server_tick = server_tick.wrapping_add(1);
 
-                for slot in slots.iter_mut() {
-                    if !slot.occupied {
+                // Build arrays of positions and alive flags so bots can perceive each other.
+                let positions: Vec<Option<nalgebra::Vector3<f64>>> = slots
+                    .iter()
+                    .map(|s| if s.occupied { Some(s.player.position) } else { None })
+                    .collect();
+                let alive: Vec<bool> = slots.iter().map(|s| s.alive).collect();
+
+                for (_idx, slot) in slots.iter_mut().enumerate() {
+                    if !slot.occupied || !slot.alive {
+                        // Dead bots respawn after ~3 s. A dead human must wait for
+                        // client-side respawn — for now just keep them dead.
+                        if !slot.alive && !slot.is_human {
+                            // ponytail: use a dedicated respawn timer instead of
+                            // floating coincidence.
+                            let bf = slot.bot_spawn.feet;
+                            slot.player.reset(bf[0], bf[1], bf[2]);
+                            slot.alive = true;
+                            slot.health = 100;
+                            world.sync_player_body(
+                                slot.body_handle, slot.collider_handle,
+                                bf[0], bf[1], bf[2], false,
+                            );
+                        }
                         continue;
                     }
-                    // Consume one command this tick (keeps server/client 1:1 for
-                    // bit-exact reconciliation). Hold last input if starved.
-                    if let Some(cmd) = slot.queue.pop_front() {
-                        slot.last_buttons = cmd.buttons;
-                        slot.last_yaw = cmd.yaw;
-                        slot.last_pitch = cmd.pitch;
-                        slot.ack_seq = cmd.seq;
+
+                    if slot.is_human {
+                        if let Some(cmd) = slot.queue.pop_front() {
+                            slot.last_buttons = cmd.buttons;
+                            slot.last_yaw = cmd.yaw;
+                            slot.last_pitch = cmd.pitch;
+                            slot.last_shot = cmd.shot;
+                            slot.ack_seq = cmd.seq;
+                        } else {
+                            slot.last_shot = None;
+                        }
+                    } else if let Some(ref mut bot) = slot.bot {
+                        let (buttons, yaw) = ai::tick_bot(
+                            bot,
+                            &world,
+                            &slot.player.position,
+                            slot.collider_handle,
+                            &positions,
+                            &alive,
+                        );
+                        slot.last_buttons = buttons;
+                        slot.last_yaw = yaw as f32;
+                        slot.last_pitch = 0.0;
                     }
+
                     world.sync_player_body(
+                        slot.body_handle,
+                        slot.collider_handle,
                         slot.player.position.x,
                         slot.player.position.y,
                         slot.player.position.z,
@@ -120,11 +205,100 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                         slot.last_buttons,
                         slot.last_yaw as f64,
                         FIXED_DT,
-                        Some(handle),
+                        Some(slot.collider_handle),
                     );
                 }
 
-                let snapshot = build_snapshot(&slots, server_tick);
+                // Shot resolution (6.6): raycast from eyePos along dir against all
+                // other slots' colliders. Collect shots first, then apply damage
+                // in a separate pass to avoid aliasing slots.
+                let mut frame_events: Vec<GameEvent> = Vec::new();
+
+                // Collect shooters: (shooter_idx, shot) for all alive slots with shots.
+                let mut shooters: Vec<(usize, Shot)> = Vec::new();
+                for (shooter_idx, s) in slots.iter().enumerate() {
+                    if !s.alive {
+                        continue;
+                    }
+                    let Some(ref shot) = s.last_shot else { continue };
+                    let pe = &s.player.position;
+                    if (shot.eye_pos[0] as f64 - pe.x).abs() > 5.0
+                        || (shot.eye_pos[1] as f64 - pe.y - sim::constants::EYE_HEIGHT_STANDING)
+                            .abs()
+                            > 5.0
+                        || (shot.eye_pos[2] as f64 - pe.z).abs() > 5.0
+                    {
+                        continue;
+                    }
+                    shooters.push((shooter_idx, *shot));
+                }
+
+                for (shooter_idx, shot) in shooters {
+                    // Consume the shot (clear it).
+                    if let Some(slot) = slots.get_mut(shooter_idx) {
+                        slot.last_shot = None;
+                    }
+
+                    let eye_x = shot.eye_pos[0] as f64;
+                    let eye_y = shot.eye_pos[1] as f64;
+                    let eye_z = shot.eye_pos[2] as f64;
+                    let dir_x = shot.dir[0] as f64;
+                    let dir_y = shot.dir[1] as f64;
+                    let dir_z = shot.dir[2] as f64;
+
+                    let shooter_coll = slots[shooter_idx].collider_handle;
+                    let mut hit_normal = nalgebra::Vector3::zeros();
+                    let hit = sim::shapecast::ray_cast(
+                        &world.physics,
+                        eye_x, eye_y, eye_z,
+                        dir_x, dir_y, dir_z,
+                        100.0,
+                        &mut hit_normal,
+                        Some(shooter_coll),
+                    );
+
+                    if let Some(dist) = hit {
+                        let hit_x = eye_x + dir_x * dist;
+                        let hit_y = eye_y + dir_y * dist;
+                        let hit_z = eye_z + dir_z * dist;
+                        let mut best_slot: Option<usize> = None;
+                        let mut best_dist_sq = f64::MAX;
+                        for (ts, ts_slot) in slots.iter().enumerate() {
+                            if ts == shooter_idx || !ts_slot.occupied || !ts_slot.alive {
+                                continue;
+                            }
+                            let tp = &ts_slot.player.position;
+                            let dx = hit_x - tp.x;
+                            let dy = hit_y - tp.y;
+                            let dz = hit_z - tp.z;
+                            let dsq = dx * dx + dy * dy + dz * dz;
+                            if dsq < best_dist_sq {
+                                best_dist_sq = dsq;
+                                best_slot = Some(ts);
+                            }
+                        }
+                        if let Some(ts) = best_slot {
+                            if best_dist_sq < 2.25 {
+                                let target = &mut slots[ts];
+                                let dmg = 30u8.min(target.health);
+                                target.health -= dmg;
+                                if target.health == 0 {
+                                    target.alive = false;
+                                    let bf = target.bot_spawn.feet;
+                                    target.player.reset(bf[0], bf[1], bf[2]);
+                                    frame_events.push(GameEvent {
+                                        tag: EV_KILL,
+                                        slot: ts as u8,
+                                        by: shooter_idx as u8,
+                                    });
+                                    println!("slot {shooter_idx} killed slot {ts}");
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let snapshot = build_snapshot(&slots, server_tick, frame_events);
                 for slot in &slots {
                     if let (true, Some(out)) = (slot.occupied, &slot.out) {
                         // Each client gets its own ackSeq — re-encode per slot.
@@ -136,19 +310,28 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
             }
             Some(ev) = events.recv() => match ev {
                 Ev::Join { out, reply } => {
-                    match slots.iter().position(|s| !s.occupied) {
+                    match slots.iter().position(|s| !s.is_human) {
                         Some(i) => {
                             let team_ct = slots[i].team_ct;
                             let spawn_pt = if team_ct { spawn.ct } else { spawn.t };
                             let s = &mut slots[i];
                             s.occupied = true;
+                            s.is_human = true;
+                            s.alive = true;
+                            s.health = 100;
                             s.out = Some(out);
                             s.queue.clear();
                             s.ack_seq = 0;
                             s.last_buttons = 0;
+                            s.last_yaw = 0.0;
                             s.player.reset(spawn_pt[0], spawn_pt[1], spawn_pt[2]);
+                            world.sync_player_body(
+                                s.body_handle, s.collider_handle,
+                                spawn_pt[0], spawn_pt[1], spawn_pt[2], false,
+                            );
+                            s.bot = None; // evict the bot
                             let _ = reply.send(i as u8);
-                            println!("slot {i} joined");
+                            println!("slot {i} joined (human; bot evicted)");
                         }
                         None => {
                             let _ = reply.send(SPECTATOR);
@@ -157,17 +340,27 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 }
                 Ev::Cmd { slot, frame } => {
                     if let Some(s) = slots.get_mut(slot as usize) {
-                        if s.occupied {
+                        if s.is_human {
                             s.queue.push_back(frame);
                         }
                     }
                 }
                 Ev::Leave { slot } => {
                     if let Some(s) = slots.get_mut(slot as usize) {
-                        s.occupied = false;
+                        s.is_human = false;
+                        s.alive = true;
+                        s.health = 100;
                         s.out = None;
                         s.queue.clear();
-                        println!("slot {slot} left");
+                        // Respawn a bot into this slot.
+                        let feet = s.bot_spawn.feet;
+                        s.player.reset(feet[0], feet[1], feet[2]);
+                        world.sync_player_body(
+                            s.body_handle, s.collider_handle,
+                            feet[0], feet[1], feet[2], false,
+                        );
+                        s.bot = Some(ai::Bot::new(s.bot_spawn.waypoints));
+                        println!("slot {slot} left (bot respawned)");
                     }
                 }
             }
@@ -175,11 +368,11 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
     }
 }
 
-fn build_snapshot(slots: &[Slot], server_tick: u32) -> Snapshot {
+fn build_snapshot(slots: &[Slot], server_tick: u32, events: Vec<GameEvent>) -> Snapshot {
     let entities = slots
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.occupied)
+        .filter(|(_, s)| s.occupied && s.alive)
         .map(|(i, s)| {
             let p = &s.player;
             let mut flags = F_ALIVE;
@@ -196,7 +389,7 @@ fn build_snapshot(slots: &[Slot], server_tick: u32) -> Snapshot {
                 vel: [p.velocity.x as f32, p.velocity.y as f32, p.velocity.z as f32],
                 yaw: s.last_yaw,
                 pitch: s.last_pitch,
-                health: 100,
+                health: s.health,
                 armor: 0,
                 weapon: 1,
                 ammo: 30,
@@ -205,8 +398,9 @@ fn build_snapshot(slots: &[Slot], server_tick: u32) -> Snapshot {
         .collect();
     Snapshot {
         server_tick,
-        ack_seq: 0, // overwritten per client at send time
+        ack_seq: 0,
         entities,
+        events,
         round: RoundState {
             phase: 1,
             time_left_ms: 0,

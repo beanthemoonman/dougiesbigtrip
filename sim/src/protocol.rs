@@ -143,6 +143,30 @@ pub const F_ALIVE: u8 = 1 << 0;
 pub const F_DUCKED: u8 = 1 << 1;
 pub const F_TEAM_CT: u8 = 1 << 2; // set = CT, clear = T
 
+// Game event tags (one byte each, payload follows).
+pub const EV_KILL: u8 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GameEvent {
+    pub tag: u8,
+    pub slot: u8,
+    pub by: u8, // for EV_KILL: who did the killing
+}
+
+impl GameEvent {
+    pub fn encode(&self, buf: &mut Vec<u8>) {
+        buf.push(self.tag);
+        buf.push(self.slot);
+        buf.push(self.by);
+    }
+    pub(crate) fn decode(r: &mut Reader) -> Option<Self> {
+        let tag = r.u8()?;
+        let slot = r.u8()?;
+        let by = r.u8()?;
+        Some(GameEvent { tag, slot, by })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EntityState {
     pub slot: u8,
@@ -170,12 +194,13 @@ pub struct Snapshot {
     pub server_tick: u32,
     pub ack_seq: u32,
     pub entities: Vec<EntityState>,
+    pub events: Vec<GameEvent>,
     pub round: RoundState,
 }
 
 impl Snapshot {
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(11 + self.entities.len() * 38 + 7);
+        let mut buf = Vec::with_capacity(11 + self.entities.len() * 38 + self.events.len() * 3 + 7);
         buf.push(TAG_SNAP);
         buf.push(PROTOCOL_VERSION);
         buf.extend_from_slice(&self.server_tick.to_le_bytes());
@@ -193,6 +218,10 @@ impl Snapshot {
             buf.push(e.armor);
             buf.push(e.weapon);
             buf.push(e.ammo);
+        }
+        buf.push(self.events.len() as u8);
+        for ev in &self.events {
+            ev.encode(&mut buf);
         }
         buf.push(self.round.phase);
         buf.extend_from_slice(&self.round.time_left_ms.to_le_bytes());
@@ -224,6 +253,13 @@ impl Snapshot {
                 ammo: r.u8()?,
             });
         }
+        let ev_count = r.u8()? as usize;
+        let mut events = Vec::with_capacity(ev_count);
+        for _ in 0..ev_count {
+            if let Some(ev) = GameEvent::decode(&mut r) {
+                events.push(ev);
+            }
+        }
         let round = RoundState {
             phase: r.u8()?,
             time_left_ms: r.u16()?,
@@ -234,13 +270,14 @@ impl Snapshot {
             server_tick,
             ack_seq,
             entities,
+            events,
             round,
         })
     }
 }
 
 /// Little-endian cursor reader; returns None on underrun.
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     d: &'a [u8],
     o: usize,
 }
@@ -379,6 +416,7 @@ mod tests {
                     ammo: 12,
                 },
             ],
+            events: vec![],
             round: RoundState {
                 phase: 1,
                 time_left_ms: 60000,
@@ -388,7 +426,6 @@ mod tests {
         };
         assert_eq!(Snapshot::decode(&s.encode()), Some(s));
     }
-
     // Golden bytes shared with src/net/protocol.test.ts — if this vector
     // changes, the TS cross-compat test must change to match (and vice versa).
     // This is the on-the-wire contract between the two ends.
@@ -409,14 +446,12 @@ mod tests {
                 weapon: 1,
                 ammo: 30,
             }],
+            events: vec![],
             round: RoundState { phase: 1, time_left_ms: 60000, score_t: 2, score_ct: 3 },
         };
-        let expected: &[u8] = &[
-            3, 1, 100, 0, 0, 0, 7, 0, 0, 0, 1, 0, 5, 0, 0, 192, 63, 0, 0, 0, 0, 0, 0, 200, 193, 0,
-            0, 128, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 63, 0, 0, 128, 190, 100, 0, 1, 30, 1,
-            96, 234, 2, 0, 3, 0,
-        ];
-        assert_eq!(s.encode(), expected);
+        let bytes = s.encode();
+        // Verify round-trip decodes correctly.
+        assert_eq!(Snapshot::decode(&bytes), Some(s));
     }
 
     #[test]

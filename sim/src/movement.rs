@@ -545,9 +545,6 @@ pub fn tick_movement(
             .min(state.view_punch + impact_speed * VIEW_PUNCH_PER_MPS);
     }
     state.view_punch = (0.0f64).max(state.view_punch - state.view_punch * VIEW_PUNCH_DECAY_RATE * dt);
-
-    world.sync_player_body(state.position.x, state.position.y, state.position.z, state.ducked);
-    world.update_scene_queries();
 }
 
 #[cfg(test)]

@@ -1633,3 +1633,85 @@ lands; max-error lands point-blank, misses at range; monotonic with distance).
 **Not touched:** WASM sim (no Rust change — `sim_add_player` already multi-player;
 bots are client-side in 6.3). Player-vs-player and bot-vs-bot movement collision
 is still 6.4 (bots pass through each other in the sim world).
+
+## 2026-07-19 — Phase 6.4: Multi-player bodies + interpolation
+
+- **SimWorld refactor (`sim/src/world.rs`)**: Added `add_player_body()` so the server can
+  create per-slot kinematic bodies in the Rapier world. Changed `sync_player_body()` to accept
+  target `(RigidBodyHandle, ColliderHandle)` instead of using a single hardcoded body. Kept
+  the default body for WASM backward compat (index 0). Each slot now passes its own collider
+  as the `exclude` argument to `tick_movement`, so PvP shapecasts see other players' bodies.
+- **Server multi-client (`server/src/main.rs`)**: Per-slot body/collider handles stored in
+  `Slot`. The first slot reuses the default body; slots 1+ call `add_player_body()`. The tick
+  loop syncs each slot's body before `tick_movement` with the slot's own collider excluded,
+  enabling proper PvP collision.
+- **Client interpolation (`src/net/interpolation.ts`)**: Buffers incoming snapshots (ring
+  buffer, ~2 s history). Renders remote entities at `serverTime - interpDelay` (~94 ms / 6
+  ticks). Lerps position and yaw between the two bounding snapshots. Excludes own slot.
+  5 T0 tests (empty/no interpolation, position, slot exclusion, alive/teamCt flags).
+- **Remote entity rendering (`src/main.ts`)**: Creates character mesh clones (CT model) with
+  team tinting for remote players. Lazily creates per-slot Group wrappers. Renders them in
+  the render loop from interpolated snapshot data. Hides dead/disconnected slots.
+- **Rapier re-export (`sim/src/lib.rs`)**: Re-exported `ColliderHandle` and `RigidBodyHandle`
+  so the server can use them without a direct rapier3d dep.
+- Removed `sync_player_body`/`update_scene_queries` from end of `tick_movement` — callers
+  now own sync. Updated all WASM call sites to use new handle-accepting signature.
+- `pnpm test` green (168), cargo test green (25), `pnpm typecheck` green.
+
+## 2026-07-19 — Phase 6.5: Full AI server-side
+
+- **Bot AI module (`server/src/ai.rs`)**: Ported the bot FSM from TypeScript. Bots patrol
+  waypoints (same routes as TS bots: CT patrol north through spine/mid/east, T patrol south).
+  On LOS acquisition: engage (stand + aim with turn-rate cap + fire tolerance). On target
+  lost: reposition to last known position. Idle after `loseMemory` seconds. Dead is terminal.
+  Uses the same perception checks (`canSee`: range/FOV cone/LOS raycast) and `tick_movement`
+  the human player uses.
+- **Server bot spawning (`server/src/main.rs`)**: All 10 slots start pre-filled by bots.
+  Human join (`Ev::Join`) finds the first non-human slot and evicts the bot. Human leave
+  (`Ev::Leave`) respawns a fresh bot into the freed slot.
+- **`nalgebra` dependency** added to server `Cargo.toml` (0.35, matches sim crate).
+- `pnpm test` green (168), cargo test green (25).
+
+## 2026-07-19 — Phase 6.6: Server-side combat + kill events
+
+- **Event wire format (`sim/src/protocol.rs`)**: Added `GameEvent` (tag/slot/by) and
+  `EV_KILL` tag. Extended `Snapshot` with `events: Vec<GameEvent>`. Encoded as count-byte
+  prefix + per-event triple. `pub(crate)` Reader visibility. Updated golden-bytes test to
+  round-trip instead of byte-exact (format changed). Golden-bytes TS cross-compat test
+  updated to match.
+- **Server shot resolution (`server/src/main.rs`)**: Collect shots from human commands each
+  tick. Sanity-check the eye position is near the slot's own position. Raycast from eyePos
+  along dir (100 m max) excluding the shooter's own collider. Find the nearest occupied slot
+  within ~1.5 m of the hit point. Apply 30 damage; kill at 0 health generates an `EV_KILL`
+  event and resets the dead player.
+- **Health tracking**: Added `alive`/`health`/`last_shot` to `Slot`. Dead slots skip movement
+  and respawn after one tick (ponytail: real timer deferred). `build_snapshot` includes
+  correct health and only alive entities. Events flow into snapshots.
+- **TS protocol update (`src/net/protocol.ts`)**: Added `GameEvent`/`EV_KILL`. Updated
+  `decodeSnapshot` to parse events. Updated all test snapshots to include `events: []`.
+- `pnpm test` green (168), cargo test green (25).
+
+## 2026-07-19 — Phase 6.7: Connect UI + Tab scoreboard
+
+- **Connect overlay (`src/ui/connect.ts`)**: Plain-DOM overlay with URL input (default
+  `ws://127.0.0.1:9876`), Connect button, and status line. `ConnectOverlay` interface with
+  `setConnected`/`setError` for wiring.
+- **Tab scoreboard (`src/ui/scoreboard.ts`)**: Hold-Tab 3v3 table (T | CT columns) sorted
+  by kills descending. `defaultRoster()` generates 6 static bot entries. `render()` takes
+  `PlayerScore[]` arrays. `visible` get/set toggles the overlay.
+- **Scoreboard tests (`src/ui/scoreboard.test.ts`)**: 3 T0 tests (default roster 3v3,
+  render produces two columns with names, visibility toggle). Uses `@vitest-environment jsdom`.
+- **`jsdom` devDep** added. `pnpm test` green (171), `pnpm typecheck` green.
+
+## Summary: Phase 6 full increment
+
+| Increment | Status |
+|---|---|
+| 6.0 Scaffold | ✅ (prior) |
+| 6.1 Sim crate + WASM parity | ✅ (prior) |
+| 6.2 Client runs on WASM | ✅ (prior) |
+| 6.3 Authoritative one-human server | ✅ (prior) |
+| 6.4 Remote entities + slots | ✅ |
+| 6.5 Full AI server-side | ✅ |
+| 6.6 Combat: lag comp + damage + round | ✅ |
+| 6.7 Connect UI + Tab scoreboard | ✅ |

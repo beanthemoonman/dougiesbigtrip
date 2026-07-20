@@ -95,11 +95,12 @@ describe('protocol (TS)', () => {
   });
 
   // Golden bytes shared with sim/src/protocol.rs snapshot_golden_bytes.
+  // The new format adds an events count byte (0x00) between entities and round.
   it('decodes a Snapshot produced by the Rust encoder', () => {
     const bytes = new Uint8Array([
       3, 1, 100, 0, 0, 0, 7, 0, 0, 0, 1, 0, 5, 0, 0, 192, 63, 0, 0, 0, 0, 0, 0, 200, 193, 0, 0,
-      128, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 63, 0, 0, 128, 190, 100, 0, 1, 30, 1, 96, 234,
-      2, 0, 3, 0,
+      128, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 63, 0, 0, 128, 190, 100, 0, 1, 30, 0, 1, 96,
+      234, 2, 0, 3, 0,
     ]);
     const expected: Snapshot = {
       serverTick: 100,
@@ -118,6 +119,7 @@ describe('protocol (TS)', () => {
           ammo: 30,
         },
       ],
+      events: [],
       round: { phase: 1, timeLeftMs: 60000, scoreT: 2, scoreCt: 3 },
     };
     expect(decodeSnapshot(bytes)).toEqual(expected);
@@ -129,7 +131,7 @@ describe('protocol (TS)', () => {
     buf[1] = PROTOCOL_VERSION;
     expect(decodeSnapshot(buf)).toBeNull();
     // sanity: a well-formed empty-entity snapshot header decodes
-    const ok = new Uint8Array(18);
+    const ok = new Uint8Array(20);
     ok[0] = TAG_SNAP;
     ok[1] = PROTOCOL_VERSION;
     expect(decodeSnapshot(ok)).not.toBeNull();

@@ -37,6 +37,7 @@ import { addStaticBox, createWorld, initPhysics } from './physics/world';
 import { sim_add_box, sim_add_player, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_set_player, sim_tick } from 'sim-wasm';
 import { createConnection } from './net/connection';
 import { createPredictor, type Predictor } from './net/prediction';
+import { createInterpolationBuffer } from './net/interpolation';
 import { encodeCommand } from './net/protocol';
 import { SPECTATOR } from './net/protocol';
 import { createDecals } from './render/decals';
@@ -439,6 +440,34 @@ async function main(): Promise<void> {
   // Map each bot's collider back to its Enemy so a player hitscan can find it.
   const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.brain.bot.collider.handle, e]));
 
+  // --- Remote entities (Phase 6.4): networked players rendered from snapshot
+  // interpolation. Each remote gets its own character mesh clone, created lazily
+  // when a new slot appears and hidden when gone.
+  const remoteRoots = new Map<number, Group>(); // slot → Group
+  function remoteRootFor(slot: number, teamCt: boolean): Group {
+    let root = remoteRoots.get(slot);
+    if (!root) {
+      const clone = cloneSkeleton(ctTemplateScene);
+      clone.visible = true;
+      flattenMaterials(clone);
+      if (!teamCt) {
+        clone.traverse((o) => {
+          if (o instanceof SkinnedMesh) {
+            const m = o.material;
+            if (Array.isArray(m)) m.forEach((mm) => (mm as MeshBasicMaterial).color.copy(T_TINT));
+            else (m as MeshBasicMaterial).color.copy(T_TINT);
+          }
+        });
+      }
+      root = new Group();
+      root.add(clone);
+      root.visible = true;
+      renderCtx.scene.add(root);
+      remoteRoots.set(slot, root);
+    }
+    return root;
+  }
+
   // The human plays T. Nearest ALIVE, VISIBLE enemy for a given bot (the human is
   // an enemy of CT bots; opposing bots are enemies of both). Returns the human
   // sentinel, an Enemy, or null (nobody in sight → the brain patrols/repositions).
@@ -580,12 +609,13 @@ async function main(): Promise<void> {
     return '';
   }
 
-  // --- Netcode (Phase 6.3): ?connect=ws://host:port drives the LOCAL player's
-  // movement through the authoritative server (predict + reconcile). Absent →
-  // pure single-player, unchanged. Remote players / server-side round+bots are
-  // 6.4–6.6; here only the human's movement is server-authoritative.
+  // --- Netcode (Phase 6.3—6.4): ?connect=ws://host:port drives the LOCAL
+  // player's movement through the authoritative server (predict + reconcile),
+  // and streams remote entity snapshots for interpolation (6.4). Absent →
+  // pure single-player, unchanged.
   let predictor: Predictor | null = null;
   let netConn: ReturnType<typeof createConnection> | null = null;
+  const interpBuf = createInterpolationBuffer();
   const connectUrl = new URLSearchParams(location.search).get('connect');
   if (connectUrl) {
     const conn = createConnection();
@@ -594,7 +624,6 @@ async function main(): Promise<void> {
         console.warn('[net] server full — spectating (movement stays local)');
         return;
       }
-      // The local player is always WASM index 0; bind the predictor to it.
       predictor = createPredictor(
         {
           tick: (b, y) => { sim_tick(0, b, y); },
@@ -607,6 +636,7 @@ async function main(): Promise<void> {
     };
     conn.onSnapshot = (s): void => {
       predictor?.reconcile(s);
+      interpBuf.push(s);
     };
     conn.connect(connectUrl);
     netConn = conn;
@@ -869,6 +899,28 @@ async function main(): Promise<void> {
         const p = e.brain.bot.position;
         e.root.position.set(p.x, p.y, p.z);
         e.root.rotation.y = e.brain.aim.yaw;
+      }
+
+      // Remote entities (Phase 6.4): interpolated networked players driven
+      // by snapshot data from the authoritative server.
+      if (predictor) {
+        const mySlot = predictor.ownSlot;
+        const remotes = interpBuf.interpolate(mySlot);
+        for (const r of remotes) {
+          const root = remoteRootFor(r.slot, r.teamCt);
+          if (r.alive) {
+            root.visible = true;
+            root.position.set(r.pos[0], r.pos[1], r.pos[2]);
+            root.rotation.y = r.yaw;
+          } else {
+            root.visible = false;
+          }
+        }
+        // Hide roots for slots no longer in the snapshot (disconnected).
+        const activeSlots = new Set(remotes.map((r) => r.slot));
+        for (const [slot, root] of remoteRoots) {
+          if (!activeSlots.has(slot)) root.visible = false;
+        }
       }
 
       renderCtx.render();

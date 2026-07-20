@@ -7,6 +7,8 @@ pub mod rng;
 pub mod shapecast;
 pub mod world;
 
+pub use rapier3d::prelude::{ColliderHandle, RigidBodyHandle};
+
 // ---------------------------------------------------------------
 // WASM bindings — re-exports for the browser side.
 // ---------------------------------------------------------------
@@ -144,7 +146,9 @@ mod wasm_bindings {
         let mut world = SimWorld::new();
         let state = PlayerState::new(spawn_x, spawn_y, spawn_z);
         // Sync the kinematic body to the initial position immediately.
-        world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
+        let rh = world.player_rigid_body_handle();
+        let ch = world.player_collider_handle();
+        world.sync_player_body(rh, ch, spawn_x, spawn_y, spawn_z, false);
         *sim = Some((world, vec![state]));
     }
 
@@ -185,7 +189,9 @@ mod wasm_bindings {
             if i < states.len() {
                 states[i].reset(spawn_x, spawn_y, spawn_z);
                 if i == 0 {
-                    world.sync_player_body(spawn_x, spawn_y, spawn_z, false);
+                    let rh = world.player_rigid_body_handle();
+                    let ch = world.player_collider_handle();
+                    world.sync_player_body(rh, ch, spawn_x, spawn_y, spawn_z, false);
                 }
             }
         }
@@ -237,9 +243,10 @@ mod wasm_bindings {
                 };
                 tick_movement(world, &mut states[i], buttons, yaw, FIXED_DT, exclude);
                 let s = &states[i];
-                // For the human player, sync the body so TS hit detection works.
                 if i == 0 {
-                    world.sync_player_body(s.position.x, s.position.y, s.position.z, s.ducked);
+                    let rh = world.player_rigid_body_handle();
+                    let ch = world.player_collider_handle();
+                    world.sync_player_body(rh, ch, s.position.x, s.position.y, s.position.z, s.ducked);
                 }
                 vec![
                     s.position.x, s.position.y, s.position.z,
@@ -274,7 +281,9 @@ mod wasm_bindings {
                 s.velocity = nalgebra::Vector3::new(vx, vy, vz);
                 s.ducked = ducked;
                 if i == 0 {
-                    world.sync_player_body(px, py, pz, ducked);
+                    let rh = world.player_rigid_body_handle();
+                    let ch = world.player_collider_handle();
+                    world.sync_player_body(rh, ch, px, py, pz, ducked);
                 }
             }
         }

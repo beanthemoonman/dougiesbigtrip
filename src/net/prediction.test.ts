@@ -38,6 +38,7 @@ function snapshot(serverTick: number, ackSeq: number, pos: number): Snapshot {
         ammo: 30,
       },
     ],
+    events: [],
     round: { phase: 1, timeLeftMs: 0, scoreT: 0, scoreCt: 0 },
   };
 }

@@ -150,10 +150,19 @@ export interface RoundState {
   scoreCt: number;
 }
 
+export interface GameEvent {
+  tag: number;
+  slot: number;
+  by: number;
+}
+
+export const EV_KILL = 1;
+
 export interface Snapshot {
   serverTick: number;
   ackSeq: number;
   entities: EntityState[];
+  events: GameEvent[];
   round: RoundState;
 }
 
@@ -180,6 +189,13 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
     const ammo = v.getUint8(o); o += 1;
     entities.push({ slot, flags, pos, vel, yaw, pitch, health, armor, weapon, ammo });
   }
+  const evCount = v.getUint8(o); o += 1;
+  const events: GameEvent[] = [];
+  for (let i = 0; i < evCount; i++) {
+    if (data.length < o + 3) return null;
+    events.push({ tag: v.getUint8(o), slot: v.getUint8(o + 1), by: v.getUint8(o + 2) });
+    o += 3;
+  }
   if (data.length < o + 7) return null;
   const round: RoundState = {
     phase: v.getUint8(o),
@@ -187,5 +203,5 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
     scoreT: v.getUint16(o + 3, true),
     scoreCt: v.getUint16(o + 5, true),
   };
-  return { serverTick, ackSeq, entities, round };
+  return { serverTick, ackSeq, entities, events, round };
 }

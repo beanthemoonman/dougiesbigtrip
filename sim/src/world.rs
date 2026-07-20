@@ -1,7 +1,8 @@
 /// Rapier3D physics world wrapper — map collider loading, capsule shape management,
-/// and kinematic player body. See docs/source-movement.md: the accel/friction curve
-/// and collide-and-slide loop are hand-rolled in movement.rs; this module only wraps
-/// Rapier for the shape-cast queries that the hand-rolled code needs.
+/// and kinematic player bodies (one per slot). See docs/source-movement.md: the
+/// accel/friction curve and collide-and-slide loop are hand-rolled in
+/// movement.rs; this module only wraps Rapier for the shape-cast queries that
+/// the hand-rolled code needs.
 ///
 /// The sim uses f64 for all movement math (matching JS Number semantics); Rapier
 /// physics runs in f32. Conversion is done at this boundary via (as f32) casts.
@@ -11,27 +12,40 @@ use crate::constants::GRAVITY;
 const GRAVITY_F32: f32 = GRAVITY as f32;
 
 /// The sim-side physics world: owns the Rapier world, the static map colliders,
-/// and the bookkeeping kinematic body+shape for the local player. The player's
-/// actual position/velocity are owned by PlayerState in movement.rs; the kinematic
-/// body just keeps the Rapier world informed so other systems (bots, hit detection
-/// in future phases) can query against the player.
+/// and kinematic bodies for every player slot. Each player's actual
+/// position/velocity are owned by PlayerState in movement.rs; the kinematic
+/// bodies just keep the Rapier world informed so other systems (bots, hit
+/// detection, PvP collision) can query against them.
+///
+/// Phase 6.4: multiple player bodies so PvP shapecasts see other players.
+/// The WASM sim only uses the default (index-0) body; the native server calls
+/// add_player_body() per slot.
 pub struct SimWorld {
     pub physics: PhysicsWorld,
     pub standing_shape: SharedShape,
     pub ducked_shape: SharedShape,
-    body_handle: RigidBodyHandle,
-    collider_handle: ColliderHandle,
+    /// Default kinematic body (WASM index 0, or first slot on the server).
+    default_body_handle: RigidBodyHandle,
+    default_collider_handle: ColliderHandle,
     /// True after the first step() call, which initialises the broad phase
     /// so queries can see static colliders.
     broad_phase_ready: bool,
+}
+
+fn create_kinematic_player_body(physics: &mut PhysicsWorld) -> (RigidBodyHandle, ColliderHandle) {
+    let standing_half_height = crate::constants::STANDING_HALF_HEIGHT as f32;
+    let player_radius = crate::constants::PLAYER_RADIUS as f32;
+    let body = RigidBodyBuilder::kinematic_position_based().build();
+    let body_handle = physics.insert_body(body);
+    let collider = ColliderBuilder::capsule_y(standing_half_height, player_radius).build();
+    let collider_handle = physics.insert_collider(collider, Some(body_handle));
+    (body_handle, collider_handle)
 }
 
 impl SimWorld {
     pub fn new() -> Self {
         let mut physics = PhysicsWorld::new();
 
-        // Gravity doesn't matter for the movement controller (it's hand-rolled),
-        // but set it for future dynamic bodies (props, ragdolls).
         physics.gravity = Vector::new(0.0, -GRAVITY_F32, 0.0);
 
         let standing_half_height = crate::constants::STANDING_HALF_HEIGHT as f32;
@@ -47,18 +61,14 @@ impl SimWorld {
             .shared_shape()
             .clone();
 
-        // Create the kinematic player body + collider at the origin to start.
-        let body = RigidBodyBuilder::kinematic_position_based().build();
-        let body_handle = physics.insert_body(body);
-        let collider = ColliderBuilder::capsule_y(standing_half_height, player_radius).build();
-        let collider_handle = physics.insert_collider(collider, Some(body_handle));
+        let (default_body_handle, default_collider_handle) = create_kinematic_player_body(&mut physics);
 
         Self {
             physics,
             standing_shape,
             ducked_shape,
-            body_handle,
-            collider_handle,
+            default_body_handle,
+            default_collider_handle,
             broad_phase_ready: false,
         }
     }
@@ -129,9 +139,23 @@ impl SimWorld {
         self.physics.insert_collider(collider, Some(body_handle));
     }
 
-    /// Update the kinematic player body position for query-awareness.
-    /// Called by `tick_movement()` after moving the player.
-    pub fn sync_player_body(&mut self, feet_x: f64, feet_y: f64, feet_z: f64, ducked: bool) {
+    /// Create an additional kinematic player body (for a new server slot).
+    /// Returns handles the caller must remember so it can pass the correct
+    /// collider handle as exclude during tick_movement.
+    pub fn add_player_body(&mut self) -> (RigidBodyHandle, ColliderHandle) {
+        create_kinematic_player_body(&mut self.physics)
+    }
+
+    /// Update a specific kinematic player body position for query-awareness.
+    pub fn sync_player_body(
+        &mut self,
+        rigid_handle: RigidBodyHandle,
+        coll_handle: ColliderHandle,
+        feet_x: f64,
+        feet_y: f64,
+        feet_z: f64,
+        ducked: bool,
+    ) {
         let standing_hh = crate::constants::STANDING_HALF_HEIGHT as f32;
         let ducked_hh = crate::constants::DUCKED_HALF_HEIGHT as f32;
         let radius = crate::constants::PLAYER_RADIUS as f32;
@@ -140,23 +164,31 @@ impl SimWorld {
         let center_y = feet_y as f32 + half_height + radius;
         let translation = Vector::new(feet_x as f32, center_y, feet_z as f32);
 
-        if let Some(body) = self.physics.bodies.get_mut(self.body_handle) {
+        if let Some(body) = self.physics.bodies.get_mut(rigid_handle) {
             body.set_translation(translation, false);
         }
 
-        if let Some(coll) = self.physics.colliders.get_mut(self.collider_handle) {
-            let shape = if ducked { &self.ducked_shape } else { &self.standing_shape };
+        if let Some(coll) = self.physics.colliders.get_mut(coll_handle) {
+            let shape = if ducked {
+                &self.ducked_shape
+            } else {
+                &self.standing_shape
+            };
             coll.set_shape(shape.clone());
             coll.set_translation(translation);
         }
     }
 
-    pub fn update_scene_queries(&mut self) {
-        // Rapier 0.34's PhysicsWorld handles scene queries internally.
+    pub fn update_scene_queries(&mut self) {}
+
+    /// Default collider handle (WASM index 0, or server's first slot).
+    pub fn player_collider_handle(&self) -> ColliderHandle {
+        self.default_collider_handle
     }
 
-    pub fn player_collider_handle(&self) -> ColliderHandle {
-        self.collider_handle
+    /// Default rigid body handle (paired with `player_collider_handle`).
+    pub fn player_rigid_body_handle(&self) -> RigidBodyHandle {
+        self.default_body_handle
     }
 
     /// Ensure the broad phase knows about all static colliders.
