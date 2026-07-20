@@ -1715,3 +1715,28 @@ is still 6.4 (bots pass through each other in the sim world).
 | 6.5 Full AI server-side | ✅ |
 | 6.6 Combat: lag comp + damage + round | ✅ |
 | 6.7 Connect UI + Tab scoreboard | ✅ |
+
+## 2026-07-19
+
+- Implemented `docs/plan-bugfixes-and-matchtime.md` (four fixes, all in `src/main.ts` + a new
+  helper + tests):
+  - **Bug 1 — bots shot through walls (P0):** `world.step()` is now called at the top of each
+    `tick`. The TS Rapier world was never stepped, so static map colliders were absent from the
+    query pipeline and every LOS (`canSee`) and bullet raycast passed through walls. No dynamic
+    bodies exist, so this only rebuilds query structures — deterministic, no feel change. Added a
+    regression test in `perception.test.ts` pinning the invariant (a static box only blocks a ray
+    after `step()`).
+  - **Bug 2 — bots didn't hold weapons:** each bot clones the rifle viewmodel glb as a
+    world-model, parented to its right-hand bone (`/righthand/i`) so it tracks the animations.
+    Loaded as its own instance (the viewmodel rifle gets reparented to layer 1). Grip offset
+    (`BOT_GUN_POS`/`BOT_GUN_ROT`) left as tuning constants.
+  - **Bug 3 — spectator cam on death:** new `src/player/spectator.ts` (`moveSpectator`, pure +
+    unit-tested). While dead the camera free-flies (noclip) with WASD + mouse from the death eye;
+    viewmodel hidden; banner reads `SPECTATING`; respawn restores first-person. Sim untouched.
+  - **Bug 4 — fixed 3-minute match limit:** `MATCH_TIME = 180`, `matchClock`/`matchOver` in
+    `main.ts`. Counts total elapsed sim time (deterministic accumulated `fixedDt`); at zero the
+    round FSM, player sim and bot loop all freeze and a `MATCH OVER  T n : n CT` banner shows.
+  - Added T3 scripts `ACC-013`..`ACC-016` (unrun stubs).
+  - `pnpm typecheck` green; `pnpm test` green (176 tests).
+  - Skipped: drop-on-death weapon, per-bot weapon matching, dedicated low-poly world-model,
+    spectate-a-teammate/killcam, overtime/match-restart. Add when art budget / menu exist.

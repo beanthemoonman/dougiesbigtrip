@@ -42,6 +42,18 @@ describe('perception: canSee', () => {
     const target = new Vector3(0, 0, -10);
     expect(canSee(world, botFeet, yawLookNegZ, target)).toBe(false);
   });
+
+  // Bug 1 regression: a static collider is invisible to raycasts until the world
+  // is stepped. This is exactly why main.ts must call world.step() each tick —
+  // without it, LOS and bullets pass through every wall.
+  it('does NOT block LOS until the world is stepped', () => {
+    const world = createWorld();
+    addStaticBox(world, { x: 0, y: 1, z: -5 }, { x: 3, y: 2, z: 0.25 });
+    const target = new Vector3(0, 0, -10);
+    expect(canSee(world, botFeet, yawLookNegZ, target)).toBe(true); // unstepped: wall not queryable
+    world.step();
+    expect(canSee(world, botFeet, yawLookNegZ, target)).toBe(false); // stepped: wall blocks
+  });
 });
 
 describe('perception: canHear', () => {

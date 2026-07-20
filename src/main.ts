@@ -32,6 +32,7 @@ import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
 import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, type PlayerState } from './player/movement';
+import { moveSpectator } from './player/spectator';
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
 import { sim_add_box, sim_add_player, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_set_player, sim_tick } from 'sim-wasm';
@@ -371,6 +372,35 @@ async function main(): Promise<void> {
       }
     });
   }
+  // Bug 2: bots hold a rifle world-model. No dedicated world-model asset exists,
+  // so reuse the rifle viewmodel glb, parented to each bot's right-hand bone so
+  // it tracks the animation. Loaded as its OWN instance because the viewmodel
+  // rifleScene (below) gets reparented onto the layer-1 viewmodel scene.
+  // ponytail: grip offset is a hand-tuned calibration knob, not derivable — nudge
+  // these if the gun clips the hand or points wrong. Add a real low-poly
+  // world-model + per-bot weapon matching when art budget allows.
+  const rifleWorldTemplate = (await new GLTFLoader().loadAsync(rifleUrl)).scene;
+  const BOT_GUN_POS = new Vector3(0, 0.02, 0.08); // metres, in hand-bone space
+  const BOT_GUN_ROT = new Vector3(0, Math.PI / 2, 0); // yaw the barrel down the arm
+  function attachBotWeapon(character: Object3D): void {
+    let hand: Object3D | undefined;
+    character.traverse((o) => {
+      if (!hand && /righthand/i.test(o.name)) hand = o;
+    });
+    if (!hand) return; // rig without a named right-hand bone → bot just goes unarmed
+    const gun = rifleWorldTemplate.clone(true);
+    gun.traverse((o) => {
+      o.layers.set(0); // world layer (viewmodel is layer 1)
+      if (o instanceof Mesh) {
+        const src = o.material as MeshStandardMaterial;
+        o.material = new MeshBasicMaterial({ map: src.map, color: src.color });
+      }
+    });
+    gun.position.copy(BOT_GUN_POS);
+    gun.rotation.set(BOT_GUN_ROT.x, BOT_GUN_ROT.y, BOT_GUN_ROT.z);
+    hand.add(gun);
+  }
+
   const ctGltf = await new GLTFLoader().loadAsync(ctPlayerUrl);
   loading.step('Loading weapons…');
   const ctTemplateScene = ctGltf.scene;
@@ -421,6 +451,7 @@ async function main(): Promise<void> {
         }
       });
     }
+    attachBotWeapon(clone); // Bug 2: rifle in the bot's right hand
     const root = new Group();
     root.add(clone);
     root.position.set(s.x, s.y, s.z);
@@ -501,10 +532,17 @@ async function main(): Promise<void> {
   const botToPlayer = new Vector3();
 
   const round = createRoundState();
+  // Bug 4: fixed 3-minute match. When it expires the world freezes on a final
+  // banner instead of looping into another round.
+  const MATCH_TIME = 180; // s
+  let matchClock = MATCH_TIME;
+  let matchOver = false;
   let playerAlive = true;
   let health = 100;
   let armor = 100;
   let stepDist = 0; // metres walked since the last footstep (see STEP_STRIDE)
+  // Bug 3: free-fly spectator position while dead. Seeded from the death eye.
+  const specPos = new Vector3();
 
   const playerFeet = new Vector3(); // scratch: player feet, the bots' target
   const impact = new Vector3();
@@ -603,9 +641,10 @@ async function main(): Promise<void> {
 
   // Centre-banner text for the current phase (empty during normal play).
   function bannerText(): string {
+    if (matchOver) return `MATCH OVER   T ${round.score.t} : ${round.score.ct} CT`;
     if (round.phase === 'freezetime') return `FREEZE  ${Math.ceil(round.timer)}`;
     if (round.phase === 'over') return round.winner === 'T' ? 'YOU WIN' : 'YOU LOSE';
-    if (!playerAlive) return 'DEAD';
+    if (!playerAlive) return 'SPECTATING';
     return '';
   }
 
@@ -645,6 +684,22 @@ async function main(): Promise<void> {
   loading.done();
   startLoop({
     tick(fixedDt): void {
+      // Bug 1: refresh the TS Rapier query pipeline. Only sim_tick drives the
+      // WASM world; without this step() the static map colliders are never in
+      // the BVH, so LOS (canSee) and bullet raycasts pass straight through walls.
+      // No dynamic bodies exist (statics + kinematic capsules), so this only
+      // rebuilds the query structures — deterministic, no feel change.
+      world.step();
+
+      // Bug 4: fixed match clock. Counts total elapsed sim time; at zero the
+      // match freezes (see the !matchOver guards below). Accumulated fixedDt →
+      // deterministic. ponytail: counts freezetime too; gate on
+      // round.phase === 'live' if only live time should count.
+      if (!matchOver) {
+        matchClock -= fixedDt;
+        if (matchClock <= 0) { matchClock = 0; matchOver = true; }
+      }
+
       prevView.position.copy(currView.position);
       prevView.eyeHeight = currView.eyeHeight;
       prevView.viewPunch = currView.viewPunch;
@@ -660,9 +715,11 @@ async function main(): Promise<void> {
         if (e.team === 'CT') ctAlive++;
         else tAlive++;
       }
-      const event = tickRound(round, DEFAULT_ROUND, tAlive, ctAlive, fixedDt);
+      // Match over: freeze the round FSM entirely (no respawn/reset), and force
+      // live=false so the player sim, bot loop and firing below all skip.
+      const event = matchOver ? 'none' : tickRound(round, DEFAULT_ROUND, tAlive, ctAlive, fixedDt);
       if (event === 'reset') respawn();
-      const live = round.phase === 'live';
+      const live = !matchOver && round.phase === 'live';
 
       playerFeet.copy(player.position);
 
@@ -704,6 +761,12 @@ async function main(): Promise<void> {
         }
       }
 
+      // Bug 3: while dead, free-fly the spectator cam (noclip). Does not touch
+      // the WASM sim or player state — purely a render-camera position.
+      if (!playerAlive && !matchOver) {
+        moveSpectator(specPos, input.state.buttons, input.state.yaw, input.state.pitch, fixedDt);
+      }
+
       // Bots (both teams): pick the nearest visible enemy, run the FSM, shoot.
       if (live) {
         for (const e of enemies) {
@@ -743,6 +806,8 @@ async function main(): Promise<void> {
                 if (health <= 0) {
                   health = 0;
                   playerAlive = false;
+                  // Bug 3: enter free-fly spectator from the death eye position.
+                  specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
                 }
               } else {
                 target.hp -= computeDamage(BOT_WEAPON, dist, 'chest', 0).health;
@@ -877,12 +942,22 @@ async function main(): Promise<void> {
     },
     render(alpha, frameDt): void {
       renderCtx.stats.begin();
-      updateViewCamera(renderCtx.camera, prevView, currView, alpha, input.state.yaw, input.state.pitch);
+      if (!playerAlive && !matchOver) {
+        // Bug 3: spectator free-fly — pose the camera straight at specPos
+        // (eyeHeight 0, no punch) instead of the frozen corpse view.
+        renderCtx.camera.position.copy(specPos);
+        renderCtx.camera.rotation.order = 'YXZ';
+        renderCtx.camera.rotation.set(input.state.pitch, input.state.yaw, 0);
+      } else {
+        updateViewCamera(renderCtx.camera, prevView, currView, alpha, input.state.yaw, input.state.pitch);
+      }
       vfx.update(frameDt); // age muzzle flash / tracers / impact puffs off real time
 
       // Apply the viewmodel anim pose on top of the active weapon's rest pose.
       // ponytail: read straight off the last sim tick, no render interpolation —
       // the kick/reload move fast and 64 Hz stepping is imperceptible on the gun.
+      // Hide the welded viewmodel while spectating/match-over (no eye to hold it).
+      active.root.visible = playerAlive && !matchOver;
       const weapon = WEAPONS[active.id];
       viewmodelPose(anim, animPose);
       active.root.position.set(
