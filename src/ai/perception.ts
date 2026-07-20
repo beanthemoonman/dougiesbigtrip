@@ -7,7 +7,7 @@
 import type { World } from '@dimforge/rapier3d-compat';
 import type { Collider } from '@dimforge/rapier3d-compat';
 import { MathUtils, Vector3 } from 'three';
-import { EYE_HEIGHT_STANDING } from '../player/constants';
+import { EYE_HEIGHT_STANDING, PLAYER_RADIUS } from '../player/constants';
 import { rayCast } from '../physics/shapecast';
 
 export const SIGHT_RANGE = 40; // m — beyond this a bot won't acquire by sight
@@ -47,8 +47,16 @@ export function canSee(
   forward.set(-Math.sin(yaw), 0, -Math.cos(yaw));
   if (forward.dot(toTarget) < Math.cos(SIGHT_HALF_FOV)) return false;
 
-  // Line of sight: cast to just short of the target. A hit = wall/cover between.
-  const hit = rayCast(world, eye, toTarget, dist - 0.1, losNormal, botCollider);
+  // Line of sight: cast to the target's HULL, not its eye. The target (player or
+  // bot) is a capsule of radius PLAYER_RADIUS; a ray to its centre plows into its
+  // own near hemisphere and reports a false "blocked", so bots could never see
+  // anyone (their whole target never became visible). Stop one radius short + a
+  // small margin. Point-blank (dist within that band) is trivially visible.
+  // ponytail: this misses cover sitting within one radius of the target; that
+  // band is inside the target's own body anyway, so no real LOS is lost.
+  const reach = dist - PLAYER_RADIUS - 0.05;
+  if (reach <= 0) return true;
+  const hit = rayCast(world, eye, toTarget, reach, losNormal, botCollider);
   return hit === null;
 }
 

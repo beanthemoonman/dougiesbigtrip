@@ -146,19 +146,25 @@ mod wasm_bindings {
         let mut world = SimWorld::new();
         let state = PlayerState::new(spawn_x, spawn_y, spawn_z);
         // Sync the kinematic body to the initial position immediately.
-        let rh = world.player_rigid_body_handle();
-        let ch = world.player_collider_handle();
+        let rh = world.player_rigid_body_handle(0);
+        let ch = world.player_collider_handle(0);
         world.sync_player_body(rh, ch, spawn_x, spawn_y, spawn_z, false);
         *sim = Some((world, vec![state]));
     }
 
     /// Add a player slot (e.g. for a bot) and return its index.
     /// The caller is responsible for remembering which index maps to which bot.
+    /// Creates a kinematic body + collider in the physics world so shapecasts
+    /// see this player as an obstacle (no more push-through).
     #[wasm_bindgen]
     pub fn sim_add_player(spawn_x: f64, spawn_y: f64, spawn_z: f64) -> u32 {
         let mut sim = SIM.lock().unwrap();
-        if let Some((_, states)) = sim.as_mut() {
+        if let Some((world, states)) = sim.as_mut() {
             let idx = states.len() as u32;
+            let (rh, ch) = world.add_player_body();
+            // Sync the new body to the spawn immediately so queries see it
+            // before the first tick.
+            world.sync_player_body(rh, ch, spawn_x, spawn_y, spawn_z, false);
             states.push(PlayerState::new(spawn_x, spawn_y, spawn_z));
             idx
         } else {
@@ -168,19 +174,23 @@ mod wasm_bindings {
 
     /// Remove a player slot. MUST be called from highest index downward
     /// to avoid invalidating other indices (bots.remove(index) slides later ones).
+    /// Also removes the kinematic body from the world's body_handles vec;
+    /// the Rapier bodies/colliders are orphaned (no clean-up API).
     #[wasm_bindgen]
     pub fn sim_remove_player(index: u32) {
         let mut sim = SIM.lock().unwrap();
-        if let Some((_, states)) = sim.as_mut() {
+        if let Some((world, states)) = sim.as_mut() {
             let i = index as usize;
             if i < states.len() {
                 states.remove(i);
+                world.remove_player_body(i);
             }
         }
     }
 
     /// Reset the player to a spawn position without destroying the world
-    /// (preserves all map colliders).
+    /// (preserves all map colliders). Syncs the kinematic body so queries
+    /// see the player at the new spawn immediately.
     #[wasm_bindgen]
     pub fn sim_reset_player(index: u32, spawn_x: f64, spawn_y: f64, spawn_z: f64) {
         let mut sim = SIM.lock().unwrap();
@@ -188,11 +198,9 @@ mod wasm_bindings {
             let i = index as usize;
             if i < states.len() {
                 states[i].reset(spawn_x, spawn_y, spawn_z);
-                if i == 0 {
-                    let rh = world.player_rigid_body_handle();
-                    let ch = world.player_collider_handle();
-                    world.sync_player_body(rh, ch, spawn_x, spawn_y, spawn_z, false);
-                }
+                let rh = world.player_rigid_body_handle(i);
+                let ch = world.player_collider_handle(i);
+                world.sync_player_body(rh, ch, spawn_x, spawn_y, spawn_z, false);
             }
         }
     }
@@ -222,9 +230,9 @@ mod wasm_bindings {
     }
 
     /// Tick a specific player by index (0 = human, 1+ = bots).
-    /// Human player (index 0) excludes its own kinematic body from shapecasts;
-    /// bots (index 1+) use no exclusion (they have no kinematic bodies in the
-    /// WASM world — only map colliders).
+    /// Every player excludes its own collider from shapecasts so the capsule
+    /// doesn't report hits against itself, but collides against all other
+    /// players' capsules — no more push-through.
     /// Returns a flat array:
     /// [pos_x, pos_y, pos_z, vel_x, vel_y, vel_z, on_ground, eye_height, view_punch, duck_amount]
     #[wasm_bindgen]
@@ -236,18 +244,12 @@ mod wasm_bindings {
                 if i >= states.len() {
                     return vec![];
                 }
-                let exclude = if i == 0 {
-                    Some(world.player_collider_handle())
-                } else {
-                    None
-                };
+                let exclude = Some(world.player_collider_handle(i));
                 tick_movement(world, &mut states[i], buttons, yaw, FIXED_DT, exclude);
                 let s = &states[i];
-                if i == 0 {
-                    let rh = world.player_rigid_body_handle();
-                    let ch = world.player_collider_handle();
-                    world.sync_player_body(rh, ch, s.position.x, s.position.y, s.position.z, s.ducked);
-                }
+                let rh = world.player_rigid_body_handle(i);
+                let ch = world.player_collider_handle(i);
+                world.sync_player_body(rh, ch, s.position.x, s.position.y, s.position.z, s.ducked);
                 vec![
                     s.position.x, s.position.y, s.position.z,
                     s.velocity.x, s.velocity.y, s.velocity.z,
@@ -280,11 +282,9 @@ mod wasm_bindings {
                 s.position = nalgebra::Vector3::new(px, py, pz);
                 s.velocity = nalgebra::Vector3::new(vx, vy, vz);
                 s.ducked = ducked;
-                if i == 0 {
-                    let rh = world.player_rigid_body_handle();
-                    let ch = world.player_collider_handle();
-                    world.sync_player_body(rh, ch, px, py, pz, ducked);
-                }
+                let rh = world.player_rigid_body_handle(i);
+                let ch = world.player_collider_handle(i);
+                world.sync_player_body(rh, ch, px, py, pz, ducked);
             }
         }
     }

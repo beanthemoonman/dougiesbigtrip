@@ -96,8 +96,8 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
             let s = if team_ct { spawn.ct } else { spawn.t };
             let (body_handle, collider_handle) = if i == 0 {
                 (
-                    world.player_rigid_body_handle(),
-                    world.player_collider_handle(),
+                    world.player_rigid_body_handle(0),
+                    world.player_collider_handle(0),
                 )
             } else {
                 world.add_player_body()

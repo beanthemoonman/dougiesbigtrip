@@ -24,9 +24,9 @@ pub struct SimWorld {
     pub physics: PhysicsWorld,
     pub standing_shape: SharedShape,
     pub ducked_shape: SharedShape,
-    /// Default kinematic body (WASM index 0, or first slot on the server).
-    default_body_handle: RigidBodyHandle,
-    default_collider_handle: ColliderHandle,
+    /// Kinematic body + collider per player slot (index 0 = human, 1+ = bots).
+    /// Indices must match the wasm state vector 1:1.
+    body_handles: Vec<(RigidBodyHandle, ColliderHandle)>,
     /// True after the first step() call, which initialises the broad phase
     /// so queries can see static colliders.
     broad_phase_ready: bool,
@@ -61,14 +61,13 @@ impl SimWorld {
             .shared_shape()
             .clone();
 
-        let (default_body_handle, default_collider_handle) = create_kinematic_player_body(&mut physics);
+        let (body0, coll0) = create_kinematic_player_body(&mut physics);
 
         Self {
             physics,
             standing_shape,
             ducked_shape,
-            default_body_handle,
-            default_collider_handle,
+            body_handles: vec![(body0, coll0)],
             broad_phase_ready: false,
         }
     }
@@ -141,9 +140,22 @@ impl SimWorld {
 
     /// Create an additional kinematic player body (for a new server slot).
     /// Returns handles the caller must remember so it can pass the correct
-    /// collider handle as exclude during tick_movement.
+    /// collider handle as exclude during tick_movement. Pushes to the
+    /// internal vec so the index matches the wasm state vector.
     pub fn add_player_body(&mut self) -> (RigidBodyHandle, ColliderHandle) {
-        create_kinematic_player_body(&mut self.physics)
+        let handles = create_kinematic_player_body(&mut self.physics);
+        self.body_handles.push(handles);
+        handles
+    }
+
+    /// Remove a player body from the internal vec. The Rapier bodies/colliders
+    /// stay in the physics world (no clean-up API) — they are simply orphaned.
+    /// Must be called with index matching remove from the state vec to keep
+    /// indices in sync.
+    pub fn remove_player_body(&mut self, index: usize) {
+        if index < self.body_handles.len() {
+            self.body_handles.remove(index);
+        }
     }
 
     /// Update a specific kinematic player body position for query-awareness.
@@ -181,14 +193,19 @@ impl SimWorld {
 
     pub fn update_scene_queries(&mut self) {}
 
-    /// Default collider handle (WASM index 0, or server's first slot).
-    pub fn player_collider_handle(&self) -> ColliderHandle {
-        self.default_collider_handle
+    /// Collider handle for the player at `index`.
+    pub fn player_collider_handle(&self, index: usize) -> ColliderHandle {
+        self.body_handles[index].1
     }
 
-    /// Default rigid body handle (paired with `player_collider_handle`).
-    pub fn player_rigid_body_handle(&self) -> RigidBodyHandle {
-        self.default_body_handle
+    /// Rigid body handle for the player at `index`.
+    pub fn player_rigid_body_handle(&self, index: usize) -> RigidBodyHandle {
+        self.body_handles[index].0
+    }
+
+    /// Number of player slots with bodies.
+    pub fn player_count(&self) -> usize {
+        self.body_handles.len()
     }
 
     /// Ensure the broad phase knows about all static colliders.

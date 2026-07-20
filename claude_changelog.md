@@ -1796,3 +1796,52 @@ is still 6.4 (bots pass through each other in the sim world).
   (`src/ui/scoreboard.ts`).
 
 - `pnpm typecheck` green; `pnpm test` green (178 tests).
+
+## 2026-07-19 — round 2 follow-up 2: bots could never see the player (LOS radius bug)
+
+- **Symptom 2 (bots' shots never hurt the player) root-caused and fixed at T1.** Wrote
+  `src/game/mutual_fire.test.ts` — builds the real Rapier query world, syncs a player
+  kinematic body + one bot collider exactly as `main.ts`'s tick does (capsule centre at
+  feet + STANDING_HALF_HEIGHT + PLAYER_RADIUS, then `updateSceneQueries()`), then fires
+  both directions. Player→bot fire PASSED first try (symptom 1 is not a physics-path bug).
+  Bot→player LOS FAILED, reproducing the bug headlessly.
+- **Root cause:** `canSee` (`src/ai/perception.ts`) cast its LOS ray from the bot's eye to
+  the *target's eye*, stopping only 0.1 m short. But every target is a capsule of radius
+  PLAYER_RADIUS (0.4064 m), so the ray always plowed into the target's own near hemisphere
+  and reported a false "blocked". It excluded the bot's own collider but not the target's →
+  bots essentially never acquired the player (or each other) at any range, so they never fired.
+- **Fix:** stop the LOS ray one radius (+0.05 m margin) short of the target centre — i.e. at
+  the target's hull, not its eye. Point-blank (within that band) is trivially visible.
+  One line + a guard. Existing wall/cover perception tests still pass (8/8).
+- `pnpm test` green (180 tests). NOTE: `pnpm typecheck` shows 9 errors — all pre-existing on
+  the WIP HEAD commit (`main.ts:816-817` bot sync, `bs[i]` number|undefined), unrelated to
+  this change. Left for the in-progress `main.ts` work.
+- Symptom 3 (player/bot push-through) is a separate architectural gap — bots have no body in
+  the WASM `SimWorld` (`sim/src/lib.rs:226`); still owed.
+
+## 2026-07-19 — Push-through fix: bot kinematic bodies in WASM SimWorld
+
+- **Symptom 3 (player walks through bots) root-caused and fixed.** Bots had no kinematic bodies
+  in the WASM SimWorld — only the human at index 0 had one. The player's shapecasts (collide-
+  and-slide, step-move) excluded their own collider and saw only map geometry, never bot
+  capsules. Player and bots passed through each other by construction, not a regression.
+- **`sim/src/world.rs`**: replaced `default_body_handle`/`default_collider_handle` with a
+  `body_handles: Vec<(RigidBodyHandle, ColliderHandle)>` per slot. Constructor creates index 0.
+  `add_player_body()` pushes new handles to the vec. `remove_player_body(idx)` removes from the
+  vec (Rapier bodies are orphaned — no clean-up API, fine for the bot count). Accessors now take
+  `index: usize`: `player_collider_handle(idx)`, `player_rigid_body_handle(idx)`, plus
+  `player_count()`.
+- **`sim/src/lib.rs`**: `sim_add_player` calls `world.add_player_body()` + syncs it to spawn.
+  `sim_remove_player` also removes the body from the vec. `sim_tick` passes
+  `Some(world.player_collider_handle(i))` for EVERY index (not just 0) and syncs the body after
+  every tick. `sim_reset_player` and `sim_set_player` sync the body at the correct index. The
+  old "bots have no bodies → exclude = None" path is gone.
+- **Server** (`server/src/main.rs`): init section updated for `player_rigid_body_handle(0)` /
+  `player_collider_handle(0)`. The rest already used per-slot handles — no further changes.
+- **Rust tests** (`sim/src/movement.rs`): updated to `world.player_collider_handle(0)`.
+- Built WASM (`wasm-pack build sim --target bundler --features wasm`), re-synced the pnpm copy,
+  cleared `node_modules/.vite`. `cargo test` green (25 Rust). `pnpm test` green (180 JS).
+- `pnpm typecheck` shows the same 9 pre-existing WIP errors on `main.ts` — none from this change.
+
+Files: sim/src/world.rs, sim/src/lib.rs, sim/src/movement.rs, server/src/main.rs,
+claude_changelog.md

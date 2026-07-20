@@ -693,7 +693,7 @@ mod world_tests {
 
         world.add_static_box(0.0, -0.5, 0.0, 50.0, 0.5, 50.0, 0.0);
 
-        let exclude = Some(world.player_collider_handle());
+        let exclude = Some(world.player_collider_handle(0));
         for _ in 0..32 {
             tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT, exclude);
         }
@@ -712,7 +712,7 @@ mod world_tests {
 
         world.add_static_box(0.0, -0.5, 0.0, 50.0, 0.5, 50.0, 0.0);
 
-        let exclude = Some(world.player_collider_handle());
+        let exclude = Some(world.player_collider_handle(0));
         for _ in 0..32 {
             tick_movement(&mut world, &mut state, 0, 0.0, FIXED_DT, exclude);
         }
