@@ -249,6 +249,7 @@ async function main(): Promise<void> {
   let predictor: Predictor | null = null;
   let netConn: ReturnType<typeof createConnection> | null = null;
   let serverRoundTimeSec = -1; // -1 = offline; >= 0 = synced from server snapshot
+  let serverScore: { t: number; ct: number } | null = null; // non-null while connected
   const interpBuf = createInterpolationBuffer();
   let settingsPanel: ReturnType<typeof createSettingsPanel>;
 
@@ -257,7 +258,8 @@ async function main(): Promise<void> {
       netConn.close();
       predictor = null;
     }
-    settingsPanel.setConnected('connecting');
+    const host = url.replace(/^wss?:\/\//, '');
+    settingsPanel.setConnected('connecting', host);
     const conn = createConnection();
     conn.onWelcome = (w): void => {
       if (w.yourSlot === SPECTATOR) {
@@ -273,29 +275,98 @@ async function main(): Promise<void> {
         },
         w.yourSlot,
       );
-      settingsPanel.setConnected('connected', url.replace('ws://', ''));
+      settingsPanel.setConnected('connected', host);
       console.log(`[net] connected as slot ${w.yourSlot}`);
     };
     conn.onSnapshot = (s): void => {
       predictor?.reconcile(s);
       interpBuf.push(s);
       serverRoundTimeSec = s.round.timeLeftMs / 1000;
+      serverScore = { t: s.round.scoreT, ct: s.round.scoreCt };
+    };
+    conn.onClose = (): void => {
+      // Ignore the close from a superseded socket (a reconnect closes the old one).
+      if (netConn !== conn) return;
+      // No predictor means Welcome never arrived → the connect itself failed.
+      settingsPanel.setConnected(predictor ? 'disconnected' : 'error');
+      predictor = null;
+      netConn = null;
+      serverRoundTimeSec = -1;
+      serverScore = null;
     };
     conn.connect(url);
     netConn = conn;
   }
 
-  function handleDisconnect(): void {
-    netConn?.close();
-    predictor = null;
-    netConn = null;
-    serverRoundTimeSec = -1;
-    settingsPanel.setConnected('disconnected');
+  // The Settings button reloads the page with ?connect= so the game boots
+  // straight into networked mode against that server — the URL is the source
+  // of truth for "am I connected", not an optimistic label. But probe the
+  // address first with a throwaway socket: only reload once it actually opens,
+  // so an unreachable server shows "connection failed" here instead of booting
+  // into a broken networked session.
+  function connectViaReload(url: string): void {
+    settingsPanel.setConnected('connecting', url.replace(/^wss?:\/\//, ''));
+    let done = false;
+    let probe: WebSocket;
+    const finish = (ok: boolean): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      probe.close();
+      if (!ok) {
+        settingsPanel.setConnected('error');
+        return;
+      }
+      const params = new URLSearchParams(location.search);
+      params.set('connect', url);
+      location.search = params.toString();
+    };
+    try {
+      probe = new WebSocket(url);
+    } catch {
+      settingsPanel.setConnected('error');
+      return;
+    }
+    const timer = setTimeout(() => finish(false), 4000);
+    probe.onopen = () => finish(true);
+    probe.onerror = () => finish(false);
+    probe.onclose = () => finish(false);
+  }
+  function disconnectViaReload(): void {
+    const params = new URLSearchParams(location.search);
+    params.delete('connect');
+    location.search = params.toString();
+  }
+
+  // Seed the address/port inputs from the URL we actually booted with, so the
+  // panel shows the real server (e.g. counterdouggo.yikersis.land) not 127.0.0.1.
+  const bootUrl = new URLSearchParams(location.search).get('connect');
+  // No ?connect= yet: default the address to the host the page was served from
+  // (localhost when you open it at localhost) rather than a hardcoded 127.0.0.1.
+  // Over https, default to the TLS reverse-proxy path endpoint (wss://host/ws)
+  // — the nginx /ws block proxies to the Rust server; there's no open game port.
+  let defaultAddress: string | undefined =
+    location.protocol === 'https:' ? `${location.host}/ws` : location.hostname || undefined;
+  let defaultPort: string | undefined;
+  if (bootUrl) {
+    try {
+      const u = new URL(bootUrl);
+      // Preserve a path endpoint (wss://host/ws) so the field round-trips; a
+      // bare host splits into host + port as before.
+      if (u.pathname && u.pathname !== '/') {
+        defaultAddress = u.host + u.pathname;
+      } else {
+        defaultAddress = u.hostname;
+        defaultPort = u.port || (u.protocol === 'wss:' ? '443' : '80');
+      }
+    } catch { /* malformed ?connect= — fall back to defaults */ }
   }
 
   settingsPanel = createSettingsPanel(settings, applySettings, {
-    onConnect: handleConnect,
-    onDisconnect: handleDisconnect,
+    defaultAddress,
+    defaultPort,
+    onConnect: connectViaReload,
+    onDisconnect: disconnectViaReload,
   });
   applySettings();
   document.addEventListener('pointerlockchange', () => {
@@ -1109,8 +1180,10 @@ async function main(): Promise<void> {
           ammo: active.state.ammo,
           reloading: active.state.reloading,
           spreadRad: computeSpread(weapon, stanceOf(player), active.state.recoil.sprayIndex),
-          round: round.round,
-          score: round.score,
+          // ponytail: round # isn't on the wire; derive it from the synced score
+          // (games played + 1). Holds while every round yields exactly one winner.
+          round: serverScore ? serverScore.t + serverScore.ct + 1 : round.round,
+          score: serverScore ?? round.score,
           timeLeft: serverRoundTimeSec >= 0 ? serverRoundTimeSec : round.timer,
           banner: bannerText(),
           damageFlash,
@@ -1121,7 +1194,7 @@ async function main(): Promise<void> {
       // Scoreboard roster built from live game state. ponytail: static "Bot N"
       // + "You" labels; no per-entity K/D until kill bookkeeping exists.
       const roster: PlayerScore[] = [
-        { slot: 0, team: 'T', name: 'You', kills: round.score.t, deaths: 0, alive: playerAlive },
+        { slot: 0, team: 'T', name: 'You', kills: (serverScore ?? round.score).t, deaths: 0, alive: playerAlive },
       ];
       enemies.forEach((e, i) => {
         roster.push({

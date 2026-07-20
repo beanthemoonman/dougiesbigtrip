@@ -1932,3 +1932,38 @@ claude_changelog.md
 - All 180 TS tests + 25 Rust tests green. Server builds clean.
 
 Files: src/core/audio.ts, src/ui/hud.ts, src/main.ts, claude_changelog.md
+
+- Fixed CI: added `packageManager: "pnpm@11.3.0"` to package.json so `pnpm/action-setup@v4` knows which pnpm version to install (was failing with "No pnpm version is specified").
+
+## Server connect: reload-based + honest status (2026-07-20)
+- Settings "Connect" button now reloads the page with `?connect=ws://addr:port` (reuses the existing auto-connect path in main.ts) so the URL is the source of truth — no more optimistic "connected" label.
+- Added `Connection.onClose` callback; main.ts uses it to show `error` (Welcome never arrived → connect failed) vs `disconnected` (dropped after connecting) instead of silently leaving the UI stuck.
+- Settings panel now seeds its address/port inputs from the booted `?connect=` URL (parsed via `new URL`), so it shows the real server host (e.g. counterdouggo.yikersis.land) instead of the 127.0.0.1 default.
+- Settings Connect button now builds `wss://` when the page is served over https (ws:// otherwise), matching browser mixed-content rules so reconnecting works on TLS deployments.
+
+## HUD round/score now sync from server snapshot (2026-07-20)
+- Bug: connected client showed "Round 1" while server was on Round 9. Connection was
+  fine — the HUD just read round # and score from the local round FSM; only the timer
+  was synced.
+- `src/main.ts`: capture `serverScore` from each snapshot (cleared on disconnect); when
+  connected, HUD round/score and scoreboard kills come from it. Round # is derived as
+  `scoreT + scoreCt + 1` (round # isn't on the wire).
+
+## Connect pre-flight probe + honest address reflection (2026-07-20)
+- Connect button now probes the address:port with a throwaway WebSocket and only reloads
+  (`?connect=`) once it actually opens; unreachable servers show "connection failed" inline
+  instead of booting into a broken networked session. 4s timeout → failed.
+- Fixed server-name reflection: the read-only address label was only set in `onWelcome`, so
+  if Welcome was slow/undecoded you kept seeing the default `127.0.0.1` input even though
+  snapshots were flowing. Now the panel shows the target host from the URL as soon as the
+  attempt starts (`setConnected('connecting', host)`), and the readonly label is visible for
+  both `connecting` and `connected`. Also strip scheme with `/^wss?:\/\//` so wss hosts show.
+
+## Settings supports wss path endpoints (TLS reverse proxy) (2026-07-20)
+- Server agent added an nginx `/ws` block proxying `wss://counterdouggo.yikersis.land/ws` →
+  127.0.0.1:9876. The old `host:port`-only URL builder couldn't express a path.
+- `src/core/settings.ts`: `buildWsUrl()` now accepts a full URL (`wss://host/ws`, used
+  verbatim) or a bare `host/path` (scheme prefixed, no port); bare host still gets `:port`.
+  Port validation relaxed to only apply to the bare-host form.
+- `src/main.ts`: over https, default the address field to `wss://<host>/ws` (the proxy
+  endpoint — no open game port); boot-URL parse preserves a path so the field round-trips.

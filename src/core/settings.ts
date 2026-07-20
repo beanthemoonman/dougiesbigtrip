@@ -71,6 +71,24 @@ export function createSettingsPanel(
   onChange: (s: Settings) => void,
   serverOpts?: ServerConnectionOpts,
 ): SettingsPanel {
+  // wss:// from an https page, ws:// otherwise — a browser blocks ws:// from a
+  // secure page as mixed content, so the scheme must follow the page.
+  const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+  // Build the WebSocket URL from the address/port fields. Supports three forms:
+  //   - full URL typed         → "wss://host/ws"      (used verbatim)
+  //   - bare host with a path  → "host/ws"            (scheme prefixed, no port)
+  //   - bare host              → "127.0.0.1" + "9876" → "ws://127.0.0.1:9876"
+  // The path forms let clients reach a TLS reverse-proxy endpoint like
+  // wss://counterdouggo.yikersis.land/ws where the port is 443 and implicit.
+  const buildWsUrl = (addr: string, port: string): string => {
+    if (/^wss?:\/\//.test(addr)) return addr;
+    if (addr.includes('/')) return `${wsScheme}//${addr}`;
+    return `${wsScheme}//${addr}:${port}`;
+  };
+  // Port only matters for the bare-host form.
+  const needsPort = (addr: string): boolean => !/^wss?:\/\//.test(addr) && !addr.includes('/');
+
   const panel = document.createElement('div');
   panel.style.cssText =
     'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
@@ -168,8 +186,8 @@ export function createSettingsPanel(
     const connect = (): void => {
       const addr = addrInput!.value.trim();
       const port = portInput!.value.trim();
-      if (!addr || !port) return;
-      serverOpts.onConnect(`ws://${addr}:${port}`);
+      if (!addr || (needsPort(addr) && !port)) return;
+      serverOpts.onConnect(buildWsUrl(addr, port));
     };
 
     connBtn.onclick = connect;
@@ -197,11 +215,15 @@ export function createSettingsPanel(
     setConnected(state: ConnectState, address?: string): void {
       if (!serverSection) return;
       const isConnected = state === 'connected';
-      if (addrInput) addrInput.style.display = isConnected ? 'none' : '';
-      if (portInput) portInput.style.display = isConnected ? 'none' : '';
+      // Show the read-only address (and hide the inputs) while connecting *and*
+      // connected, so the panel reflects the server you're actually talking to
+      // as soon as the attempt starts — not only once Welcome decodes.
+      const showAddr = isConnected || state === 'connecting';
+      if (addrInput) addrInput.style.display = showAddr ? 'none' : '';
+      if (portInput) portInput.style.display = showAddr ? 'none' : '';
       if (addrReadonly) {
         if (address) addrReadonly.textContent = address;
-        addrReadonly.style.display = isConnected ? '' : 'none';
+        addrReadonly.style.display = showAddr ? '' : 'none';
       }
       if (connBtn) {
         if (isConnected) {
@@ -214,8 +236,8 @@ export function createSettingsPanel(
           connBtn.onclick = (): void => {
             const addr = addrInput!.value.trim();
             const port = portInput!.value.trim();
-            if (!addr || !port) return;
-            serverOpts?.onConnect(`ws://${addr}:${port}`);
+            if (!addr || (needsPort(addr) && !port)) return;
+            serverOpts?.onConnect(buildWsUrl(addr, port));
           };
         }
       }

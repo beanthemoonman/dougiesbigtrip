@@ -24,6 +24,8 @@ export interface Connection {
   onWelcome?: (w: Welcome) => void;
   /** Called for every Snapshot received. */
   onSnapshot?: (s: Snapshot) => void;
+  /** Called when the socket closes or errors out (failed connect or drop). */
+  onClose?: () => void;
   /** Graceful close. */
   close(): void;
 }
@@ -77,6 +79,7 @@ export function createConnection(): Connection {
           state = { status: 'disconnected' };
         }
         ws = null;
+        conn.onClose?.();
       };
 
       ws.onerror = () => {
