@@ -35,8 +35,12 @@ export interface HudState {
   round: number;
   /** Score, T : CT. */
   score: { t: number; ct: number };
+  /** Seconds left in the current round phase (synced from server when connected). */
+  timeLeft: number;
   /** Centre banner text (freezetime / round result). Empty = hidden. */
   banner: string;
+  /** Damage flash opacity, 0..1. Decays in main.ts; the HUD just reads it. */
+  damageFlash: number;
 }
 
 export interface Hud {
@@ -60,12 +64,17 @@ const CSS = `
 .hud-cross .right { left: var(--gap); }
 .hud-top { position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
   text-align: center; }
-.hud-score { font-size: 22px; letter-spacing: 1px; }
+.hud-score { font-size: 22px; letter-spacing: 1px; display: flex; align-items: center;
+  gap: 10px; justify-content: center; }
 .hud-score b { color: #4de04d; }
+.hud-timer { font-size: 18px; font-weight: 600; color: #aeb3b8;
+  min-width: 48px; text-align: center; }
 .hud-round { font-size: 13px; font-weight: 400; opacity: .6; margin-top: 3px; }
 .hud-banner { position: absolute; left: 50%; top: 64px; transform: translateX(-50%);
   font-size: 34px; letter-spacing: 2px; white-space: nowrap; }
 .hud-banner:empty { display: none; }
+.hud-damage { position: fixed; inset: 0; background: rgba(200,0,0,0.35);
+  pointer-events: none; transition: opacity 0.08s ease-out; }
 `;
 
 /** Builds the overlay under `root`. Call `update` once per rendered frame. */
@@ -88,10 +97,11 @@ export function createHud(root: HTMLElement): Hud {
       <i class="v up"></i><i class="v down"></i><i class="h left"></i><i class="h right"></i>
     </div>
     <div class="hud-top">
-      <div class="hud-score"><span data-hud="scoreT"></span> : <span data-hud="scoreCt"></span></div>
+      <div class="hud-score"><span data-hud="scoreT"></span><span class="hud-timer" data-hud="timer"></span><span data-hud="scoreCt"></span></div>
       <div class="hud-round">ROUND <span data-hud="round"></span></div>
     </div>
-    <div class="hud-banner" data-hud="banner"></div>`;
+    <div class="hud-banner" data-hud="banner"></div>
+    <div class="hud-damage" data-hud="damage" style="opacity:0"></div>`;
   root.appendChild(el);
 
   const find = (selector: string): HTMLElement => {
@@ -107,8 +117,10 @@ export function createHud(root: HTMLElement): Hud {
   const cross = find('.hud-cross');
   const scoreT = find('[data-hud="scoreT"]');
   const scoreCt = find('[data-hud="scoreCt"]');
+  const timerEl = find('[data-hud="timer"]');
   const round = find('[data-hud="round"]');
   const banner = find('[data-hud="banner"]');
+  const damage = find('[data-hud="damage"]');
 
   // ponytail: write every frame, no dirty-checking. These are ~5 textContent
   // assignments against unchanged strings — the DOM ignores them and it never
@@ -123,8 +135,13 @@ export function createHud(root: HTMLElement): Hud {
       cross.style.setProperty('--gap', `${crosshairGapPx(state.spreadRad, vFovRad, viewportHeightPx).toFixed(1)}px`);
       scoreT.textContent = String(state.score.t);
       scoreCt.textContent = String(state.score.ct);
+      const t = Math.max(0, Math.ceil(state.timeLeft));
+      const min = String(Math.floor(t / 60)).padStart(2, '0');
+      const sec = String(t % 60).padStart(2, '0');
+      timerEl.textContent = `${min}:${sec}`;
       round.textContent = String(state.round);
       banner.textContent = state.banner;
+      damage.style.opacity = String(state.damageFlash);
     },
   };
 }

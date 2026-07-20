@@ -196,12 +196,12 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
     events.push({ tag: v.getUint8(o), slot: v.getUint8(o + 1), by: v.getUint8(o + 2) });
     o += 3;
   }
-  if (data.length < o + 7) return null;
+  if (data.length < o + 9) return null;
   const round: RoundState = {
     phase: v.getUint8(o),
-    timeLeftMs: v.getUint16(o + 1, true),
-    scoreT: v.getUint16(o + 3, true),
-    scoreCt: v.getUint16(o + 5, true),
+    timeLeftMs: v.getUint32(o + 1, true),
+    scoreT: v.getUint16(o + 5, true),
+    scoreCt: v.getUint16(o + 7, true),
   };
   return { serverTick, ackSeq, entities, events, round };
 }

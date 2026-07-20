@@ -140,3 +140,25 @@ export function playReload(): void {
   burst(0.04, 1800, 0.4, t);
   burst(0.05, 1500, 0.5, t + 0.18);
 }
+
+/**
+ * Short, low, wet thud + filtered noise hiss — the "you got hit" cue.
+ * Louder than an impact tick so it cuts through gunfire. The low sine
+ * starts at 180 Hz and drops quickly, paired with a dark noise burst
+ * that adds body without reading as a ricochet.
+ */
+export function playHurt(): void {
+  const c = audio();
+  const t = c.currentTime;
+  burst(0.08, 900, 0.22, t);
+  const osc = c.createOscillator();
+  const g = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(180, t);
+  osc.frequency.exponentialRampToValueAtTime(50, t + 0.1);
+  g.gain.setValueAtTime(0.35, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+  osc.connect(g).connect(out());
+  osc.start(t);
+  osc.stop(t + 0.13);
+}

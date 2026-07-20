@@ -41,8 +41,12 @@ describe('mutual fire: player <-> bot', () => {
       PLAYER_RADIUS,
     );
     // main.ts syncs positions via setTranslation each tick, then flushes the BVH.
+    // Both collider AND body must be set — updateSceneQueries reads from body
+    // transforms, not collider transforms, for kinematic bodies.
     player.collider.setTranslation({ x: playerFeet.x, y: playerFeet.y + centreY, z: playerFeet.z });
+    player.body.setTranslation({ x: playerFeet.x, y: playerFeet.y + centreY, z: playerFeet.z }, true);
     bot.collider.setTranslation({ x: botFeet.x, y: botFeet.y + centreY, z: botFeet.z });
+    bot.body.setTranslation({ x: botFeet.x, y: botFeet.y + centreY, z: botFeet.z }, true);
     world.updateSceneQueries();
     return { world, player, bot };
   }

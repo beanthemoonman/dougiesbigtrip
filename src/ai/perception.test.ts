@@ -62,20 +62,24 @@ describe('perception: canSee', () => {
   // which never moved from spawn — so the collider appears at spawn in the BVH.
   it('a collider moved by setTranslation is queried at its new position after updateSceneQueries', () => {
     const world = createWorld();
-    const { collider } = createKinematicCapsule(
+    const center = { x: 0, y: STANDING_HALF_HEIGHT + PLAYER_RADIUS, z: 0 };
+    const { body, collider } = createKinematicCapsule(
       world,
-      { x: 0, y: STANDING_HALF_HEIGHT + PLAYER_RADIUS, z: -5 },
+      center,
       STANDING_HALF_HEIGHT,
       PLAYER_RADIUS,
     );
     // Move the capsule onto the LOS between bot (0,0,0) and target (0,0,-10).
-    // bodyCenterScratch pattern: y = feet.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS
-    collider.setTranslation({ x: 0, y: STANDING_HALF_HEIGHT + PLAYER_RADIUS, z: -5 });
+    // Both collider AND body must be set — updateSceneQueries reads from body
+    // transforms, not collider transforms, for kinematic bodies.
+    const blockPos = { x: 0, y: STANDING_HALF_HEIGHT + PLAYER_RADIUS, z: -5 };
+    collider.setTranslation(blockPos);
+    body.setTranslation(blockPos, true);
     const target = new Vector3(0, 0, -10);
     // Without a query refresh the capsule is invisible to raycasts.
     expect(canSee(world, botFeet, yawLookNegZ, target)).toBe(true);
     world.updateSceneQueries();
-    // After updateSceneQueries the collider at its NEW position blocks LOS.
+    // After updateSceneQueries the body at its NEW position blocks LOS.
     expect(canSee(world, botFeet, yawLookNegZ, target)).toBe(false);
   });
 
@@ -86,11 +90,13 @@ describe('perception: canSee', () => {
   it('a re-enabled collider stays at its setTranslation position after updateSceneQueries', () => {
     const world = createWorld();
     const center = { x: 0, y: STANDING_HALF_HEIGHT + PLAYER_RADIUS, z: 0 };
-    const { collider } = createKinematicCapsule(world, center, STANDING_HALF_HEIGHT, PLAYER_RADIUS);
+    const { body, collider } = createKinematicCapsule(world, center, STANDING_HALF_HEIGHT, PLAYER_RADIUS);
     // Move to block LOS, disable, re-enable — same as a bot dying one round
-    // and spawning the next.
+    // and spawning the next. Sync the body too: updateSceneQueries reads from
+    // body transforms, not collider transforms, for kinematic bodies.
     const blockPos = { x: 0, y: STANDING_HALF_HEIGHT + PLAYER_RADIUS, z: -5 };
     collider.setTranslation(blockPos);
+    body.setTranslation(blockPos, true);
     world.updateSceneQueries();
     const target = new Vector3(0, 0, -10);
     expect(canSee(world, botFeet, yawLookNegZ, target)).toBe(false);
@@ -105,6 +111,7 @@ describe('perception: canSee', () => {
     // called yet, so the BVH may or may not include it (engine-dependent).
     // But setTranslation is idempotent — we call it to be safe.
     collider.setTranslation(blockPos);
+    body.setTranslation(blockPos, true);
     world.updateSceneQueries();
     expect(canSee(world, botFeet, yawLookNegZ, target)).toBe(false);
   });

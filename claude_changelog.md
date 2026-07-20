@@ -1845,3 +1845,90 @@ is still 6.4 (bots pass through each other in the sim world).
 
 Files: sim/src/world.rs, sim/src/lib.rs, sim/src/movement.rs, server/src/main.rs,
 claude_changelog.md
+
+## 2026-07-19 — Bot body sync fix: player bullets can now hit bots
+
+- **Symptom: "I can't hit bots, no red impact marks."** Root cause: bot kinematic bodies in the
+  TS Rapier world were synced via `b.collider.setTranslation(pos)` ONLY — the parent
+  `RigidBody` was never updated. Empirical test confirmed: `collider.setTranslation()` does
+  NOT move the parent body, and `updateSceneQueries()` builds the BVH from body transforms,
+  not collider transforms. So every bot's capsule sat at its spawn position in the query BVH
+  forever — the player's bullet raycast passed straight through the moving bot and hit a wall
+  behind it.
+- **Perception tests had the same bug but passed accidentally:** one test created the capsule
+  at the blocking position from the constructor (body already correct), the other had the
+  ray start inside the capsule (solid=true hit at t=0). Both are now fixed to sync the body
+  alongside the collider, so they actually verify the BVH behavior.
+- **Fix:** `src/ai/bot.ts` — added `body: RigidBody` to the `Bot` interface and stores it in
+  `createBot`. `src/main.ts` — added `b.body.setTranslation(bodyCenterScratch, true)` after
+  `b.collider.setTranslation(...)` in both the tick loop and the respawn path.
+- **Tests fixed:** `src/game/mutual_fire.test.ts` — syncs body alongside collider.
+  `src/ai/perception.test.ts` — both "setTranslation" tests now sync the body too.
+- `pnpm test` 180 green, `pnpm typecheck` 9 pre-existing errors (unchanged).
+
+Files: src/ai/bot.ts, src/main.ts, src/game/mutual_fire.test.ts, src/ai/perception.test.ts,
+claude_changelog.md
+
+---
+
+- Added server connection UI to the settings panel (`src/core/settings.ts`):
+  - Address text field (default `127.0.0.1`) and port text field (default `9876`)
+  - "Connect" button that calls `onConnect(ws://address:port)`; pressing Enter in either field
+    also triggers connect
+  - When connected, the inputs are replaced by a read-only address display and the button
+    becomes a red "Disconnect" that calls `onDisconnect()` to return to single-player
+  - `setConnected(state, address?)` method on the returned panel drives the UI state
+    (disconnected / connecting / connected / error)
+  - New exports: `DEFAULT_SERVER_ADDRESS`, `DEFAULT_SERVER_PORT`, `ConnectState`,
+    `ServerConnectionOpts`
+- Wired connect/disconnect in `src/main.ts`:
+  - `handleConnect(url)` creates the WebSocket connection, sets up prediction + snapshots,
+    and updates the settings panel state
+  - `handleDisconnect()` closes the connection, nulls out the predictor, and the game loop
+    falls back to single-player sim
+  - The existing `?connect=` URL parameter is preserved — it calls `handleConnect` on load
+
+- Added damage feedback when the player is hit by a bot:
+  - **Red flash**: fullscreen semi-transparent red overlay that fades over ~0.25s. Added
+    `damageFlash` to `HudState` and a `.hud-damage` div in `src/ui/hud.ts` driven by
+    opacity every render frame.
+  - **Screen shake**: camera position offset generated from the seeded RNG each sim tick,
+    lerped between ticks via the render interpolator. Stored as prev/curr `shakeX`/`shakeY`
+    pairs so no RNG calls leak into the render callback. Intensity scales with damage,
+    duration 0.15s.
+  - **Hurt sound**: `playHurt()` in `src/core/audio.ts` — a low sine thump (180→50 Hz)
+    paired with a dark noise burst (900 Hz lowpass), louder than an impact tick to cut
+    through gunfire.
+  - Triggered inline in `main.ts` where `health -= dmg.health` runs; all three feedbacks
+    are killed on respawn.
+
+## 2026-07-19
+
+- **Match timer visible between scores at top of HUD:**
+  - Added `timeLeft: number` to `HudState` in `src/ui/hud.ts` — seconds remaining in the
+    current round phase.
+  - Timer displays as `MM:SS` between T and CT scores (`T_SCORE  01:55  CT_SCORE`), styled
+    with `.hud-timer` CSS.
+  - `src/main.ts` passes `round.timer` to the HUD for offline play; when connected to the
+    server, uses `s.round.timeLeftMs / 1000` from snapshots (server-authoritative).
+- **Server-authoritative round state machine** (`server/src/game.rs`):
+  - Pure round FSM: `Freezetime(3s)` → `Live(115s)` → `Over(5s)` → `Reset` → back to
+    Freezetime.
+  - During non-Live phases, all inputs are frozen (bots don't move/shoot, human movement
+    is suppressed, but commands are still consumed to advance `ackSeq`).
+  - Round reset respawns all dead slots at their team spawn points; scores increment when
+    a team is wiped or time expires.
+  - First round starts in Live phase (no freezetime) so existing tests pass without change.
+- **Round state on the wire:**
+  - `sim/src/protocol.rs`: `RoundState.time_left_ms` widened from `u16` to `u32` to hold
+    full round times (115s = 115000ms, previously capped at ~65s).
+  - `src/net/protocol.ts`: matching `getUint32` decode, updated golden-bytes test, and
+    minimum snapshot buffer size adjusted from 20 to 21 bytes.
+  - `docs/netcode.md`: updated `timeLeftMs: u16` → `u32`.
+- **Server snapshot integration:**
+  - `build_snapshot()` in `server/src/main.rs` now receives the real `&game::State` and
+    populates `phase`, `time_left_ms`, `score_t`, `score_ct` from the running round.
+  - Previously stubbed to `phase: 1, time_left_ms: 0, score_t: 0, score_ct: 0`.
+- All 180 TS tests + 25 Rust tests green. Server builds clean.
+
+Files: src/core/audio.ts, src/ui/hud.ts, src/main.ts, claude_changelog.md

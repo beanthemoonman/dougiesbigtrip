@@ -129,7 +129,7 @@ ackSeq: u32               // highest CommandFrame consumed for THIS client → r
 entities[]:  { slot:u8, flags:u8 (alive|ducked|team), pos:vec3f (feet), vel:vec3f,
                yaw:f32, pitch:f32, health:u8, armor:u8, weapon:u8, ammo:u8 }  // changed fields only
 events[]:    kill(slot,by) | shotTracer(slot,from,to,weapon) | spawn(slot) | roundPhase(phase)
-round:       { phase:u8, timeLeftMs:u16, scoreT:u16, scoreCT:u16 }
+round:       { phase:u8, timeLeftMs:u32, scoreT:u16, scoreCT:u16 }
 ```
 
 - Server **simulates** at 64 Hz, **sends** at ~20 Hz (interpolation covers the gap). Start by

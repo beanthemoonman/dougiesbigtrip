@@ -24,6 +24,18 @@ export const DEFAULT_SETTINGS: Settings = {
   volume: 1,
 };
 
+export const DEFAULT_SERVER_ADDRESS = '127.0.0.1';
+export const DEFAULT_SERVER_PORT = '9876';
+
+export type ConnectState = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+export interface ServerConnectionOpts {
+  defaultAddress?: string;
+  defaultPort?: string;
+  onConnect(url: string): void;
+  onDisconnect(): void;
+}
+
 interface Field {
   key: keyof Settings;
   label: string;
@@ -46,6 +58,7 @@ const FIELDS: Field[] = [
 export interface SettingsPanel {
   show(): void;
   hide(): void;
+  setConnected(state: ConnectState, address?: string): void;
 }
 
 /**
@@ -53,7 +66,11 @@ export interface SettingsPanel {
  * and calls `onChange(settings)` on every slider move so the game applies the
  * value live. Shown while not in pointer lock (the "menu" state), hidden in play.
  */
-export function createSettingsPanel(settings: Settings, onChange: (s: Settings) => void): SettingsPanel {
+export function createSettingsPanel(
+  settings: Settings,
+  onChange: (s: Settings) => void,
+  serverOpts?: ServerConnectionOpts,
+): SettingsPanel {
   const panel = document.createElement('div');
   panel.style.cssText =
     'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
@@ -102,10 +119,119 @@ export function createSettingsPanel(settings: Settings, onChange: (s: Settings) 
   hint.style.cssText = 'margin-top:12px;opacity:0.6;font-size:12px';
   panel.appendChild(hint);
 
+  let serverSection: HTMLDivElement | null = null;
+  let addrInput: HTMLInputElement | null = null;
+  let portInput: HTMLInputElement | null = null;
+  let connBtn: HTMLButtonElement | null = null;
+  let connStatus: HTMLDivElement | null = null;
+  let addrReadonly: HTMLDivElement | null = null;
+
+  if (serverOpts) {
+    serverSection = document.createElement('div');
+    serverSection.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid #3a4450';
+
+    const serverLabel = document.createElement('div');
+    serverLabel.textContent = 'Server';
+    serverLabel.style.cssText = 'font-size:13px;margin-bottom:8px;letter-spacing:1px;opacity:0.8';
+    serverSection.appendChild(serverLabel);
+
+    // Row: Address input + Port input + button
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px';
+
+    addrInput = document.createElement('input');
+    addrInput.type = 'text';
+    addrInput.value = serverOpts.defaultAddress ?? DEFAULT_SERVER_ADDRESS;
+    addrInput.placeholder = 'address';
+    addrInput.style.cssText =
+      'flex:1;min-width:0;padding:4px 6px;background:#1a1a1a;color:#eee;border:1px solid #444;font:12px monospace';
+
+    portInput = document.createElement('input');
+    portInput.type = 'text';
+    portInput.value = serverOpts.defaultPort ?? DEFAULT_SERVER_PORT;
+    portInput.placeholder = 'port';
+    portInput.style.cssText =
+      'width:52px;padding:4px 6px;background:#1a1a1a;color:#eee;border:1px solid #444;font:12px monospace;text-align:center';
+
+    connBtn = document.createElement('button');
+    connBtn.textContent = 'Connect';
+    connBtn.style.cssText =
+      'padding:4px 10px;background:#2a5a2a;color:#eee;border:none;cursor:pointer;font:12px monospace;white-space:nowrap';
+
+    connStatus = document.createElement('div');
+    connStatus.style.cssText = 'margin-top:4px;color:#888;font-size:11px;min-height:14px;display:none';
+
+    // Read-only connected address display (replaces inputs when connected)
+    addrReadonly = document.createElement('div');
+    addrReadonly.style.cssText = 'flex:1;padding:4px 6px;color:#6a9;font:12px monospace;display:none';
+
+    const connect = (): void => {
+      const addr = addrInput!.value.trim();
+      const port = portInput!.value.trim();
+      if (!addr || !port) return;
+      serverOpts.onConnect(`ws://${addr}:${port}`);
+    };
+
+    connBtn.onclick = connect;
+    addrInput.onkeydown = (e: KeyboardEvent): void => {
+      if (e.key === 'Enter') connect();
+    };
+    portInput.onkeydown = (e: KeyboardEvent): void => {
+      if (e.key === 'Enter') connect();
+    };
+
+    row.appendChild(addrInput);
+    row.appendChild(portInput);
+    row.appendChild(addrReadonly);
+    row.appendChild(connBtn);
+    serverSection.appendChild(row);
+    serverSection.appendChild(connStatus);
+    panel.appendChild(serverSection);
+  }
+
   document.body.appendChild(panel);
 
   return {
     show: () => (panel.style.display = 'block'),
     hide: () => (panel.style.display = 'none'),
+    setConnected(state: ConnectState, address?: string): void {
+      if (!serverSection) return;
+      const isConnected = state === 'connected';
+      if (addrInput) addrInput.style.display = isConnected ? 'none' : '';
+      if (portInput) portInput.style.display = isConnected ? 'none' : '';
+      if (addrReadonly) {
+        if (address) addrReadonly.textContent = address;
+        addrReadonly.style.display = isConnected ? '' : 'none';
+      }
+      if (connBtn) {
+        if (isConnected) {
+          connBtn.textContent = 'Disconnect';
+          connBtn.style.background = '#6a2a2a';
+          connBtn.onclick = (): void => { serverOpts?.onDisconnect(); };
+        } else {
+          connBtn.textContent = 'Connect';
+          connBtn.style.background = '#2a5a2a';
+          connBtn.onclick = (): void => {
+            const addr = addrInput!.value.trim();
+            const port = portInput!.value.trim();
+            if (!addr || !port) return;
+            serverOpts?.onConnect(`ws://${addr}:${port}`);
+          };
+        }
+      }
+      if (connStatus) {
+        if (state === 'connecting') {
+          connStatus.textContent = 'connecting\u2026';
+          connStatus.style.color = '#888';
+          connStatus.style.display = '';
+        } else if (state === 'error') {
+          connStatus.textContent = 'connection failed';
+          connStatus.style.color = '#c44';
+          connStatus.style.display = '';
+        } else {
+          connStatus.style.display = 'none';
+        }
+      }
+    },
   };
 }

@@ -184,7 +184,7 @@ pub struct EntityState {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RoundState {
     pub phase: u8,
-    pub time_left_ms: u16,
+    pub time_left_ms: u32,
     pub score_t: u16,
     pub score_ct: u16,
 }
@@ -200,7 +200,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(11 + self.entities.len() * 38 + self.events.len() * 3 + 7);
+        let mut buf = Vec::with_capacity(11 + self.entities.len() * 38 + self.events.len() * 3 + 9);
         buf.push(TAG_SNAP);
         buf.push(PROTOCOL_VERSION);
         buf.extend_from_slice(&self.server_tick.to_le_bytes());
@@ -262,7 +262,7 @@ impl Snapshot {
         }
         let round = RoundState {
             phase: r.u8()?,
-            time_left_ms: r.u16()?,
+            time_left_ms: r.u32()?,
             score_t: r.u16()?,
             score_ct: r.u16()?,
         };

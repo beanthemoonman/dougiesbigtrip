@@ -12,6 +12,7 @@
  */
 import type { World } from '@dimforge/rapier3d-compat';
 import type { Collider } from '@dimforge/rapier3d-compat';
+import type { RigidBody } from '@dimforge/rapier3d-compat';
 import { Vector3 } from 'three';
 import { Buttons } from '../core/input';
 import { PLAYER_RADIUS, STANDING_HALF_HEIGHT } from '../player/constants';
@@ -33,6 +34,10 @@ export interface Bot {
    *  hit-detection raycasts and perception (canSee). Position must be kept in
    *  sync with `position` after each WASM tick. */
   collider: Collider;
+  /** Kinematic rigid body the collider is attached to — must be synced
+   *  alongside the collider so updateSceneQueries() sees the correct position
+   *  (BVH reads from body transforms, not collider transforms). */
+  body: RigidBody;
   /** Index into the WASM SIM's player vector (0 = human, 1+ = bots). */
   wasmIndex: number;
   /** Smoothed nav corridor being followed; empty = no goal, stand still. */
@@ -46,7 +51,7 @@ export interface Bot {
 export function createBot(world: World, spawn: Vector3, wasmIndex: number): Bot {
   const centerY = spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS;
   const center = new Vector3(spawn.x, centerY, spawn.z);
-  const { collider } = createKinematicCapsule(world, center, STANDING_HALF_HEIGHT, PLAYER_RADIUS);
+  const { body, collider } = createKinematicCapsule(world, center, STANDING_HALF_HEIGHT, PLAYER_RADIUS);
   return {
     position: spawn.clone(),
     velocity: new Vector3(),
@@ -54,6 +59,7 @@ export function createBot(world: World, spawn: Vector3, wasmIndex: number): Bot 
     eyeHeight: 1.64, // EYE_HEIGHT_STANDING
     duckAmount: 0,
     collider,
+    body,
     wasmIndex,
     path: [],
     waypoint: 0,

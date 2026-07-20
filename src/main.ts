@@ -18,7 +18,7 @@ import { canSee } from './ai/perception';
 import { botShotLands } from './ai/aim';
 import { loadNav } from './ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './ai/anim';
-import { playFootstep, playGunshot, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
+import { playFootstep, playGunshot, playHurt, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { createSettingsPanel, DEFAULT_SETTINGS } from './core/settings';
 import { createTraceRecorder } from './core/trace_recorder';
@@ -243,7 +243,60 @@ async function main(): Promise<void> {
     renderCtx.setWorldFov(settings.worldFovDeg);
     setMasterVolume(settings.volume);
   }
-  const settingsPanel = createSettingsPanel(settings, applySettings);
+
+  // Netcode: declared early so the settings panel's connect/disconnect callbacks
+  // can capture them. Assigned on connect; cleared on disconnect.
+  let predictor: Predictor | null = null;
+  let netConn: ReturnType<typeof createConnection> | null = null;
+  let serverRoundTimeSec = -1; // -1 = offline; >= 0 = synced from server snapshot
+  const interpBuf = createInterpolationBuffer();
+  let settingsPanel: ReturnType<typeof createSettingsPanel>;
+
+  function handleConnect(url: string): void {
+    if (netConn) {
+      netConn.close();
+      predictor = null;
+    }
+    settingsPanel.setConnected('connecting');
+    const conn = createConnection();
+    conn.onWelcome = (w): void => {
+      if (w.yourSlot === SPECTATOR) {
+        console.warn('[net] server full — spectating (movement stays local)');
+        settingsPanel.setConnected('error');
+        return;
+      }
+      predictor = createPredictor(
+        {
+          tick: (b, y) => { sim_tick(0, b, y); },
+          setPlayer: (px, py, pz, vx, vy, vz, ducked) =>
+            sim_set_player(0, px, py, pz, vx, vy, vz, ducked),
+        },
+        w.yourSlot,
+      );
+      settingsPanel.setConnected('connected', url.replace('ws://', ''));
+      console.log(`[net] connected as slot ${w.yourSlot}`);
+    };
+    conn.onSnapshot = (s): void => {
+      predictor?.reconcile(s);
+      interpBuf.push(s);
+      serverRoundTimeSec = s.round.timeLeftMs / 1000;
+    };
+    conn.connect(url);
+    netConn = conn;
+  }
+
+  function handleDisconnect(): void {
+    netConn?.close();
+    predictor = null;
+    netConn = null;
+    serverRoundTimeSec = -1;
+    settingsPanel.setConnected('disconnected');
+  }
+
+  settingsPanel = createSettingsPanel(settings, applySettings, {
+    onConnect: handleConnect,
+    onDisconnect: handleDisconnect,
+  });
   applySettings();
   document.addEventListener('pointerlockchange', () => {
     if (document.pointerLockElement === canvas) settingsPanel.hide();
@@ -555,6 +608,15 @@ async function main(): Promise<void> {
   // Bug 3: free-fly spectator position while dead. Seeded from the death eye.
   const specPos = new Vector3();
 
+  // Damage feedback: red flash, screen shake, hurt sound.
+  let damageFlash = 0;
+  let shakeTime = 0;      // remaining shake duration (s)
+  let shakeIntensity = 0; // base amplitude (m), proportional to last hit
+  let shakeX = 0;         // current tick's random offset X
+  let shakeY = 0;         // current tick's random offset Y
+  let prevShakeX = 0;     // previous tick's offset, for render interpolation
+  let prevShakeY = 0;
+
   const playerFeet = new Vector3(); // scratch: player feet, the bots' target
   const impact = new Vector3();
 
@@ -562,6 +624,9 @@ async function main(): Promise<void> {
     playerAlive = true;
     health = 100;
     armor = 100;
+    damageFlash = 0;
+    shakeTime = 0;
+    shakeIntensity = 0;
     player.position.copy(spawn);
     player.velocity.set(0, 0, 0);
     player.onGround = false;
@@ -598,6 +663,7 @@ async function main(): Promise<void> {
         e.spawn.x, e.spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, e.spawn.z,
       );
       b.collider.setTranslation(bodyCenterScratch);
+      b.body.setTranslation(bodyCenterScratch, true);
     }
     // Flush the query BVH so the very next raycast (human fire or bot
     // perception) sees every capsule at its fresh spawn position.
@@ -677,37 +743,10 @@ async function main(): Promise<void> {
     return '';
   }
 
-  // --- Netcode (Phase 6.3—6.4): ?connect=ws://host:port drives the LOCAL
-  // player's movement through the authoritative server (predict + reconcile),
-  // and streams remote entity snapshots for interpolation (6.4). Absent →
-  // pure single-player, unchanged.
-  let predictor: Predictor | null = null;
-  let netConn: ReturnType<typeof createConnection> | null = null;
-  const interpBuf = createInterpolationBuffer();
+  // --- Auto-connect from ?connect=ws://host:port URL parameter.
   const connectUrl = new URLSearchParams(location.search).get('connect');
   if (connectUrl) {
-    const conn = createConnection();
-    conn.onWelcome = (w): void => {
-      if (w.yourSlot === SPECTATOR) {
-        console.warn('[net] server full — spectating (movement stays local)');
-        return;
-      }
-      predictor = createPredictor(
-        {
-          tick: (b, y) => { sim_tick(0, b, y); },
-          setPlayer: (px, py, pz, vx, vy, vz, ducked) =>
-            sim_set_player(0, px, py, pz, vx, vy, vz, ducked),
-        },
-        w.yourSlot,
-      );
-      console.log(`[net] connected as slot ${w.yourSlot}`);
-    };
-    conn.onSnapshot = (s): void => {
-      predictor?.reconcile(s);
-      interpBuf.push(s);
-    };
-    conn.connect(connectUrl);
-    netConn = conn;
+    handleConnect(connectUrl);
   }
 
   loading.done();
@@ -762,12 +801,12 @@ async function main(): Promise<void> {
           sim_tick(0, input.state.buttons, input.state.yaw);
         }
         const s = sim_get_state(0);
-        player.position.set(s[0], s[1], s[2]);
-        player.velocity.set(s[3], s[4], s[5]);
-        player.onGround = s[6] === 1;
-        player.eyeHeight = s[7];
-        player.viewPunch = s[8];
-        player.duckAmount = s[9];
+        player.position.set(s[0]!, s[1]!, s[2]!);
+        player.velocity.set(s[3]!, s[4]!, s[5]!);
+        player.onGround = s[6]! === 1;
+        player.eyeHeight = s[7]!;
+        player.viewPunch = s[8]!;
+        player.duckAmount = s[9]!;
         player.ducked = player.duckAmount > 0.5;
         // Sync kinematic body so bots can hit-detect the player.
         bodyCenterScratch.set(
@@ -810,13 +849,14 @@ async function main(): Promise<void> {
           // so perception and hit-detection are up-to-date.
           const bs = sim_tick(e.brain.bot.wasmIndex, buttons, yaw);
           const b = e.brain.bot;
-          b.position.set(bs[0], bs[1], bs[2]);
-          b.velocity.set(bs[3], bs[4], bs[5]);
-          b.onGround = bs[6] === 1;
-          b.eyeHeight = bs[7];
-          b.duckAmount = bs[9];
+          b.position.set(bs[0]!, bs[1]!, bs[2]!);
+          b.velocity.set(bs[3]!, bs[4]!, bs[5]!);
+          b.onGround = bs[6]! === 1;
+          b.eyeHeight = bs[7]!;
+          b.duckAmount = bs[9]!;
           bodyCenterScratch.set(b.position.x, b.position.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, b.position.z);
           b.collider.setTranslation(bodyCenterScratch);
+          b.body.setTranslation(bodyCenterScratch, true);
           const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
           driveBotAnim(e.anim, botSpeed, b.onGround, e.brain.mode, fixedDt);
           if (fire && e.fireCooldown === 0 && target !== null && targetAlive) {
@@ -832,6 +872,11 @@ async function main(): Promise<void> {
                 const dmg = computeDamage(BOT_WEAPON, dist, 'chest', armor);
                 health -= dmg.health;
                 armor -= dmg.armor;
+                // Damage feedback: red flash, screen shake, hurt sound.
+                damageFlash = Math.min(1, dmg.health / 25);
+                shakeTime = 0.15;
+                shakeIntensity = Math.min(0.03, dmg.health / 500);
+                playHurt();
                 if (health <= 0) {
                   health = 0;
                   playerAlive = false;
@@ -972,6 +1017,24 @@ async function main(): Promise<void> {
       currView.punchYaw = active.state.recoil.punch.yaw;
       currView.punchPitch = active.state.recoil.punch.pitch;
 
+      // Decay damage feedback each sim tick.
+      if (shakeTime > 0) {
+        prevShakeX = shakeX;
+        prevShakeY = shakeY;
+        shakeTime -= fixedDt;
+        if (shakeTime <= 0) {
+          shakeTime = 0;
+          shakeIntensity = 0;
+          shakeX = 0;
+          shakeY = 0;
+        } else {
+          const s = shakeIntensity * (shakeTime / 0.15);
+          shakeX = (rng.next() - 0.5) * s * 2;
+          shakeY = (rng.next() - 0.5) * s * 2;
+        }
+      }
+      damageFlash = Math.max(0, damageFlash - fixedDt * 4);
+
       traceRecorder.push({ buttons: input.state.buttons, yaw: input.state.yaw });
     },
     render(alpha, frameDt): void {
@@ -984,6 +1047,11 @@ async function main(): Promise<void> {
         renderCtx.camera.rotation.set(input.state.pitch, input.state.yaw, 0);
       } else {
         updateViewCamera(renderCtx.camera, prevView, currView, alpha, input.state.yaw, input.state.pitch);
+        // Apply screen shake from damage feedback (lerped between sim ticks).
+        if (shakeTime > 0) {
+          renderCtx.camera.position.x += prevShakeX + (shakeX - prevShakeX) * alpha;
+          renderCtx.camera.position.y += prevShakeY + (shakeY - prevShakeY) * alpha;
+        }
       }
       vfx.update(frameDt); // age muzzle flash / tracers / impact puffs off real time
 
@@ -1043,7 +1111,9 @@ async function main(): Promise<void> {
           spreadRad: computeSpread(weapon, stanceOf(player), active.state.recoil.sprayIndex),
           round: round.round,
           score: round.score,
+          timeLeft: serverRoundTimeSec >= 0 ? serverRoundTimeSec : round.timer,
           banner: bannerText(),
+          damageFlash,
         },
         MathUtils.degToRad(renderCtx.camera.fov),
         renderCtx.renderer.domElement.clientHeight,

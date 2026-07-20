@@ -27,6 +27,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 mod ai;
+mod game;
 
 // Bot patrol waypoints (de_douglas map, same as TS botDefs patrol routes).
 // Each bot is assigned one waypoint set.
@@ -135,11 +136,40 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
 
     let mut server_tick: u32 = 0;
     let mut interval = tokio::time::interval(std::time::Duration::from_secs_f64(FIXED_DT));
+    let mut round = game::State::new();
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
                 server_tick = server_tick.wrapping_add(1);
+
+                // Count alive per team for the round FSM (post-combat from previous tick).
+                let mut t_alive = 0usize;
+                let mut ct_alive = 0usize;
+                for s in &slots {
+                    if s.occupied && s.alive {
+                        if s.team_ct { ct_alive += 1; } else { t_alive += 1; }
+                    }
+                }
+
+                let round_ev = game::tick(&mut round, t_alive, ct_alive);
+                let is_live = round.phase == game::Phase::Live;
+
+                if round_ev == game::RoundEvent::Reset {
+                    for s in &mut slots {
+                        if !s.alive {
+                            let bf = s.bot_spawn.feet;
+                            s.player.reset(bf[0], bf[1], bf[2]);
+                            s.alive = true;
+                            s.health = 100;
+                            world.sync_player_body(
+                                s.body_handle, s.collider_handle,
+                                bf[0], bf[1], bf[2], false,
+                            );
+                        }
+                    }
+                    println!("round {} begin", round.round_number);
+                }
 
                 // Build arrays of positions and alive flags so bots can perceive each other.
                 let positions: Vec<Option<nalgebra::Vector3<f64>>> = slots
@@ -149,64 +179,65 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 let alive: Vec<bool> = slots.iter().map(|s| s.alive).collect();
 
                 for (_idx, slot) in slots.iter_mut().enumerate() {
-                    if !slot.occupied || !slot.alive {
-                        // Dead bots respawn after ~3 s. A dead human must wait for
-                        // client-side respawn — for now just keep them dead.
-                        if !slot.alive && !slot.is_human {
-                            // ponytail: use a dedicated respawn timer instead of
-                            // floating coincidence.
-                            let bf = slot.bot_spawn.feet;
-                            slot.player.reset(bf[0], bf[1], bf[2]);
-                            slot.alive = true;
-                            slot.health = 100;
-                            world.sync_player_body(
-                                slot.body_handle, slot.collider_handle,
-                                bf[0], bf[1], bf[2], false,
-                            );
+                    if !slot.occupied { continue; }
+
+                    if !slot.alive {
+                        // Consume queued human commands to keep ack_seq advancing.
+                        if slot.is_human {
+                            while slot.queue.len() > 1 { slot.queue.pop_front(); }
+                            if let Some(cmd) = slot.queue.pop_front() {
+                                slot.ack_seq = cmd.seq;
+                            }
                         }
                         continue;
                     }
 
+                    // Human inputs: consume even during freeze to advance ack_seq.
                     if slot.is_human {
                         if let Some(cmd) = slot.queue.pop_front() {
-                            slot.last_buttons = cmd.buttons;
+                            slot.last_buttons = if is_live { cmd.buttons } else { 0 };
                             slot.last_yaw = cmd.yaw;
                             slot.last_pitch = cmd.pitch;
-                            slot.last_shot = cmd.shot;
+                            slot.last_shot = if is_live { cmd.shot } else { None };
                             slot.ack_seq = cmd.seq;
                         } else {
                             slot.last_shot = None;
                         }
                     } else if let Some(ref mut bot) = slot.bot {
-                        let (buttons, yaw) = ai::tick_bot(
-                            bot,
-                            &world,
-                            &slot.player.position,
-                            slot.collider_handle,
-                            &positions,
-                            &alive,
-                        );
-                        slot.last_buttons = buttons;
-                        slot.last_yaw = yaw as f32;
-                        slot.last_pitch = 0.0;
+                        if is_live {
+                            let (buttons, yaw) = ai::tick_bot(
+                                bot,
+                                &world,
+                                &slot.player.position,
+                                slot.collider_handle,
+                                &positions,
+                                &alive,
+                            );
+                            slot.last_buttons = buttons;
+                            slot.last_yaw = yaw as f32;
+                            slot.last_pitch = 0.0;
+                        }
                     }
 
-                    world.sync_player_body(
-                        slot.body_handle,
-                        slot.collider_handle,
-                        slot.player.position.x,
-                        slot.player.position.y,
-                        slot.player.position.z,
-                        slot.player.ducked,
-                    );
-                    tick_movement(
-                        &mut world,
-                        &mut slot.player,
-                        slot.last_buttons,
-                        slot.last_yaw as f64,
-                        FIXED_DT,
-                        Some(slot.collider_handle),
-                    );
+                    // Only tick movement during Live phase.
+                    if is_live {
+                        world.sync_player_body(
+                            slot.body_handle,
+                            slot.collider_handle,
+                            slot.player.position.x,
+                            slot.player.position.y,
+                            slot.player.position.z,
+                            slot.player.ducked,
+                        );
+                        tick_movement(
+                            &mut world,
+                            &mut slot.player,
+                            slot.last_buttons,
+                            slot.last_yaw as f64,
+                            FIXED_DT,
+                            Some(slot.collider_handle),
+                        );
+                    }
                 }
 
                 // Shot resolution (6.6): raycast from eyePos along dir against all
@@ -298,7 +329,7 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                     }
                 }
 
-                let snapshot = build_snapshot(&slots, server_tick, frame_events);
+                let snapshot = build_snapshot(&slots, &round, server_tick, frame_events);
                 for slot in &slots {
                     if let (true, Some(out)) = (slot.occupied, &slot.out) {
                         // Each client gets its own ackSeq — re-encode per slot.
@@ -368,7 +399,7 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
     }
 }
 
-fn build_snapshot(slots: &[Slot], server_tick: u32, events: Vec<GameEvent>) -> Snapshot {
+fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events: Vec<GameEvent>) -> Snapshot {
     let entities = slots
         .iter()
         .enumerate()
@@ -402,10 +433,10 @@ fn build_snapshot(slots: &[Slot], server_tick: u32, events: Vec<GameEvent>) -> S
         entities,
         events,
         round: RoundState {
-            phase: 1,
-            time_left_ms: 0,
-            score_t: 0,
-            score_ct: 0,
+            phase: round.phase_value(),
+            time_left_ms: round.time_left_ms,
+            score_t: round.score_t,
+            score_ct: round.score_ct,
         },
     }
 }

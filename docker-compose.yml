@@ -1,0 +1,31 @@
+# Phase 8 — one-command deploy of the Counter Douglas stack.
+#
+#   docker compose up --build
+#
+# Then open http://localhost:8080 in a browser. In the Connect overlay,
+# enter:  ws://localhost:9876  (the server is exposed directly).
+#
+# If you enable the /ws proxy in nginx.conf, use:  ws://localhost:8080/ws
+# and comment out the "ports" line on the server service.
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "9876:9876"
+    restart: unless-stopped
+    # Uncomment to keep the server internal (only reachable via nginx proxy).
+    # expose:
+    #   - "9876"
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    ports:
+      - "8080:80"
+    depends_on:
+      - server
+    restart: unless-stopped
