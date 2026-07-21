@@ -1981,3 +1981,6 @@ Files: src/core/audio.ts, src/ui/hud.ts, src/main.ts, claude_changelog.md
 Expanded README.md: added stack badges (TypeScript, Rust, three.js, WASM, Vite, Docker, asset licence), a mermaid tech-stack network diagram, a "why each piece" table, a section on the agent authoring assets in Blender via MCP, architecture notes (server-authoritative/client-predicted shared Rust sim, fixed 64 Hz, determinism), server/Docker run instructions, and repo layout.
 
 Bada Bing!
+
+## 2026-07-20
+- Fixed CI: `tests/harness/server.test.ts` now `describe.skipIf(!existsSync(SERVER_BIN))` — skips when the Rust server binary isn't built (CI) instead of ENOENT-failing in beforeAll.

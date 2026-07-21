@@ -9,6 +9,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -18,7 +19,8 @@ const SERVER_BIN = resolve(import.meta.dirname, '../../target/debug/server');
 const BIND = '127.0.0.1:9899';
 const WS_URL = `ws://${BIND}`;
 
-describe('server authoritative loop (6.3)', () => {
+// ponytail: skip in CI where the Rust server isn't built; run `cargo build` to enable.
+describe.skipIf(!existsSync(SERVER_BIN))('server authoritative loop (6.3)', () => {
   let proc: ChildProcess | null = null;
 
   beforeAll(async () => {
