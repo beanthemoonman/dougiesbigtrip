@@ -1982,5 +1982,25 @@ Expanded README.md: added stack badges (TypeScript, Rust, three.js, WASM, Vite, 
 
 Bada Bing!
 
+## 2026-07-21
+- Marked Phase 8 (Containerization & deploy) complete in `plan_to_implement.md`. All deliverables already built: `Dockerfile.client`, `Dockerfile.server`, `docker-compose.yml`, `nginx.conf`, `docs/deploy.md`, `src/ui/connect.ts`.
+
 ## 2026-07-20
 - Fixed CI: `tests/harness/server.test.ts` now `describe.skipIf(!existsSync(SERVER_BIN))` — skips when the Rust server binary isn't built (CI) instead of ENOENT-failing in beforeAll.
+
+## 2026-07-21 — Plan reorg: added Phases 9–13
+Reorganized `plan_to_implement.md` to append the not-yet-done work as five new phases after Phase 8:
+- **Phase 9** — Game flow: SP team-select (nothing spawned until you pick), spectator on menu-out regardless of round state, MP join-on-next-round, teams-full → spectate-only, two-gate server-capacity refusal (connect button + URL/handshake, spectator cap = ceil(2/3·maxPlayers)), and a server-level round-state/per-player-reset review.
+- **Phase 10** — Movement & interaction tuning: fix residual forward creep on stop, working Shift slow-walk + crouch-walk that don't fire Chrome shortcuts, breakable-collision correctness, crouch-jump onto props.
+- **Phase 11** — Third-person fidelity + Phase 7 ragdoll redux: correct rig/weapon orientation, per-weapon rifle-vs-pistol stances, third-person muzzle flash + tracer.
+- **Phase 12** — Asset refinement II: Poly Haven textures, de-floaty solid characters, more breakables with round-scoped respawn, map liveliness.
+- **Phase 13** — End-to-end hardening: human+agent SP & MP playtests, unit-test gap fill, clear all found bugs.
+Updated the intro paragraph to describe the 9–13 arc. No code changed.
+
+## 2026-07-21 — Plan sync: Phase 6 marked complete + drift-prevention directive
+- Confirmed Phase 6 (netcode) is actually built (sim/ crate, server/, src/net/, WASM parity tests, ACC-012/013/014/015/016) — the plan file still said "CURRENT PHASE / not started". Flipped Phase 6 to COMPLETE, ticked increments 6.0–6.6 + T3, marked the exit test PASS, and updated the stale risk-register line.
+- Added a standing directive to CLAUDE.md + AGENTS.md: when part of the plan is completed, update `plan_to_implement.md` in the same turn (tick boxes, flip status, record exit-test result) so the plan never drifts behind the code again.
+
+## 2026-07-21 — Plan: inserted Phase 11 (advanced bot AI), renumbered 11–13 → 12–14
+- Added **Phase 11 — Advanced bot AI: search & engage**: replace the fixed patrol-waypoint routes with an emergent spread-out search that fans the squad across the map; a formal engage loop (shoot on LOS, path to last-known when LOS lost); verify/harden LOS occlusion so bots can't see through walls; and a give-up timeout that returns bots to searching. Noted it's a behavior rework on the existing FSM/lastKnown/perception, runs server-side in the Rust sim, covered by T1 replays.
+- Renumbered the prior new phases: Third-person fidelity+ragdoll 11→12, Asset refinement II 12→13, End-to-end hardening 13→14. Updated the intro paragraph's 9–13 → 9–14.

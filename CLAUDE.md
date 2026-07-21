@@ -216,3 +216,6 @@ rationale and examples in `docs/testing.md`; this is the gate.
 - Append what you did during your turn to the end of the file claude_changelog.md.
 - If anything you did means that now something in claude.md is incorrect, please update it.
 - claude.md and agents.md should be kept in sync.
+- When you complete part of the plan, update `plan_to_implement.md` in the same turn: tick the
+  boxes, flip the phase/increment status, and record the exit-test result. The plan file must
+  never drift behind what's actually built.

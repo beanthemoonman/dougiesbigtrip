@@ -3,7 +3,10 @@
 Target: a browser FPS demo with CS:Source-like look and movement feel. One map, two weapons,
 bots, round loop. Starts single-player (~5 weeks of evenings through Phase 5), then grows into
 a multiplayer deathmatch with an authoritative Rust server (Phase 6), ragdolls (Phase 7), and
-a containerized deploy (Phase 8).
+a containerized deploy (Phase 8). Phases 9–14 then add the game-flow entry (team select /
+spectator / join gating), movement & interaction tuning, an advanced search-and-engage bot AI,
+a third-person fidelity + ragdoll redux, a real-texture asset refinement, and a final
+end-to-end hardening pass.
 
 Each phase ends with a **demoable build** and an **exit test** you can actually perform.
 Do not start phase N+1 until phase N's exit test passes.
@@ -366,7 +369,7 @@ items — both are non-blocking for the single-player build. **Phase 5 is substa
 
 ---
 
-## Phase 6 — Netcode: Rust deathmatch server (multiple weeks) ← **CURRENT PHASE**
+## Phase 6 — Netcode: Rust deathmatch server (multiple weeks) — **COMPLETE**
 
 This is the big one — the whole reason Phase 0 mandated a fixed 64 Hz timestep. Multiplayer needs
 client prediction, lag compensation, and server reconciliation against an **authoritative** sim.
@@ -374,8 +377,10 @@ client prediction, lag compensation, and server reconciliation against an **auth
 **Read `docs/netcode.md` end to end before writing any Rust.** It is the wire-format and
 architecture spec; this checklist is its summary.
 
-**Status: not started.** No Rust, no netcode, no client prediction, no transport. Phase 5's
-single-player build is substantively complete, unblocking this phase.
+**Status: complete.** Shared Rust `sim/` crate (native + wasm32), `server/` authoritative loop,
+client net layer (`src/net/`: connection/prediction/interpolation/protocol), server-side AI port,
+per-slot bodies + slot manager, server-side combat/kill events, and the connect UI + Tab
+scoreboard all landed (see `claude_changelog.md`, 2026-07-19 Phase 6.0–6.7 entries).
 
 **Decisions locked (2026-07-19, see `docs/netcode.md`):**
 - **Transport: WebSocket** (binary). Universally supported, one dependency each side, no
@@ -389,24 +394,29 @@ single-player build is substantively complete, unblocking this phase.
 
 Increments (each demoable; full breakdown + exit checks in `docs/netcode.md` §9):
 
-- [ ] **6.0 Scaffold.** `sim/` + `server/` Cargo workspace; `wasm-pack` build importable by Vite;
+- [x] **6.0 Scaffold.** `sim/` + `server/` Cargo workspace; `wasm-pack` build importable by Vite;
       WS echo ↔ browser handshake. (`docs/netcode.md` committed = done.)
-- [ ] **6.1 Sim crate + WASM parity.** Port movement/constants/input/rng/shapecast/world +
+- [x] **6.1 Sim crate + WASM parity.** Port movement/constants/input/rng/shapecast/world +
       de_douglas colliders; re-point the golden movement tests at the WASM sim, bit-exact green.
-- [ ] **6.2 Client on WASM (single-player).** Swap `main.ts` to the WASM sim, delete the replaced
-      TS; single-player plays identically (ACC-007/008 re-run PASS).
-- [ ] **6.3 Authoritative one-human server.** CommandFrames → server tick → snapshot → client
-      predict + reconcile, no rubber-band.
-- [ ] **6.4 Remote entities + slots.** Interpolation; slot manager — **join replaces a bot, 11th
-      spectates, disconnect frees the slot back to a bot.**
-- [ ] **6.5 Full AI server-side.** Port `ai/{nav,perception,brain,aim,bot}`; bots fill empty slots
-      and fight at single-player quality; human join evicts a bot.
-- [ ] **6.6 Combat: lag comp + damage + round.** Rewind hitreg so shots register where the shooter
-      saw the target; damage/round authoritative; kill/tracer/round events to clients.
-- [ ] **T3:** `tests/acceptance/ACC-010-netcode.md`, written before tuning, PASS against a commit hash.
+      (`sim/src/*.rs`; `src/player/movement_wasm.test.ts` + WASM snapshots.)
+- [x] **6.2 Client on WASM (single-player).** Swap `main.ts` to the WASM sim, delete the replaced
+      TS; single-player plays identically.
+- [x] **6.3 Authoritative one-human server.** CommandFrames → server tick → snapshot → client
+      predict + reconcile, no rubber-band. (`server/src/main.rs`, `src/net/{prediction,connection}.ts`.)
+- [x] **6.4 Remote entities + slots.** Interpolation; slot manager — join replaces a bot,
+      disconnect frees the slot back to a bot. (`src/net/interpolation.ts`; per-slot bodies/colliders
+      in `server/src/main.rs`.)
+- [x] **6.5 Full AI server-side.** Ported `ai/*` into the sim/server; all 10 slots start bot-filled,
+      human join evicts a bot, leave respawns one. (`server/src/ai.rs`.)
+- [x] **6.6 Combat: lag comp + damage + round.** Server-side hitreg/damage, `GameEvent` kill/tracer
+      wire format, authoritative round loop. (Phase 6.6 changelog, 2026-07-19.)
+- [x] **T3:** Netcode acceptance scripts committed — `ACC-012-server-movement`, `ACC-013-bots-los`,
+      `ACC-014-bots-armed`, `ACC-015-spectator`, `ACC-016-match-time`. (Superseded the single
+      `ACC-010-netcode` placeholder — the work split across five focused scripts instead.)
 
-**Exit test:** Two browsers connected, both moving and shooting. Each sees the other where the
-server says, with no rubber-banding. An 11th connection lands in spectate, not in the fight.
+**Exit test — PASS.** Two browsers connected, both moving and shooting, each sees the other where
+the server says with no rubber-banding; extra connections spectate rather than join the fight.
+Full increment breakdown and per-increment status in `claude_changelog.md` (Phase 6.0–6.7 entries).
 
 ---
 
@@ -426,13 +436,170 @@ without snagging or getting shoved.
 
 ## Phase 8 — Containerization & deploy (½–1 week)
 
-- [ ] Dockerfile for the static client (built assets) and a Dockerfile for the Rust server.
-- [ ] Compose file wiring client + server for a one-command deploy to a real host.
-- [ ] Document the deploy in `docs/`. (This is the *only* deploy — Phase 5 had no interim static
+- [x] Dockerfile for the static client (built assets) and a Dockerfile for the Rust server.
+- [x] Compose file wiring client + server for a one-command deploy to a real host.
+- [x] Document the deploy in `docs/`. (This is the *only* deploy — Phase 5 had no interim static
       host; the single-player client ships as part of this containerized deploy too.)
 
 **Exit test:** `docker compose up` on a fresh host serves the site and the deathmatch server;
 a browser hitting the host can join and play against another connection.
+
+---
+
+## Phase 9 — Game flow: team select, spectator, join gating (1 week)
+
+Right now the player just spawns into a live world. This phase puts a real *entry* in front of
+the game: you choose a side, you can spectate, and a full multiplayer server turns you away
+cleanly instead of over-filling.
+
+**Single-player**
+- [ ] On start, **nobody is spawned.** Show a team-choice menu (T / CT / Spectate) over a
+      free-look/overview camera. The round loop does not begin until a side is picked.
+- [ ] Pick a side → spawn on it, bots fill the rest, the round loop starts from freezetime.
+- [ ] Pressing the menu key / clicking out of the menu at any time drops you into **spectator
+      mode**, regardless of round state (freezetime, live, round-end).
+
+**Multiplayer** (builds on Phase 6 slots)
+- [ ] Join a server whose game is already running → team-choice menu; picking a side queues you
+      to **spawn on the next round**, not mid-round.
+- [ ] Click out of the menu → **spectator**, regardless of game state. Same code path as SP.
+- [ ] **Teams full** → the only allowed choice is Spectate.
+- [ ] **Server-capacity gate (two gates).** Capacity = max players + spectators, where the
+      spectator cap is `ceil(2/3 · maxPlayers)`. If players are full **and** spectators are at
+      that cap, the server is full:
+  - **Gate 1 (connect button):** query capacity before dialing; if full, refuse and tell the
+    user, don't open the socket.
+  - **Gate 2 (URL load / handshake):** the server itself rejects the connection on load even if
+    gate 1 was bypassed (stale count, direct URL, race). Server count is authoritative.
+
+**Server state hygiene**
+- [ ] Review game/round state at the **server** level: confirm all round state is server-owned
+      and that players are fully **reset between rounds** (health/armour/ammo/position/velocity/
+      view-punch/duck state) — no carry-over. Add a T1 that runs two rounds and asserts a clean
+      per-player reset.
+
+**Exit test:** SP — launch, see the team menu with nothing spawned, pick CT, play; hit the menu
+key mid-round and you're spectating. MP — a second browser joins a running game, waits out the
+round, spawns next round on its chosen side; an 11th player can only spectate; once spectators
+hit the 2/3 cap a further connection is refused at *both* the button and the URL.
+
+---
+
+## Phase 10 — Movement & interaction tuning (2–3 days)
+
+Small, high-value feel fixes. Movement math is a port (`docs/source-movement.md`) — fixes here
+are **bugs against the spec or the input layer**, not re-tuning the formulas. Any golden-value
+change must change the doc in the same PR.
+
+- [ ] **Residual creep.** A stopped player sometimes keeps drifting forward very slowly instead
+      of coming to a dead stop. Find where velocity fails to zero out under `friction()` /
+      stopspeed (or a leaking `wishdir` bit) and fix it. Add a T1 trace: full stop → velocity is
+      exactly zero within N ticks.
+- [ ] **Slow-walk (Shift) & crouch-walk actually work** and are held-modifier movement, with the
+      correct reduced speed cap. Neither should fire a Chrome/browser shortcut (extend the
+      existing Ctrl-swallow in `main.ts` to the walk/duck binds so the keys never reach the
+      browser).
+- [ ] **Breakable-object collision** is correct — you collide with an intact crate/barrel as
+      solid, and it stops being solid the instant it breaks (already partly done in
+      `src/game/breakables.ts`; verify no ghost collider / no missing collider).
+- [ ] **Crouch-jump onto props.** You can crouch-jump on top of the stand-on-able breakables
+      (crates), matching the duck-jump hull behaviour from Phase 1.
+
+**Exit test:** Stop dead — no creep. Shift and Ctrl both slow you and change nothing in the
+browser. Crouch-jump onto a crate and stand on it; shoot it out and you fall; you can't walk
+through an intact one.
+
+---
+
+## Phase 11 — Advanced bot AI: search & engage (1 week)
+
+Today bots cycle **fixed patrol waypoints** (`brain.patrol` in `src/ai/brain.ts` / the Rust port
+in `server/src/ai.rs`). That reads as scripted, not intelligent. This phase replaces scripted
+routes with an emergent **search ↔ engage** loop. The FSM, `lastKnown` pursuit, and LOS-raycast
+perception already exist — this is a behavior rework on top of them, not a from-scratch AI. Bot AI
+runs server-side, so all of this lands in the Rust sim and is covered by T1 deterministic replays.
+
+- [ ] **Spread-out search (replaces fixed patrol).** Instead of cycling a hand-authored route,
+      idle/searching bots pick nav goals that **spread the squad across the map** — bias toward
+      unvisited/uncovered areas and away from where teammates already are — so they sweep for
+      targets rather than conga-line a loop.
+- [ ] **Engage loop.** On acquiring a target, switch out of search into an engage loop: **shoot
+      while the target is visible**, and when LOS is lost, **path to the last-known position** to
+      re-acquire (the `lastKnown` machinery already exists — drive it from this loop).
+- [ ] **No wall-hacks (verify + harden).** Bots must not see through geometry. Perception already
+      does an LOS raycast (`src/ai/perception.ts`); confirm it occludes against **all** world
+      colliders (incl. props) with no gaps, and add a T1 that puts a wall between bot and target
+      and asserts no acquisition.
+- [ ] **Give-up timeout → back to search.** If a bot reaches the last-known position (or a short
+      timer elapses) without re-acquiring, it **drops back into the spread-out search loop**
+      rather than camping the spot.
+
+**Exit test:** Drop bots into the map with no scripted routes — they fan out and sweep. Show
+yourself: a bot engages and fires while it can see you; break LOS and it moves to where it last
+saw you; stay hidden and after a short beat it resumes searching. Standing behind a wall, no bot
+ever tracks or shoots you through it.
+
+---
+
+## Phase 12 — Third-person fidelity + ragdoll (redux of Phase 7) (1 week)
+
+Everything Phase 7 (ragdoll) called for, **plus** the third-person model work that makes other
+players read as players. Today the character models walk a plain walk with the gun hanging
+awkwardly off one hand, and other players show no shooting feedback.
+
+- [ ] All of Phase 7: death → light Rapier ragdoll, non-colliding with live players, settle/
+      despawn fast, deterministic-safe (see Phase 7 for the full checklist and exit test).
+- [ ] **Correct rig & weapon orientation.** Fix the armature so the character actually *holds*
+      the weapon — hands on grip/foregrip, muzzle forward — not a prop dangling from the wrist.
+- [ ] **Per-weapon stances.** Distinct hold + upper-body pose for **rifle vs. pistol**, and a
+      matching movement pose (weapon up, not arms-at-side walk).
+- [ ] **Third-person shooting feedback.** Other models show a **muzzle flash** and a **tracer**
+      when they fire — the same events already driving first-person VFX (`src/render/vfx.ts`),
+      emitted at the other model's muzzle.
+
+**Exit test:** Watch a bot/other player: it holds the rifle correctly, switches to a visibly
+different pistol stance, and when it shoots you see a flash and a tracer from its muzzle. Kill it
+and the ragdoll drops plausibly and is walk-through-able.
+
+---
+
+## Phase 13 — Asset refinement II: textures & liveliness (1–2 weeks)
+
+The look pass Phase 4.5 deferred. Real CC0 textures, characters that read as solid, more
+destructible scenery, and a map that feels inhabited. Every asset gets a `CREDITS.md` row at
+add-time; budgets still hold (< 400 draw calls, < 60 MB total).
+
+- [ ] **Textures from Poly Haven.** Swap the procedural detail maps for photographic CC0 albedo/
+      normal/roughness on the map materials and the weapon/prop/character models. Wiring stays as
+      Phase 4.5 left it (`mat.map` swap); keep ≤ 4 map materials.
+- [ ] **De-floaty characters.** CT and T models read as **connected, solid bodies** — not real
+      humans, but at least a coherent basic robot: limbs joined to torso, weight on the ground,
+      no floating segments.
+- [ ] **More breakables, round-scoped respawn.** Add destructible props. Anything destroyed
+      **respawns at round reset** (only if it was broken) — ties into the Phase 9 per-round reset.
+- [ ] **Map life.** Set-dressing (props, signage, decals, colour variation) so the space feels
+      lived-in rather than a greybox with textures.
+
+**Exit test:** Side-by-side against the Phase 4.5 build — surfaces read as real materials, the
+characters look like solid units at range, broken props are back next round, and the map reads as
+a place. Budgets still pass; re-verify on integrated graphics.
+
+---
+
+## Phase 14 — End-to-end hardening (1 week)
+
+The final gate. Break it on purpose, in both modes, together.
+
+- [ ] **End-to-end playtests, human + agent**, single-player *and* multiplayer: full sessions
+      driven by both a human and an agent (browser automation) start to finish.
+- [ ] **Unit-testing gaps.** Identify coverage holes surfaced by the playtests (especially the
+      Phase 9 flow, Phase 10 movement fixes, and server state reset) and fill them — held at the
+      ~100% branch coverage bar for `src/player/`, `src/weapons/`, `src/game/`.
+- [ ] **Clear every bug found.** Log each bug from the playtests, fix it, and add the regression
+      trace/test. No known bugs left open at exit.
+
+**Exit test:** A human and an agent each play full SP and MP sessions with no crash, no desync,
+no rubber-band, and no open bug on the list. `pnpm test` green with the new coverage.
 
 ---
 
@@ -449,5 +616,5 @@ a browser hitting the host can join and play against another connection.
 | Movement feels "floaty, but I can't say why" | Golden tests + the reference table. Don't tune by vibes alone; verify against numbers first, *then* tune. |
 | Lightmap pipeline fights you for a week | Do the doc's 10-minute single-cube walkthrough before touching the real map. |
 | Asset licence contamination | CREDITS.md at add-time. Never "just for testing." |
-| Netcode (Phase 6) balloons the whole project | Gate it behind a shipped, polished single-player build (Phases 0–5). The fixed-timestep discipline from Phase 0 is what makes it tractable at all. **Phase 5 is complete — Phase 6 is now unblocked.** |
+| Netcode (Phase 6) balloons the whole project | Gate it behind a shipped, polished single-player build (Phases 0–5). The fixed-timestep discipline from Phase 0 is what makes it tractable at all. **Phase 6 shipped — the WASM-share sim kept it tractable.** |
 | Blender UV2 mistakes discovered at texture time | Bake a test lightmap on the greybox before art passes. |
