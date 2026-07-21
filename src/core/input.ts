@@ -74,6 +74,13 @@ export function createInputManager(target: HTMLElement): InputManager {
     else if (e.code === 'Digit2') state.weaponSlot = 2;
     const bit = KEY_TO_BUTTON[e.code];
     if (bit !== undefined) state.buttons |= bit;
+    // Duck is Ctrl, so holding it while pressing a movement/weapon key would fire
+    // Chrome shortcuts (Ctrl+W closes the tab, Ctrl+1 switches tabs). Swallow our
+    // mapped keys while in-game so they never reach the browser.
+    if ((bit !== undefined || e.code === 'Digit1' || e.code === 'Digit2') &&
+        document.pointerLockElement === target) {
+      e.preventDefault();
+    }
   }
 
   function onKeyUp(e: KeyboardEvent): void {

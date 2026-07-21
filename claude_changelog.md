@@ -1967,3 +1967,7 @@ Files: src/core/audio.ts, src/ui/hud.ts, src/main.ts, claude_changelog.md
   Port validation relaxed to only apply to the bare-host form.
 - `src/main.ts`: over https, default the address field to `wss://<host>/ws` (the proxy
   endpoint — no open game port); boot-URL parse preserves a path so the field round-trips.
+
+## Bugfix: https default port + Ctrl chrome shortcuts (2026-07-20)
+- `src/core/settings.ts`: bare-host port field now defaults to 443 over https (wss:) instead of 9876, matching the :443 reverse proxy.
+- `src/core/input.ts`: preventDefault on mapped game keys while pointer-locked, so Ctrl (duck) + W/1/2 no longer trigger Chrome tab shortcuts.

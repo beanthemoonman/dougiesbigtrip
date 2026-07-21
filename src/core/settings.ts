@@ -74,6 +74,9 @@ export function createSettingsPanel(
   // wss:// from an https page, ws:// otherwise — a browser blocks ws:// from a
   // secure page as mixed content, so the scheme must follow the page.
   const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // Over TLS a bare host reaches the server through the :443 reverse proxy, not
+  // the raw game port — so default the port field to 443 on https.
+  const defaultPort = wsScheme === 'wss:' ? '443' : DEFAULT_SERVER_PORT;
 
   // Build the WebSocket URL from the address/port fields. Supports three forms:
   //   - full URL typed         → "wss://host/ws"      (used verbatim)
@@ -166,7 +169,7 @@ export function createSettingsPanel(
 
     portInput = document.createElement('input');
     portInput.type = 'text';
-    portInput.value = serverOpts.defaultPort ?? DEFAULT_SERVER_PORT;
+    portInput.value = serverOpts.defaultPort ?? defaultPort;
     portInput.placeholder = 'port';
     portInput.style.cssText =
       'width:52px;padding:4px 6px;background:#1a1a1a;color:#eee;border:1px solid #444;font:12px monospace;text-align:center';
