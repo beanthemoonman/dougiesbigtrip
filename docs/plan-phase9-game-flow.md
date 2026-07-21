@@ -7,6 +7,24 @@ Today the player spawns straight into a live world. Phase 9 puts an **entry** in
 game: choose a side, spectate, and a full server turns you away cleanly instead of over-filling.
 **If the code and this doc disagree, that's a bug in one of them — decide which, in the PR.**
 
+> ## ⚠️ Amendment (roster & capacity) — supersedes the decisions below
+>
+> Two decisions in this doc were reversed after review; the shipped code follows the amendment,
+> and the e2e suite (`tests/e2e/roster.e2e.ts`) is the executable spec.
+>
+> 1. **Capacity is 6 players + 4 spectators (10 total), not 10 + 7.** `MAX_SLOTS = 6`
+>    (3 T + 3 CT, all bot-filled by default → **3v3**). `specCap = ceil(2/3 · 6) = 4`. Server full
+>    ⇔ 6 human players **and** 4 spectators. Everywhere below that says "10 slots / 7 spectators /
+>    11th player", read "6 / 4 / 7th".
+> 2. **Join is instant; leave defers.** A joining player **replaces a bot immediately, mid-round or
+>    not** (no more "queue to next `Reset`"). Conversely a player who **leaves** is replaced by a
+>    bot **only at the next `Reset`** — the slot sits dead/empty until then (a bot never replaces a
+>    player mid-round). The `pending_human` machinery is gone; leave sets the slot dead + botless
+>    and the `Reset` block backfills a bot.
+>
+> Everything else in this doc (menu, spectator cam, two-phase Welcome, Gate 2 handshake refusal,
+> per-round reset hygiene) stands as written.
+
 ---
 
 ## What already exists (reuse, don't rebuild)
@@ -29,7 +47,7 @@ game: choose a side, spectate, and a full server turns you away cleanly instead 
 | **What a spectator is** | **Not a player slot.** The server keeps a spectator list alongside the 10 slots. | Keeps `MAX_SLOTS`/bot-fill logic untouched; a spectator holds no body and evicts no bot. |
 | **Capacity numbers** | `maxPlayers = MAX_SLOTS = 10`, `specCap = ceil(2/3 · maxPlayers) = 7`. Server full ⇔ all 10 slots human **and** 7 spectators. | Matches the phase spec verbatim. Single source: a `capacity.rs` const, mirrored in a TS const with a shared golden test. |
 | **SP vs MP** | **Same UI + same spectator code.** A `NETWORKED` flag gates only the *queue-to-next-round* vs *spawn-now* branch and the capacity gates. | The phase says "same code path as SP" for spectate; honour it — one menu, one cam. |
-| **Gate 1 (pre-dial)** | HTTP `GET /status` on the server's WS port → `{players, maxPlayers, spectators, specCap}`. Connect button refuses if full. | Reuses the port; no second listener. tokio-tungstenite already sees the HTTP upgrade — branch on path. |
+| **Gate 1 (pre-dial)** | HTTP `GET /status` on the server's WS port → `{players, maxPlayers, spectators, specCap}`. Connect button refuses if full. | Reuses the port; no second listener. `handle_conn` peeks the raw TCP request line and answers `GET /status` with a plain HTTP/1.1 response (Content-Length set) before the WS upgrade. |
 | **Gate 2 (handshake)** | Server sends `Bye{reason:"full"}` and closes if capacity is exceeded at accept time. | Count is authoritative; Gate 1 is advisory (stale count / direct URL / race). |
 
 ---

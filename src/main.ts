@@ -283,7 +283,40 @@ async function main(): Promise<void> {
     },
   };
 
+  // Phase 9 SP roster: there is exactly one human, so at most one bot is benched at a
+  // time. `benchedBot` is the bot the human currently displaces; `rebotPending` is a bot
+  // owed to a team the human just left, reactivated at the next round reset (a bot never
+  // replaces a player mid-round). Both reference `enemies`, defined below — only touched
+  // from callbacks that fire after init.
+  let benchedBot: Enemy | null = null;
+  let rebotPending: Enemy | null = null;
+  function benchBot(e: Enemy): void {
+    e.active = false;
+    e.alive = false;
+    e.root.visible = false;
+    e.brain.bot.collider.setEnabled(false);
+  }
+  // Free a seat on `team` for the human, benching a bot. Reclaims the seat if the human
+  // is rejoining a team they left this round (no double-drop).
+  function displaceBotFor(team: Team): Enemy | null {
+    if (rebotPending && rebotPending.team === team) {
+      const e = rebotPending; // already benched; stays the human's seat
+      rebotPending = null;
+      return e;
+    }
+    const e = enemies.find((b) => b.active && b.team === team) ?? null;
+    if (e) benchBot(e);
+    return e;
+  }
+
   function enterGame(team: Team): void {
+    // Human replaces a bot on `team` instantly. If they were on another team, that seat
+    // gets its bot back next round.
+    if (benchedBot && benchedBot.team !== team) {
+      rebotPending = benchedBot;
+      benchedBot = null;
+    }
+    if (!benchedBot || benchedBot.team !== team) benchedBot = displaceBotFor(team);
     playerTeam = team;
     const spawnPt = team === 'T' ? T_SPAWN : CT_SPAWN;
     spawn.set(spawnPt[0], spawnPt[1], spawnPt[2]);
@@ -310,6 +343,8 @@ async function main(): Promise<void> {
   }
 
   function enterSpectator(): void {
+    // The team the human vacated gets its bot back next round.
+    if (benchedBot) { rebotPending = benchedBot; benchedBot = null; }
     gameMode = 'spectating';
     playerAlive = false;
     movementCtx.body.setEnabled(false);
@@ -589,7 +624,7 @@ async function main(): Promise<void> {
   const MAX_SHOT_DISTANCE = 100; // m; the greybox is 20 m across
   const STEP_STRIDE = 1.9; // m between footstep sounds at a walk/run
 
-  // --- Enemy bots (CT). The human is the lone T; bots defend from CT spawn. ---
+  // --- Bots. 3 per team by default; one is benched when the human picks that side. ---
   // Placeholder capsule bodies until the character rig lands (Phase 5); each bot
   // is a full second player driving the shared movement (ai/bot.ts) + brain FSM.
   const BOT_WEAPON = WEAPONS.rifle;
@@ -608,6 +643,9 @@ async function main(): Promise<void> {
     readonly root: Group; // wraps the cloned armature+skinned-mesh so we can position/yaw
     readonly anim: BotAnimState;
     readonly spawn: Vector3;
+    // Phase 9 roster: a bot is benched (active=false) when a human takes its slot —
+    // hidden, no collider, never revived — until the human leaves and it backfills.
+    active: boolean;
     alive: boolean;
     hp: number;
     fireCooldown: number;
@@ -685,15 +723,17 @@ async function main(): Promise<void> {
   // navmesh and routes around cover, so bots roam instead of standing at spawn.
   // y is the walkable-surface height the nav query snaps to.
   const F = CT_SPAWN[1];
-  // 3v3: the human is T; two bots fill out the T side, three defend as CT. T bots
-  // patrol north toward CT (mirror of the CT routes with z negated). Bots pick the
-  // nearest visible ENEMY each tick (human + opposing bots), so both sides fight.
+  // 3v3 by default: three bots per team fill the roster; when the human picks a side
+  // one bot on that side is benched and the human takes its place. T bots patrol north
+  // toward CT (mirror of the CT routes with z negated). Bots pick the nearest visible
+  // ENEMY each tick (human + opposing bots), so both sides fight.
   const botDefs: { team: Team; s: Vector3; patrol: Vector3[] }[] = [
     { team: 'CT', s: new Vector3(-18, F, 25), patrol: [new Vector3(-16, F, 14), new Vector3(-12, F, 4), new Vector3(-16, F, 24)] },
     { team: 'CT', s: new Vector3(-13, F, 26), patrol: [new Vector3(-8, F, 8), new Vector3(-4, F, 0), new Vector3(-10, F, 24)] },
     { team: 'CT', s: new Vector3(-10, F, 24), patrol: [new Vector3(6, F, 12), new Vector3(14, F, 0), new Vector3(-10, F, 22)] },
     { team: 'T', s: new Vector3(-18, F, -25), patrol: [new Vector3(-16, F, -14), new Vector3(-12, F, -4), new Vector3(-16, F, -24)] },
     { team: 'T', s: new Vector3(-13, F, -26), patrol: [new Vector3(-8, F, -8), new Vector3(-4, F, 0), new Vector3(-10, F, -24)] },
+    { team: 'T', s: new Vector3(-10, F, -24), patrol: [new Vector3(6, F, -12), new Vector3(14, F, 0), new Vector3(-10, F, -22)] },
   ];
   // Tint teammates so they read apart from enemies at a glance (one shared CT
   // model). CT keep their baked colour; T get a warm tan.
@@ -725,6 +765,7 @@ async function main(): Promise<void> {
       root,
       anim: createBotAnim(clone, ctTemplateClips),
       spawn: s,
+      active: true,
       alive: true,
       hp: BOT_MAX_HP,
       fireCooldown: 0,
@@ -818,25 +859,31 @@ async function main(): Promise<void> {
   const impact = new Vector3();
 
   function respawn(): void {
-    playerAlive = true;
-    health = 100;
-    armor = 100;
-    damageFlash = 0;
-    shakeTime = 0;
-    shakeIntensity = 0;
-    player.position.copy(spawn);
-    player.velocity.set(0, 0, 0);
-    player.onGround = false;
-    // Reset the WASM sim player to the spawn point as well, so the next tick
-    // doesn't pick up the old (dead) position.
-    sim_reset_player(0, spawn.x, spawn.y, spawn.z);
-    // Sync the human kinematic body so bot perception queries see the
-    // capsule at the fresh spawn position, not the death spot.
-    bodyCenterScratch.set(
-      spawn.x, spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, spawn.z,
-    );
-    movementCtx.body.setTranslation(bodyCenterScratch, true);
+    // A bot owed to a team the human left backfills now, at the round boundary.
+    if (rebotPending) { rebotPending.active = true; rebotPending = null; }
+    // Only the human revives — spectators stay out.
+    if (gameMode === 'playing') {
+      playerAlive = true;
+      health = 100;
+      armor = 100;
+      damageFlash = 0;
+      shakeTime = 0;
+      shakeIntensity = 0;
+      player.position.copy(spawn);
+      player.velocity.set(0, 0, 0);
+      player.onGround = false;
+      // Reset the WASM sim player to the spawn point as well, so the next tick
+      // doesn't pick up the old (dead) position.
+      sim_reset_player(0, spawn.x, spawn.y, spawn.z);
+      // Sync the human kinematic body so bot perception queries see the
+      // capsule at the fresh spawn position, not the death spot.
+      bodyCenterScratch.set(
+        spawn.x, spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, spawn.z,
+      );
+      movementCtx.body.setTranslation(bodyCenterScratch, true);
+    }
     for (const e of enemies) {
+      if (!e.active) continue; // benched: stays hidden/dead while the human holds its seat
       e.alive = true;
       e.hp = BOT_MAX_HP;
       e.fireCooldown = 0;
@@ -935,7 +982,10 @@ async function main(): Promise<void> {
   function bannerText(): string {
     if (matchOver) return `MATCH OVER   T ${round.score.t} : ${round.score.ct} CT`;
     if (round.phase === 'freezetime') return `FREEZE  ${Math.ceil(round.timer)}`;
-    if (round.phase === 'over') return round.winner === 'T' ? 'YOU WIN' : 'YOU LOSE';
+    if (round.phase === 'over') {
+      if (gameMode !== 'playing') return `ROUND OVER   ${round.winner} WINS`;
+      return round.winner === playerTeam ? 'YOU WIN' : 'YOU LOSE';
+    }
     if (!playerAlive) return 'SPECTATING';
     return '';
   }
@@ -982,10 +1032,11 @@ async function main(): Promise<void> {
       prevView.punchYaw = currView.punchYaw;
       prevView.punchPitch = currView.punchPitch;
 
-      // Round loop drives freeze/live/reset. The human is T (1 alive when alive);
-      // the bots are CT. Freezetime holds everyone still; reset respawns.
-      let tAlive = playerAlive ? 1 : 0;
-      let ctAlive = 0;
+      // Round loop drives freeze/live/reset. Count the human on their chosen team (only
+      // when actually playing — a spectator counts for neither side). Reset respawns.
+      const humanPlaying = gameMode === 'playing' && playerAlive;
+      let tAlive = humanPlaying && playerTeam === 'T' ? 1 : 0;
+      let ctAlive = humanPlaying && playerTeam === 'CT' ? 1 : 0;
       for (const e of enemies) {
         if (!e.alive) continue;
         if (e.team === 'CT') ctAlive++;
@@ -1341,18 +1392,18 @@ async function main(): Promise<void> {
       );
       // Scoreboard roster built from live game state. ponytail: static "Bot N"
       // + "You" labels; no per-entity K/D until kill bookkeeping exists.
-      const roster: PlayerScore[] = [
-        { slot: 0, team: 'T', name: 'You', kills: (serverScore ?? round.score).t, deaths: 0, alive: playerAlive },
-      ];
-      enemies.forEach((e, i) => {
+      const score = serverScore ?? round.score;
+      const roster: PlayerScore[] = [];
+      if (gameMode === 'playing') {
         roster.push({
-          slot: i + 1,
-          team: e.team,
-          name: `Bot ${i + 1}`,
-          kills: 0,
-          deaths: 0,
-          alive: e.alive,
+          slot: 0, team: playerTeam, name: 'You',
+          kills: playerTeam === 'T' ? score.t : score.ct, deaths: 0, alive: playerAlive,
         });
+      }
+      // Benched bots (the human's seat) are out of the roster.
+      enemies.forEach((e, i) => {
+        if (!e.active) return;
+        roster.push({ slot: i + 1, team: e.team, name: `Bot ${i + 1}`, kills: 0, deaths: 0, alive: e.alive });
       });
       scoreboard.render(roster);
       const teamMenuShown = teamMenu.el.style.display !== 'none';

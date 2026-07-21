@@ -454,36 +454,47 @@ Right now the player just spawns into a live world. This phase puts a real *entr
 the game: you choose a side, you can spectate, and a full multiplayer server turns you away
 cleanly instead of over-filling.
 
+**Roster & capacity (amended post-review — see doc's ⚠️ Amendment):** each team has **3 bots by
+default** (3v3, all slots bot-filled). A joining player **replaces a bot instantly, mid-round or
+not**; a player who **leaves** is replaced by a bot **only next round** (the slot sits dead until
+the reset — a bot never replaces a player mid-round). Capacity = **6 players + 4 spectators**
+(`specCap = ceil(2/3 · 6) = 4`). E2e coverage: `tests/e2e/roster.e2e.ts`, run with `pnpm test:e2e`.
+
 **Single-player**
 - [x] On start, **nobody is spawned.** Show a team-choice menu (T / CT / Spectate) over a
       free-look/overview camera. The round loop does not begin until a side is picked.
-- [x] Pick a side → spawn on it, bots fill the rest, the round loop starts from freezetime.
+- [x] Pick a side → spawn on it (replacing a bot on that side), bots fill the rest, round loop
+      runs from freezetime. Leaving a side → that seat is a bot again next round.
 - [x] Pressing the menu key / clicking out of the menu at any time drops you into **spectator
       mode**, regardless of round state (freezetime, live, round-end).
 
 **Multiplayer** (builds on Phase 6 slots)
-- [x] Join a server whose game is already running → team-choice menu; picking a side queues you
-      to **spawn on the next round**, not mid-round.
+- [x] Join a server whose game is already running → team-choice menu; picking a side **replaces a
+      bot instantly** (mid-round spawn), no longer queued to the next round.
 - [x] Click out of the menu → **spectator**, regardless of game state. Same code path as SP.
-- [x] **Teams full** → the only allowed choice is Spectate.
+- [x] **Teams full** (3 humans on a side) → the only allowed choice is Spectate.
 - [x] **Server-capacity gate (two gates).** Capacity = max players + spectators, where the
-      spectator cap is `ceil(2/3 · maxPlayers)`. If players are full **and** spectators are at
-      that cap, the server is full:
+      spectator cap is `ceil(2/3 · maxPlayers)`. With `maxPlayers = 6` → `specCap = 4`. If players
+      are full **and** spectators are at that cap, the server is full:
   - [x] **Gate 1 (connect button):** query capacity before dialing; if full, refuse and tell the
-    user, don't open the socket.
+    user, don't open the socket. *(Client reads live capacity from the `Welcome`; the
+    `GET /status` HTTP endpoint now returns well-formed JSON — handled at the raw TCP level
+    before the WS upgrade — and is covered by `roster.e2e.ts` "serves capacity as JSON over
+    GET /status".)*
   - [x] **Gate 2 (URL load / handshake):** the server itself rejects the connection on load even if
     gate 1 was bypassed (stale count, direct URL, race). Server count is authoritative.
+    Covered by `roster.e2e.ts` "refuses a connection once the server is full".
 
 **Server state hygiene**
 - [x] Review game/round state at the **server** level: confirm all round state is server-owned
       and that players are fully **reset between rounds** (health/armour/ammo/position/velocity/
-      view-punch/duck state) — no carry-over. Add a T1 that runs two rounds and asserts a clean
-      per-player reset.
+      view-punch/duck state) — no carry-over. T1/e2e that runs two rounds and asserts a clean
+      per-player reset (`tests/e2e/server-loop.e2e.ts` "resets player state between rounds").
 
 **Exit test:** SP — launch, see the team menu with nothing spawned, pick CT, play; hit the menu
-key mid-round and you're spectating. MP — a second browser joins a running game, waits out the
-round, spawns next round on its chosen side; an 11th player can only spectate; once spectators
-hit the 2/3 cap a further connection is refused at *both* the button and the URL.
+key mid-round and you're spectating. MP — a second browser joins a running game and **spawns
+immediately** on its chosen side (replacing a bot); a 7th player can only spectate; once
+spectators hit the 2/3 cap (4) a further connection is refused at *both* the button and the URL.
 
 ---
 

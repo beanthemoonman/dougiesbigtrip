@@ -90,6 +90,7 @@ pnpm dev            # vite dev server
 pnpm build          # production build
 pnpm typecheck
 pnpm test           # vitest — movement math has golden tests, keep them green
+pnpm test:e2e       # websocket e2e vs the real Rust server (needs `cargo build`); see tests/e2e/README.md
 pnpm assets:opt     # gltf-transform: draco/meshopt + ktx2 (see docs/asset-pipeline.md)
 pnpm nav:bake       # regenerate navmesh blob from assets/maps/*.glb
 ```

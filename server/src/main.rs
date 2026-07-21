@@ -23,6 +23,7 @@ use sim::protocol::{
 };
 use sim::world::SimWorld;
 use sim::{ColliderHandle, RigidBodyHandle};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
@@ -47,8 +48,8 @@ struct BotSpawn {
 }
 
 const DEFAULT_BIND: &str = "127.0.0.1:9876";
-const MAX_SLOTS: usize = 10;
-const MAX_SPECTATORS: usize = 7; // ceil(2/3 * MAX_SLOTS) = ceil(6.666) = 7
+const MAX_SLOTS: usize = 6; // 3 T + 3 CT player slots (3v3 by default, all bot-filled)
+const MAX_SPECTATORS: usize = 4; // ceil(2/3 * MAX_SLOTS) = ceil(4.0) = 4 → 10 total capacity
 const SEED: u32 = 1;
 const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
 
@@ -95,8 +96,6 @@ struct Slot {
     occupied: bool,
     is_human: bool,
     out: Option<Out>,
-    /// Phase 9: a human waiting to spawn on the next Reset (bot still plays the slot).
-    pending_human: Option<Out>,
     body_handle: RigidBodyHandle,
     collider_handle: ColliderHandle,
     player: PlayerState,
@@ -146,7 +145,6 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 occupied: true,       // filled by bot
                 is_human: false,
                 out: None,
-                pending_human: None,
                 body_handle,
                 collider_handle,
                 player: PlayerState::new(s[0], s[1], s[2]),
@@ -201,12 +199,10 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 if round_ev == game::RoundEvent::Reset {
                     for s in &mut slots {
                         if !s.occupied { continue; }
-                        // Phase 9: promote pending humans at round start.
-                        if s.pending_human.is_some() {
-                            s.is_human = true;
-                            ACTIVE_HUMANS.fetch_add(1, Ordering::Relaxed);
-                            s.out = s.pending_human.take();
-                            s.bot = None;
+                        // Phase 9: a slot a human left is vacant (no bot, dead) until now —
+                        // backfill a bot at round start (a bot never replaces a player mid-round).
+                        if !s.is_human && s.bot.is_none() {
+                            s.bot = Some(ai::Bot::new(s.bot_spawn.waypoints));
                         }
                         let bf = s.bot_spawn.feet;
                         s.player.reset(bf[0], bf[1], bf[2]);
@@ -431,9 +427,9 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 Ev::JoinTeam { conn_id, team } => {
                     // Stale or invalid conn_id → no entry → ignored.
                     if let Some((out, slot_tx)) = pending_conns.remove(&conn_id) {
-                    // Count active + pending humans before the loop (avoids borrow conflict).
+                    // Count active humans before the loop (avoids borrow conflict).
                     let player_count = slots.iter()
-                        .filter(|s| s.is_human || s.pending_human.is_some()).count() as u8;
+                        .filter(|s| s.is_human).count() as u8;
                     match team {
                         0 | 1 => {
                             let target_ct = team == 1;
@@ -441,31 +437,28 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                             let mut found_slot: Option<u8> = None;
                             for (i, s) in slots.iter_mut().enumerate() {
                                 if s.team_ct != target_ct { continue; }
-                                if s.is_human || s.pending_human.is_some() { continue; }
+                                if s.is_human { continue; }
                                 found_slot = Some(i as u8);
                                 let o = out_opt.take().unwrap();
-                                if round.phase == game::Phase::Live {
-                                    s.pending_human = Some(o);
-                                } else {
-                                    let sp = if target_ct { spawn.ct } else { spawn.t };
-                                    s.is_human = true;
-                                    ACTIVE_HUMANS.fetch_add(1, Ordering::Relaxed);
-                                    s.alive = true;
-                                    s.health = 100;
-                                    s.armor = 0;
-                                    s.weapon = 1;
-                                    s.ammo = 30;
-                                    s.out = Some(o);
-                                    s.queue.clear();
-                                    s.ack_seq = 0;
-                                    s.last_buttons = 0;
-                                    s.player.reset(sp[0], sp[1], sp[2]);
-                                    world.sync_player_body(
-                                        s.body_handle, s.collider_handle,
-                                        sp[0], sp[1], sp[2], false,
-                                    );
-                                    s.bot = None;
-                                }
+                                // Phase 9: a player replaces a bot INSTANTLY, mid-round or not.
+                                let sp = if target_ct { spawn.ct } else { spawn.t };
+                                s.is_human = true;
+                                ACTIVE_HUMANS.fetch_add(1, Ordering::Relaxed);
+                                s.alive = true;
+                                s.health = 100;
+                                s.armor = 0;
+                                s.weapon = 1;
+                                s.ammo = 30;
+                                s.out = Some(o);
+                                s.queue.clear();
+                                s.ack_seq = 0;
+                                s.last_buttons = 0;
+                                s.player.reset(sp[0], sp[1], sp[2]);
+                                world.sync_player_body(
+                                    s.body_handle, s.collider_handle,
+                                    sp[0], sp[1], sp[2], false,
+                                );
+                                s.bot = None;
                                 break;
                             }
                             if let Some(assigned_slot) = found_slot {
@@ -481,12 +474,7 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                                     spec_cap: MAX_SPECTATORS as u8,
                                 };
                                 let s = &slots[assigned_slot as usize];
-                                let target = if s.pending_human.is_some() {
-                                    s.pending_human.as_ref().unwrap()
-                                } else {
-                                    s.out.as_ref().unwrap()
-                                };
-                                let _ = target.send(w2.encode());
+                                let _ = s.out.as_ref().unwrap().send(w2.encode());
                                 println!("conn {conn_id} assigned to slot {assigned_slot} (team {})",
                                     if target_ct { "CT" } else { "T" });
                             } else if let Some(o) = out_opt {
@@ -527,30 +515,18 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 }
                 Ev::Leave { slot } => {
                     if let Some(s) = slots.get_mut(slot as usize) {
-                        // Only decrement if this slot was actually counted. A pending
-                        // human (joined during Live, not yet promoted) never bumped
-                        // ACTIVE_HUMANS, so decrementing here would underflow the u8.
                         if s.is_human {
                             ACTIVE_HUMANS.fetch_sub(1, Ordering::Relaxed);
                         }
+                        // Phase 9: a bot never replaces a player mid-round. Vacate the slot
+                        // (dead, botless) — the Reset backfill hands it a bot next round.
                         s.is_human = false;
-                        s.alive = true;
-                        s.health = 100;
-                        s.armor = 0;
-                        s.weapon = 1;
-                        s.ammo = 30;
+                        s.alive = false;
                         s.out = None;
-                        s.pending_human = None;
+                        s.bot = None;
                         s.queue.clear();
-                        // Respawn a bot into this slot.
-                        let feet = s.bot_spawn.feet;
-                        s.player.reset(feet[0], feet[1], feet[2]);
-                        world.sync_player_body(
-                            s.body_handle, s.collider_handle,
-                            feet[0], feet[1], feet[2], false,
-                        );
-                        s.bot = Some(ai::Bot::new(s.bot_spawn.waypoints));
-                        println!("slot {slot} left (bot respawned)");
+                        s.last_shot = None;
+                        println!("slot {slot} left (bot backfills next round)");
                     }
                 }
             }
@@ -600,25 +576,39 @@ fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events:
     }
 }
 
-async fn handle_conn(stream: TcpStream, addr: SocketAddr, events: mpsc::UnboundedSender<Ev>) {
-    let ws = match accept_hdr_async(stream, |req: &Request, _resp: Response| -> Result<Response, ErrorResponse> {
-        if req.uri().path() == "/status" {
-            // Gate 1: GET /status returns advisory capacity info (JSON).
-            let players = ACTIVE_HUMANS.load(Ordering::Relaxed);
-            let spectators = SPECTATOR_COUNT.load(Ordering::Relaxed);
-            let json = format!(
-                "{{\"players\":{},\"maxPlayers\":{},\"spectators\":{},\"specCap\":{}}}",
-                players, MAX_SLOTS, spectators, MAX_SPECTATORS,
-            );
-            let err_resp = Response::builder()
-                .status(200)
-                .header("Content-Type", "application/json")
-                .header("Access-Control-Allow-Origin", "*")
-                .body(Some(json))
-                .unwrap();
-            return Err(err_resp);
-        }
-        Ok(_resp)
+/// Peek the start of the stream and report whether it's a `GET /status` HTTP
+/// request (vs. a WebSocket upgrade). Returns None if the peek fails.
+async fn peek_is_status(stream: &TcpStream) -> Option<bool> {
+    let mut buf = [0u8; 64];
+    let n = stream.peek(&mut buf).await.ok()?;
+    Some(buf[..n].starts_with(b"GET /status"))
+}
+
+async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::UnboundedSender<Ev>) {
+    // Gate 1: a plain `GET /status` HTTP request (not a WebSocket upgrade) gets a
+    // well-formed HTTP/1.1 response with Content-Length and the socket closed. We
+    // peek the request line off the raw TCP stream before handing it to the WS
+    // handshake — tungstenite's ErrorResponse path omits Content-Length, which left
+    // plain HTTP clients (curl/undici) hanging until close. ponytail: fixed-size peek
+    // is enough to see the request line; a real HTTP server this is not.
+    if let Some(true) = peek_is_status(&stream).await {
+        let players = ACTIVE_HUMANS.load(Ordering::Relaxed);
+        let spectators = SPECTATOR_COUNT.load(Ordering::Relaxed);
+        let json = format!(
+            "{{\"players\":{},\"maxPlayers\":{},\"spectators\":{},\"specCap\":{}}}",
+            players, MAX_SLOTS, spectators, MAX_SPECTATORS,
+        );
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            json.len(), json,
+        );
+        let _ = stream.write_all(resp.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        return;
+    }
+
+    let ws = match accept_hdr_async(stream, |_req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+        Ok(resp)
     }).await {
         Ok(ws) => ws,
         Err(_) => return,

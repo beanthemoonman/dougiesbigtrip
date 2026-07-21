@@ -2094,3 +2094,78 @@ correctness fixes to the connection bookkeeping in `server/src/main.rs`:
 — all 3 pass (two-phase Welcome handshake + round-reset hygiene). Note: the round-reset
 test is wall-clock-timing-fragile and can time out under a fully parallel `pnpm test`
 (server sim is wall-clock-paced, starves under CPU contention) — passes in isolation.
+
+## 2026-07-21 — Phase 9 roster rules (3v3, instant join / deferred bot) + e2e test suite
+
+Reworked team/bot roster state management per corrected spec, reversing two Phase 9 decisions,
+and moved the websocket integration tests into an isolated `tests/e2e/` runner.
+
+**Roster rules (now enforced server + SP client):**
+- **3v3 by default** — each team has 3 bots. Server `MAX_SLOTS 10→6`, `MAX_SPECTATORS 7→4`
+  (`ceil(2/3·6)`), total capacity 10 (6 players + 4 spectators). SP gained a 3rd T bot (6 total).
+- **Join is instant** — a player replaces a bot immediately, mid-round or not. Removed the
+  `pending_human` "spawn next round" machinery on the server; SP `enterGame` benches a bot and
+  spawns the human on the spot.
+- **Leave defers** — a departed player's slot goes dead + botless until the next `Reset`, which
+  backfills a bot (a bot never replaces a player mid-round). Server `Ev::Leave` no longer respawns
+  a bot instantly; SP tracks a `rebotPending` bot reactivated at the round boundary.
+- SP fixes surfaced by the above: round alive-count now credits the human to their *actual* team
+  (not hardcoded T) and to neither side while spectating; `respawn()` only revives the human when
+  `playing` (spectators stay out) and skips benched bots; scoreboard drops benched bots and shows
+  "You" on the real team.
+
+**Tests — new `tests/e2e/` folder (user request):**
+- `harness.ts` — server spawn, promise-queue `Client`, two-phase `joinTeam` (handles the
+  spectator/full paths that send no second Welcome).
+- `server-loop.e2e.ts` — the 3 old `tests/harness/server.test.ts` cases, ported.
+- `roster.e2e.ts` — 3v3 default, instant mid-round join (no reset), leave→bot-next-round,
+  team-full→spectate, Welcome capacity (6/4), server-full refusal (`Bye`).
+- `vitest.e2e.config.ts` + `pnpm test:e2e` — runs one file/one fork (`fileParallelism:false`,
+  `singleFork`), fixing the wall-clock flake that made the reset-hygiene test time out under the
+  35-way parallel unit pool. `.e2e.ts` suffix keeps them out of `pnpm test`. Deleted the old
+  `tests/harness/server.test.ts`.
+
+**Docs:** `docs/plan-phase9-game-flow.md` gained a ⚠️ Amendment block (superseding the 10/7 and
+queue-to-next-round decisions); `plan_to_implement.md` Phase 9 and `tests/acceptance/ACC-017`
+updated to the new semantics/numbers; `tests/e2e/README.md` added; `CLAUDE.md` Commands gained
+`pnpm test:e2e`.
+
+**Known gap (unchanged, out of scope):** the `GET /status` endpoint's handshake-level HTTP
+response is not consumable by a plain HTTP client (curl/undici return empty). The client already
+reads capacity from the `Welcome` message, so Gate 1 works; `/status` itself needs a real HTTP
+response path. Noted in the plan and ACC-017.
+
+**Verification:** `cargo build -p server` clean; `pnpm typecheck` clean; `pnpm test` 185 pass
+(34 files); `pnpm test:e2e` 9 pass (2 files). SP roster behavior is exercised by the shared sim
+via the e2e suite (server) but the browser-only SP menu flow remains a T3 (ACC-017) — not yet
+driven in a browser this turn.
+
+## 2026-07-21 — Fix `GET /status` HTTP endpoint (Phase 9 Gate 1)
+
+`/status` was routed through tokio-tungstenite's `ErrorResponse` (WebSocket-rejection)
+path, which omits `Content-Length`, so plain HTTP clients (curl/undici `fetch`) hung until
+the socket closed and read an empty body. Now `handle_conn` peeks the raw TCP request line
+first (`peek_is_status`); a `GET /status` request gets a hand-written `HTTP/1.1 200 OK` with
+`Content-Length` + `Connection: close`, and the socket is shut down — before the WS upgrade
+is attempted. The WS handshake callback is now a plain pass-through.
+
+- `server/src/main.rs`: added `use tokio::io::AsyncWriteExt;`, `peek_is_status()` helper,
+  raw-TCP `/status` branch at the top of `handle_conn`; removed the `/status` branch from the
+  `accept_hdr_async` callback.
+- `tests/e2e/roster.e2e.ts`: new case "serves capacity as JSON over GET /status" — `fetch`es
+  `/status` and asserts `{maxPlayers:6, specCap:4}` + numeric player/spectator counts.
+- Docs de-gapped: `tests/e2e/README.md`, `tests/acceptance/ACC-017-game-flow.md`,
+  `plan_to_implement.md`, `docs/plan-phase9-game-flow.md` no longer describe `/status` as a
+  known-broken gap.
+
+**Verification:** `cargo build -p server` clean; manual `curl -i` and Node `fetch` both parse
+`{"players":0,"maxPlayers":6,"spectators":0,"specCap":4}`; `pnpm test:e2e` 10 pass (2 files).
+
+## 2026-07-21 — Fix SP win/lose banner after team switch
+
+`bannerText()` hardcoded the player as team T (`round.winner === 'T' ? 'YOU WIN' : 'YOU LOSE'`),
+so after switching sides the round-over banner reported the result for the team you *originally*
+joined. Now compares `round.winner` against the live `playerTeam`; when spectating
+(`gameMode !== 'playing'`) it shows a neutral `ROUND OVER   <team> WINS` instead of a bogus
+win/lose. `src/main.ts` only. `pnpm typecheck` clean. (T3: ACC-017 step 9 exercises the SP
+team switch.)
