@@ -2004,3 +2004,13 @@ Updated the intro paragraph to describe the 9–13 arc. No code changed.
 ## 2026-07-21 — Plan: inserted Phase 11 (advanced bot AI), renumbered 11–13 → 12–14
 - Added **Phase 11 — Advanced bot AI: search & engage**: replace the fixed patrol-waypoint routes with an emergent spread-out search that fans the squad across the map; a formal engage loop (shoot on LOS, path to last-known when LOS lost); verify/harden LOS occlusion so bots can't see through walls; and a give-up timeout that returns bots to searching. Noted it's a behavior rework on the existing FSM/lastKnown/perception, runs server-side in the Rust sim, covered by T1 replays.
 - Renumbered the prior new phases: Third-person fidelity+ragdoll 11→12, Asset refinement II 12→13, End-to-end hardening 13→14. Updated the intro paragraph's 9–13 → 9–14.
+
+## 2026-07-21 — Phase 9 implementation plan
+
+- Wrote `docs/plan-phase9-game-flow.md`: detailed plan for Phase 9 (team select / spectator /
+  join gating). Grounded in existing code — reuses `spectator.ts`, the `SPECTATOR=255` sentinel,
+  the 10-slot table + round FSM, and the connect overlay's pre-dial probe rather than rebuilding.
+  Six increments (9.0–9.5): SP team menu + gated spawn, spectate-anytime, `Join`/`Welcome`/`Bye`
+  protocol additions, MP join+team-full rule, dual capacity gates (`/status` GET + handshake
+  reject, specCap = ceil(2/3·10) = 7), and a server per-round reset hygiene pass with a T1.
+  Exit test = ACC-017. Added a pointer to it in `plan_to_implement.md`'s Phase 9 section.

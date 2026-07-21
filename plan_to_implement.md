@@ -448,6 +448,8 @@ a browser hitting the host can join and play against another connection.
 
 ## Phase 9 — Game flow: team select, spectator, join gating (1 week)
 
+**Detailed implementation plan: `docs/plan-phase9-game-flow.md`** (increments 9.0–9.5, decisions, tests, ACC-017).
+
 Right now the player just spawns into a live world. This phase puts a real *entry* in front of
 the game: you choose a side, you can spectate, and a full multiplayer server turns you away
 cleanly instead of over-filling.
