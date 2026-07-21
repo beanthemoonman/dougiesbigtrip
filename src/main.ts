@@ -251,7 +251,8 @@ async function main(): Promise<void> {
   let serverRoundTimeSec = -1; // -1 = offline; >= 0 = synced from server snapshot
   let serverScore: { t: number; ct: number } | null = null; // non-null while connected
   const interpBuf = createInterpolationBuffer();
-  let settingsPanel: ReturnType<typeof createSettingsPanel>;
+  // settingsPanel is assigned below (line ~365); closures above capture it and run only after.
+  let settingsPanel: ReturnType<typeof createSettingsPanel>; // eslint-disable-line prefer-const
 
   function handleConnect(url: string): void {
     if (netConn) {
