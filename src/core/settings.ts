@@ -55,10 +55,19 @@ const FIELDS: Field[] = [
   { key: 'volume', label: 'Volume', min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` },
 ];
 
+export interface GameActions {
+  onSpectate?(): void;
+  onJoinT?(): void;
+  onJoinCt?(): void;
+}
+
+export type GamePanelMode = 'playing' | 'spectating' | 'none';
+
 export interface SettingsPanel {
   show(): void;
   hide(): void;
   setConnected(state: ConnectState, address?: string): void;
+  setGameMode(mode: GamePanelMode): void;
 }
 
 /**
@@ -70,6 +79,7 @@ export function createSettingsPanel(
   settings: Settings,
   onChange: (s: Settings) => void,
   serverOpts?: ServerConnectionOpts,
+  gameOpts?: GameActions,
 ): SettingsPanel {
   // wss:// from an https page, ws:// otherwise — a browser blocks ws:// from a
   // secure page as mixed content, so the scheme must follow the page.
@@ -210,6 +220,44 @@ export function createSettingsPanel(
     panel.appendChild(serverSection);
   }
 
+  let gameSection: HTMLDivElement | null = null;
+  let teamRow: HTMLDivElement | null = null;
+  let specBtn: HTMLButtonElement | null = null;
+  let joinTBtn: HTMLButtonElement | null = null;
+  let joinCtBtn: HTMLButtonElement | null = null;
+
+  if (gameOpts) {
+    gameSection = document.createElement('div');
+    gameSection.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid #3a4450;display:none';
+
+    const gameLabel = document.createElement('div');
+    gameLabel.textContent = 'Game';
+    gameLabel.style.cssText = 'font-size:13px;margin-bottom:8px;letter-spacing:1px;opacity:0.8';
+    gameSection.appendChild(gameLabel);
+
+    teamRow = document.createElement('div');
+    teamRow.style.cssText = 'display:flex;gap:6px;display:none';
+
+    const mkBtn = (label: string, bg: string, cb: () => void): HTMLButtonElement => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText =
+        `padding:4px 10px;background:${bg};color:#eee;border:none;cursor:pointer;font:12px monospace;white-space:nowrap`;
+      b.onclick = cb;
+      return b;
+    };
+
+    specBtn = mkBtn('Spectate', '#555', () => gameOpts.onSpectate?.());
+    joinTBtn = mkBtn('Join T', '#6a4a2a', () => gameOpts.onJoinT?.());
+    joinCtBtn = mkBtn('Join CT', '#2a4a6a', () => gameOpts.onJoinCt?.());
+
+    teamRow.appendChild(specBtn);
+    teamRow.appendChild(joinTBtn);
+    teamRow.appendChild(joinCtBtn);
+    gameSection.appendChild(teamRow);
+    panel.appendChild(gameSection);
+  }
+
   document.body.appendChild(panel);
 
   return {
@@ -218,9 +266,6 @@ export function createSettingsPanel(
     setConnected(state: ConnectState, address?: string): void {
       if (!serverSection) return;
       const isConnected = state === 'connected';
-      // Show the read-only address (and hide the inputs) while connecting *and*
-      // connected, so the panel reflects the server you're actually talking to
-      // as soon as the attempt starts — not only once Welcome decodes.
       const showAddr = isConnected || state === 'connecting';
       if (addrInput) addrInput.style.display = showAddr ? 'none' : '';
       if (portInput) portInput.style.display = showAddr ? 'none' : '';
@@ -257,6 +302,18 @@ export function createSettingsPanel(
           connStatus.style.display = 'none';
         }
       }
+    },
+    setGameMode(mode: GamePanelMode): void {
+      if (!gameSection) return;
+      if (mode === 'none') {
+        gameSection.style.display = 'none';
+        return;
+      }
+      gameSection.style.display = '';
+      if (specBtn) specBtn.style.display = mode === 'playing' ? '' : 'none';
+      if (joinTBtn) joinTBtn.style.display = mode === 'spectating' ? '' : 'none';
+      if (joinCtBtn) joinCtBtn.style.display = mode === 'spectating' ? '' : 'none';
+      if (teamRow) teamRow.style.display = '';
     },
   };
 }

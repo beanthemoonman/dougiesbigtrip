@@ -4,6 +4,7 @@ pub const TAG_WELCOME: u8 = 0;
 pub const TAG_BYE: u8 = 1;
 pub const TAG_CMD: u8 = 2;
 pub const TAG_SNAP: u8 = 3;
+pub const TAG_JOIN: u8 = 4;
 
 pub const SPECTATOR: u8 = 255;
 
@@ -13,12 +14,17 @@ pub struct Welcome {
     pub map: String,
     pub seed: u32,
     pub server_tick: u32,
+    /// Phase 9 capacity fields (zero-padded at the end for old decoders).
+    pub max_players: u8,
+    pub players: u8,
+    pub spectators: u8,
+    pub spec_cap: u8,
 }
 
 impl Welcome {
     pub fn encode(&self) -> Vec<u8> {
         let map_bytes = self.map.as_bytes();
-        let len = 1 + 1 + 1 + 1 + map_bytes.len() + 4 + 4;
+        let len = 1 + 1 + 1 + 1 + map_bytes.len() + 4 + 4 + 4;
         let mut buf = Vec::with_capacity(len);
         buf.push(TAG_WELCOME);
         buf.push(PROTOCOL_VERSION);
@@ -27,6 +33,10 @@ impl Welcome {
         buf.extend_from_slice(map_bytes);
         buf.extend_from_slice(&self.seed.to_le_bytes());
         buf.extend_from_slice(&self.server_tick.to_le_bytes());
+        buf.push(self.max_players);
+        buf.push(self.players);
+        buf.push(self.spectators);
+        buf.push(self.spec_cap);
         buf
     }
 
@@ -46,12 +56,78 @@ impl Welcome {
         let seed = u32::from_le_bytes(data[4 + map_len..8 + map_len].try_into().ok()?);
         let server_tick =
             u32::from_le_bytes(data[8 + map_len..12 + map_len].try_into().ok()?);
+        // Phase 9 capacity fields; default to 0 for old-form Welcome.
+        let off = 12 + map_len;
+        let max_players = data.get(off).copied().unwrap_or(0);
+        let players = data.get(off + 1).copied().unwrap_or(0);
+        let spectators = data.get(off + 2).copied().unwrap_or(0);
+        let spec_cap = data.get(off + 3).copied().unwrap_or(0);
         Some(Welcome {
             your_slot,
             map,
             seed,
             server_tick,
+            max_players,
+            players,
+            spectators,
+            spec_cap,
         })
+    }
+}
+
+// ---------------------------------------------------------------
+// Join — client → server team choice. Phase 9.
+// team: 0 = T, 1 = CT, 2 = spectator.
+// ---------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Join {
+    pub team: u8,
+}
+
+impl Join {
+    pub fn encode(&self) -> Vec<u8> {
+        vec![TAG_JOIN, PROTOCOL_VERSION, self.team]
+    }
+
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 3 || data[0] != TAG_JOIN || data[1] != PROTOCOL_VERSION {
+            return None;
+        }
+        Some(Join { team: data[2] })
+    }
+}
+
+// ---------------------------------------------------------------
+// Bye — server → client kick/refusal. Phase 9.
+// ---------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bye {
+    pub reason: String,
+}
+
+impl Bye {
+    pub fn encode(&self) -> Vec<u8> {
+        let bytes = self.reason.as_bytes();
+        let mut buf = Vec::with_capacity(3 + bytes.len());
+        buf.push(TAG_BYE);
+        buf.push(PROTOCOL_VERSION);
+        buf.push(bytes.len() as u8);
+        buf.extend_from_slice(bytes);
+        buf
+    }
+
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 3 || data[0] != TAG_BYE || data[1] != PROTOCOL_VERSION {
+            return None;
+        }
+        let len = data[2] as usize;
+        if data.len() < 3 + len {
+            return None;
+        }
+        let reason = String::from_utf8(data[3..3 + len].to_vec()).ok()?;
+        Some(Bye { reason })
     }
 }
 
@@ -316,10 +392,28 @@ mod tests {
             map: "de_douglas".into(),
             seed: 42,
             server_tick: 0,
+            max_players: 10,
+            players: 5,
+            spectators: 2,
+            spec_cap: 7,
         };
         let encoded = original.encode();
         let decoded = Welcome::decode(&encoded).expect("decode failed");
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn welcome_old_format_compat() {
+        // Welcome without capacity fields (pre-Phase 9) must still decode.
+        let mut buf = Welcome {
+            your_slot: 1, map: "x".into(), seed: 0, server_tick: 0,
+            max_players: 0, players: 0, spectators: 0, spec_cap: 0,
+        }.encode();
+        // Snip off the 4 capacity bytes.
+        buf.truncate(buf.len() - 4);
+        let w = Welcome::decode(&buf).expect("old welcome decode failed");
+        assert_eq!(w.max_players, 0);
+        assert_eq!(w.players, 0);
     }
 
     #[test]
@@ -329,6 +423,10 @@ mod tests {
             map: "de_douglas".into(),
             seed: 99,
             server_tick: 1234,
+            max_players: 10,
+            players: 10,
+            spectators: 3,
+            spec_cap: 7,
         };
         let encoded = original.encode();
         let decoded = Welcome::decode(&encoded).expect("decode failed");
@@ -337,7 +435,7 @@ mod tests {
 
     #[test]
     fn reject_wrong_tag() {
-        let buf = vec![99, PROTOCOL_VERSION, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let buf = vec![99, PROTOCOL_VERSION, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         assert!(Welcome::decode(&buf).is_none());
     }
 
@@ -348,10 +446,55 @@ mod tests {
             map: "x".into(),
             seed: 0,
             server_tick: 0,
+            max_players: 0,
+            players: 0,
+            spectators: 0,
+            spec_cap: 0,
         };
         let mut buf = welcome.encode();
         buf[1] = 99;
         assert!(Welcome::decode(&buf).is_none());
+    }
+
+    #[test]
+    fn join_round_trip() {
+        for team in [0u8, 1, 2] {
+            let j = Join { team };
+            let decoded = Join::decode(&j.encode()).expect("join decode failed");
+            assert_eq!(decoded, j);
+        }
+    }
+
+    #[test]
+    fn join_reject_wrong_tag() {
+        let buf = vec![99, PROTOCOL_VERSION, 0];
+        assert!(Join::decode(&buf).is_none());
+    }
+
+    #[test]
+    fn join_reject_truncated() {
+        let buf = vec![TAG_JOIN, PROTOCOL_VERSION];
+        assert!(Join::decode(&buf).is_none());
+    }
+
+    #[test]
+    fn bye_round_trip() {
+        let b = Bye { reason: "full".into() };
+        let decoded = Bye::decode(&b.encode()).expect("bye decode failed");
+        assert_eq!(decoded, b);
+    }
+
+    #[test]
+    fn bye_empty_reason() {
+        let b = Bye { reason: String::new() };
+        let decoded = Bye::decode(&b.encode()).expect("bye decode failed");
+        assert_eq!(decoded.reason, "");
+    }
+
+    #[test]
+    fn bye_reject_wrong_tag() {
+        let buf = vec![99, PROTOCOL_VERSION, 1, 102]; // tag=99, not BYE
+        assert!(Bye::decode(&buf).is_none());
     }
 
     #[test]

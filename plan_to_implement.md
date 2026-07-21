@@ -455,27 +455,27 @@ the game: you choose a side, you can spectate, and a full multiplayer server tur
 cleanly instead of over-filling.
 
 **Single-player**
-- [ ] On start, **nobody is spawned.** Show a team-choice menu (T / CT / Spectate) over a
+- [x] On start, **nobody is spawned.** Show a team-choice menu (T / CT / Spectate) over a
       free-look/overview camera. The round loop does not begin until a side is picked.
-- [ ] Pick a side → spawn on it, bots fill the rest, the round loop starts from freezetime.
-- [ ] Pressing the menu key / clicking out of the menu at any time drops you into **spectator
+- [x] Pick a side → spawn on it, bots fill the rest, the round loop starts from freezetime.
+- [x] Pressing the menu key / clicking out of the menu at any time drops you into **spectator
       mode**, regardless of round state (freezetime, live, round-end).
 
 **Multiplayer** (builds on Phase 6 slots)
-- [ ] Join a server whose game is already running → team-choice menu; picking a side queues you
+- [x] Join a server whose game is already running → team-choice menu; picking a side queues you
       to **spawn on the next round**, not mid-round.
-- [ ] Click out of the menu → **spectator**, regardless of game state. Same code path as SP.
-- [ ] **Teams full** → the only allowed choice is Spectate.
-- [ ] **Server-capacity gate (two gates).** Capacity = max players + spectators, where the
+- [x] Click out of the menu → **spectator**, regardless of game state. Same code path as SP.
+- [x] **Teams full** → the only allowed choice is Spectate.
+- [x] **Server-capacity gate (two gates).** Capacity = max players + spectators, where the
       spectator cap is `ceil(2/3 · maxPlayers)`. If players are full **and** spectators are at
       that cap, the server is full:
-  - **Gate 1 (connect button):** query capacity before dialing; if full, refuse and tell the
+  - [x] **Gate 1 (connect button):** query capacity before dialing; if full, refuse and tell the
     user, don't open the socket.
-  - **Gate 2 (URL load / handshake):** the server itself rejects the connection on load even if
+  - [x] **Gate 2 (URL load / handshake):** the server itself rejects the connection on load even if
     gate 1 was bypassed (stale count, direct URL, race). Server count is authoritative.
 
 **Server state hygiene**
-- [ ] Review game/round state at the **server** level: confirm all round state is server-owned
+- [x] Review game/round state at the **server** level: confirm all round state is server-owned
       and that players are fully **reset between rounds** (health/armour/ammo/position/velocity/
       view-punch/duck state) — no carry-over. Add a T1 that runs two rounds and asserts a clean
       per-player reset.

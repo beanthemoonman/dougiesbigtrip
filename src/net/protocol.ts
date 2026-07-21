@@ -12,6 +12,7 @@ export const TAG_WELCOME = 0;
 export const TAG_BYE = 1;
 export const TAG_CMD = 2;
 export const TAG_SNAP = 3;
+export const TAG_JOIN = 4;
 
 export const SPECTATOR = 255;
 
@@ -20,11 +21,16 @@ export interface Welcome {
   map: string;
   seed: number;
   serverTick: number;
+  /** Phase 9: capacity info (defaults to 0 for old-form Welcome). */
+  maxPlayers: number;
+  players: number;
+  spectators: number;
+  specCap: number;
 }
 
 export function encodeWelcome(w: Welcome): Uint8Array {
   const mapBytes = new TextEncoder().encode(w.map);
-  const buf = new ArrayBuffer(1 + 1 + 1 + 1 + mapBytes.length + 4 + 4);
+  const buf = new ArrayBuffer(1 + 1 + 1 + 1 + mapBytes.length + 4 + 4 + 4);
   const v = new DataView(buf);
   let off = 0;
   v.setUint8(off, TAG_WELCOME);
@@ -40,6 +46,14 @@ export function encodeWelcome(w: Welcome): Uint8Array {
   v.setUint32(off, w.seed, true);
   off += 4;
   v.setUint32(off, w.serverTick, true);
+  off += 4;
+  v.setUint8(off, w.maxPlayers);
+  off += 1;
+  v.setUint8(off, w.players);
+  off += 1;
+  v.setUint8(off, w.spectators);
+  off += 1;
+  v.setUint8(off, w.specCap);
   return new Uint8Array(buf);
 }
 
@@ -57,7 +71,56 @@ export function decodeWelcome(data: Uint8Array): Welcome | null {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const seed = v.getUint32(4 + mapLen, true);
   const serverTick = v.getUint32(8 + mapLen, true);
-  return { yourSlot, map, seed, serverTick };
+  // Phase 9 capacity fields; default to 0 for old-form Welcome.
+  const off = 12 + mapLen;
+  const maxPlayers = data[off] ?? 0;
+  const players = data[off + 1] ?? 0;
+  const spectators = data[off + 2] ?? 0;
+  const specCap = data[off + 3] ?? 0;
+  return { yourSlot, map, seed, serverTick, maxPlayers, players, spectators, specCap };
+}
+
+// ---------------------------------------------------------------
+// Join — client → server team choice. Phase 9.
+// team: 0 = T, 1 = CT, 2 = spectator.
+// ---------------------------------------------------------------
+
+export interface Join {
+  team: number;
+}
+
+export function encodeJoin(j: Join): Uint8Array {
+  return new Uint8Array([TAG_JOIN, PROTOCOL_VERSION, j.team]);
+}
+
+export function decodeJoin(data: Uint8Array): Join | null {
+  if (data.length < 3 || data[0] !== TAG_JOIN || data[1] !== PROTOCOL_VERSION) return null;
+  return { team: data[2]! };
+}
+
+// ---------------------------------------------------------------
+// Bye — server → client kick/refusal. Phase 9.
+// ---------------------------------------------------------------
+
+export interface Bye {
+  reason: string;
+}
+
+export function encodeBye(b: Bye): Uint8Array {
+  const bytes = new TextEncoder().encode(b.reason);
+  const buf = new Uint8Array(3 + bytes.length);
+  buf[0] = TAG_BYE;
+  buf[1] = PROTOCOL_VERSION;
+  buf[2] = bytes.length;
+  buf.set(bytes, 3);
+  return buf;
+}
+
+export function decodeBye(data: Uint8Array): Bye | null {
+  if (data.length < 3 || data[0] !== TAG_BYE || data[1] !== PROTOCOL_VERSION) return null;
+  const len = data[2]!;
+  if (data.length < 3 + len) return null;
+  return { reason: new TextDecoder().decode(data.slice(3, 3 + len)) };
 }
 
 // ---------------------------------------------------------------

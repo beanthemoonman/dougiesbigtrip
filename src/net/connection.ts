@@ -6,12 +6,13 @@
  * See docs/netcode.md §3 for the transport handshake sequence.
  */
 
-import { decodeSnapshot, decodeWelcome, type Snapshot, type Welcome } from './protocol';
+import { decodeBye, decodeSnapshot, decodeWelcome, type Snapshot, type Welcome } from './protocol';
 
 export type ConnectionState =
   | { status: 'disconnected' }
   | { status: 'connecting' }
   | { status: 'connected'; welcome: Welcome }
+  | { status: 'byed'; reason: string }
   | { status: 'error'; reason: string };
 
 export interface Connection {
@@ -24,6 +25,8 @@ export interface Connection {
   onWelcome?: (w: Welcome) => void;
   /** Called for every Snapshot received. */
   onSnapshot?: (s: Snapshot) => void;
+  /** Called when the server sends a Bye (kicked/full). */
+  onBye?: (reason: string) => void;
   /** Called when the socket closes or errors out (failed connect or drop). */
   onClose?: () => void;
   /** Graceful close. */
@@ -64,6 +67,13 @@ export function createConnection(): Connection {
       ws.onmessage = (e: MessageEvent) => {
         if (!(e.data instanceof ArrayBuffer)) return;
         const bytes = new Uint8Array(e.data);
+        const bye = decodeBye(bytes);
+        if (bye) {
+          state = { status: 'byed', reason: bye.reason };
+          conn.onBye?.(bye.reason);
+          ws?.close();
+          return;
+        }
         const welcome = decodeWelcome(bytes);
         if (welcome) {
           state = { status: 'connected', welcome };

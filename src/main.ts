@@ -20,7 +20,8 @@ import { loadNav } from './ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './ai/anim';
 import { playFootstep, playGunshot, playHurt, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
-import { createSettingsPanel, DEFAULT_SETTINGS } from './core/settings';
+import { createSettingsPanel, DEFAULT_SETTINGS, type GameActions } from './core/settings';
+import { createTeamMenu, type TeamChoice } from './ui/teammenu';
 import { createTraceRecorder } from './core/trace_recorder';
 import { startLoop, TICK_RATE } from './core/loop';
 import { makeRng } from './core/rng';
@@ -39,7 +40,7 @@ import { sim_add_box, sim_add_player, sim_add_ramp, sim_get_state, sim_init, sim
 import { createConnection } from './net/connection';
 import { createPredictor, type Predictor } from './net/prediction';
 import { createInterpolationBuffer } from './net/interpolation';
-import { encodeCommand } from './net/protocol';
+import { encodeCommand, encodeJoin } from './net/protocol';
 import { SPECTATOR } from './net/protocol';
 import { createDecals } from './render/decals';
 import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
@@ -234,6 +235,11 @@ async function main(): Promise<void> {
   // engages pointer lock unlocks audio (core/audio.ts).
   canvas.addEventListener('click', resumeAudio);
 
+  // --- Settings loaded + applied ---
+  // These are declared early so the team menu can reference them; assigned below.
+  let settingsPanel: ReturnType<typeof createSettingsPanel>; // eslint-disable-line prefer-const
+  const sendJoinRef: { fn: ((team: number) => void) | null } = { fn: null };
+
   // Settings (sensitivity / world FOV / volume). The config object is the source
   // of truth; the panel mutates it and pushes each value live. Shown while out of
   // pointer lock (the menu state), hidden during play.
@@ -248,11 +254,108 @@ async function main(): Promise<void> {
   // can capture them. Assigned on connect; cleared on disconnect.
   let predictor: Predictor | null = null;
   let netConn: ReturnType<typeof createConnection> | null = null;
-  let serverRoundTimeSec = -1; // -1 = offline; >= 0 = synced from server snapshot
-  let serverScore: { t: number; ct: number } | null = null; // non-null while connected
+  let serverRoundTimeSec = -1;
+  let serverScore: { t: number; ct: number } | null = null;
   const interpBuf = createInterpolationBuffer();
-  // settingsPanel is assigned below (line ~365); closures above capture it and run only after.
-  let settingsPanel: ReturnType<typeof createSettingsPanel>; // eslint-disable-line prefer-const
+
+  // --- Game mode: menu | playing | spectating ---
+  // Phase 9: on boot nobody is spawned. The team menu gates entry.
+  type GameMode = 'menu' | 'playing' | 'spectating';
+  let gameMode: GameMode = 'menu';
+  let preMenuGameMode: GameMode = 'menu'; // saved before M-key opens the team menu
+  let playerTeam: Team = 'T'; // overwritten on team choice
+
+  // Overview position for the menu / spectator free-fly cam.
+  const OVERVIEW_POS = new Vector3(0, 25, -30);
+  const OVERVIEW_LOOK = new Vector3(0, 0, 0); // look at map center
+
+  // Game actions that appear below the settings panel sliders.
+  const gameActions: GameActions = {
+    onSpectate: () => {
+      if (sendJoinRef.fn) { sendJoinRef.fn(2); }
+      enterSpectator();
+    },
+    onJoinT: () => {
+      if (sendJoinRef.fn) { sendJoinRef.fn(0); } else { enterGame('T'); }
+    },
+    onJoinCt: () => {
+      if (sendJoinRef.fn) { sendJoinRef.fn(1); } else { enterGame('CT'); }
+    },
+  };
+
+  function enterGame(team: Team): void {
+    playerTeam = team;
+    const spawnPt = team === 'T' ? T_SPAWN : CT_SPAWN;
+    spawn.set(spawnPt[0], spawnPt[1], spawnPt[2]);
+    player.position.copy(spawn);
+    player.velocity.set(0, 0, 0);
+    playerAlive = true;
+    health = 100;
+    armor = 100;
+    damageFlash = 0;
+    shakeTime = 0;
+    shakeIntensity = 0;
+    sim_reset_player(0, spawn.x, spawn.y, spawn.z);
+    bodyCenterScratch.set(spawn.x, spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, spawn.z);
+    movementCtx.body.setTranslation(bodyCenterScratch, true);
+    movementCtx.body.setEnabled(true);
+    world.updateSceneQueries();
+    const enemySpawnPt = team === 'T' ? CT_SPAWN : T_SPAWN;
+    input.state.yaw = Math.atan2(spawnPt[0] - enemySpawnPt[0], spawnPt[2] - enemySpawnPt[2]);
+    gameMode = 'playing';
+    teamMenu.el.style.display = 'none';
+    settingsPanel.setGameMode('playing');
+    settingsPanel.hide();
+    canvas!.requestPointerLock();
+  }
+
+  function enterSpectator(): void {
+    gameMode = 'spectating';
+    playerAlive = false;
+    movementCtx.body.setEnabled(false);
+    settingsPanel.setGameMode('spectating');
+    if (player.position.lengthSq() < 0.01) specPos.copy(OVERVIEW_POS);
+    else {
+      specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
+    }
+  }
+
+  // Team menu: shown on boot and any time the player picks a new team / spectate.
+  const teamMenu = createTeamMenu((choice: TeamChoice) => {
+    if (netConn && sendJoinRef.fn) {
+      const teamByte = choice === 'T' ? 0 : choice === 'CT' ? 1 : 2;
+      sendJoinRef.fn(teamByte);
+      if (choice === 'spec') {
+        enterSpectator();
+        teamMenu.el.style.display = 'none';
+        settingsPanel.hide();
+        canvas!.requestPointerLock();
+      } else {
+        teamMenu.el.style.display = 'none';
+        settingsPanel.hide();
+        gameMode = 'playing';
+        playerAlive = false;
+        settingsPanel.setGameMode('playing');
+        canvas!.requestPointerLock();
+      }
+    } else {
+      if (choice === 'spec') {
+        enterSpectator();
+        teamMenu.el.style.display = 'none';
+        settingsPanel.hide();
+        canvas!.requestPointerLock();
+      } else {
+        enterGame(choice);
+      }
+    }
+  });
+  document.body.appendChild(teamMenu.el);
+  teamMenu.onEsc = (): void => {
+    teamMenu.el.style.display = 'none';
+    gameMode = preMenuGameMode;
+    settingsPanel.setGameMode(gameMode === 'menu' ? 'none' : gameMode);
+    if (gameMode !== 'menu') canvas!.requestPointerLock();
+  };
 
   function handleConnect(url: string): void {
     if (netConn) {
@@ -262,12 +365,25 @@ async function main(): Promise<void> {
     const host = url.replace(/^wss?:\/\//, '');
     settingsPanel.setConnected('connecting', host);
     const conn = createConnection();
+    let welcomeSeen = false;
     conn.onWelcome = (w): void => {
+      welcomeSeen = true;
       if (w.yourSlot === SPECTATOR) {
-        console.warn('[net] server full — spectating (movement stays local)');
-        settingsPanel.setConnected('error');
+        // First Welcome: server says "connected, pick a team." Show the team
+        // menu with capacity info.
+        teamMenu.setCounts(w.players, w.maxPlayers, w.spectators, w.specCap);
+        teamMenu.el.style.display = 'flex';
+        settingsPanel.setConnected('connected', host);
+        settingsPanel.setGameMode('none');
+        // Wire sendJoinRef so the team-menu callback can ship the Join frame.
+        sendJoinRef.fn = (team: number) => {
+          conn.send(encodeJoin({ team }));
+          teamMenu.el.style.display = 'none';
+        };
         return;
       }
+      // Second Welcome: server assigned us a real slot. Create the predictor
+      // and enter the game.
       predictor = createPredictor(
         {
           tick: (b, y) => { sim_tick(0, b, y); },
@@ -277,7 +393,14 @@ async function main(): Promise<void> {
         w.yourSlot,
       );
       settingsPanel.setConnected('connected', host);
+      sendJoinRef.fn = null;
+      settingsPanel.setGameMode('playing');
       console.log(`[net] connected as slot ${w.yourSlot}`);
+    };
+    conn.onBye = (reason): void => {
+      settingsPanel.setConnected('error');
+      console.warn(`[net] server said bye: ${reason}`);
+      conn.close();
     };
     conn.onSnapshot = (s): void => {
       predictor?.reconcile(s);
@@ -286,17 +409,17 @@ async function main(): Promise<void> {
       serverScore = { t: s.round.scoreT, ct: s.round.scoreCt };
     };
     conn.onClose = (): void => {
-      // Ignore the close from a superseded socket (a reconnect closes the old one).
       if (netConn !== conn) return;
-      // No predictor means Welcome never arrived → the connect itself failed.
-      settingsPanel.setConnected(predictor ? 'disconnected' : 'error');
+      settingsPanel.setConnected(predictor ? 'disconnected' : (welcomeSeen ? 'disconnected' : 'error'));
       predictor = null;
       netConn = null;
       serverRoundTimeSec = -1;
       serverScore = null;
+      sendJoinRef.fn = null;
     };
     conn.connect(url);
     netConn = conn;
+    sendJoinRef.fn = null;
   }
 
   // The Settings button reloads the page with ?connect= so the game boots
@@ -368,13 +491,15 @@ async function main(): Promise<void> {
     defaultPort,
     onConnect: connectViaReload,
     onDisconnect: disconnectViaReload,
-  });
+  }, gameActions);
   applySettings();
   document.addEventListener('pointerlockchange', () => {
+    if (gameMode === 'menu') return; // don't toggle settings during team selection
     if (document.pointerLockElement === canvas) settingsPanel.hide();
     else settingsPanel.show();
   });
-  settingsPanel.show();
+  settingsPanel.hide(); // team menu is the active overlay on boot
+  settingsPanel.setGameMode('none'); // game section hidden until a side is chosen
 
   await initPhysics();
   const world = createWorld();
@@ -424,12 +549,13 @@ async function main(): Promise<void> {
   const nav = await loadNav(navUrl);
   loading.step('Loading characters…');
 
-  // Face the player from their spawn toward the enemy spawn (the map), not the
-  // wall 3 m behind them. forward at yaw θ is (-sinθ, -cosθ), so θ = atan2(-dx, -dz)
-  // of the spawn→CT vector points the camera down that line.
-  input.state.yaw = Math.atan2(T_SPAWN[0] - CT_SPAWN[0], T_SPAWN[2] - CT_SPAWN[2]);
-  const movementCtx = createMovementContext(world, spawn);
-  const player = createPlayerState(spawn);
+  // Phase 9: player spawns at the origin initially (body disabled); enterGame()
+  // or enterSpectator() positions the body when a team is chosen. The movement
+  // context and kinematic body are still created now so everything that captures
+  // them can do so, but the body is disabled until the player actually spawns.
+  const movementCtx = createMovementContext(world, new Vector3(0, 0, 0));
+  const player = createPlayerState(new Vector3(0, 0, 0));
+  movementCtx.body.setEnabled(false); // disabled until a team is chosen
   // WASM sim owns the local player's movement (Phase 6.2). The TS player state
   // and kinematic body are still maintained for bot hit-detection and HUD reads,
   // but they are synced from sim_get_state() each tick rather than tickMovement().
@@ -635,10 +761,9 @@ async function main(): Promise<void> {
     return root;
   }
 
-  // The human plays T. Nearest ALIVE, VISIBLE enemy for a given bot (the human is
-  // an enemy of CT bots; opposing bots are enemies of both). Returns the human
-  // sentinel, an Enemy, or null (nobody in sight → the brain patrols/repositions).
-  const PLAYER_TEAM: Team = 'T';
+  // The human plays the chosen team (set in enterGame / enterSpectator).
+  // Nearest ALIVE, VISIBLE enemy for a given bot. Returns the human sentinel,
+  // an Enemy, or null (nobody in sight → the brain patrols/repositions).
   type Target = Enemy | 'human' | null;
   function pickTarget(me: Enemy): Target {
     const from = me.brain.bot.position;
@@ -646,7 +771,7 @@ async function main(): Promise<void> {
     const coll = me.brain.bot.collider;
     let best: Target = null;
     let bestD = Infinity;
-    if (me.team !== PLAYER_TEAM && playerAlive) {
+    if (me.team !== playerTeam && playerAlive) {
       const d = from.distanceToSquared(playerFeet);
       if (d < bestD && canSee(world, from, yaw, playerFeet, coll)) {
         bestD = d;
@@ -673,12 +798,12 @@ async function main(): Promise<void> {
   const MATCH_TIME = 180; // s
   let matchClock = MATCH_TIME;
   let matchOver = false;
-  let playerAlive = true;
+  let playerAlive = false; // Phase 9: not alive until a team is chosen
   let health = 100;
   let armor = 100;
   let stepDist = 0; // metres walked since the last footstep (see STEP_STRIDE)
   // Bug 3: free-fly spectator position while dead. Seeded from the death eye.
-  const specPos = new Vector3();
+  const specPos = new Vector3().copy(OVERVIEW_POS); // start at overview; moves during spectating
 
   // Damage feedback: red flash, screen shake, hurt sound.
   let damageFlash = 0;
@@ -824,6 +949,18 @@ async function main(): Promise<void> {
   loading.done();
   startLoop({
     tick(fixedDt): void {
+      // M key: open the team menu mid-game to switch teams / spectate.
+      if (input.state.teamMenuToggle) {
+        preMenuGameMode = gameMode;
+        gameMode = 'menu';
+        document.exitPointerLock();
+        teamMenu.el.style.display = 'flex';
+        input.state.teamMenuToggle = 0;
+      }
+      // Phase 9: while the team menu is visible, nothing is simulated.
+      // The overview camera is driven by the render function below.
+      if (gameMode === 'menu') return;
+
       // updateSceneQueries is called AFTER the human sync (so bots can see
       // the player at the current position) and AGAIN after the bot sync (so
       // the player's raycast sees bots at the current position). The BVH
@@ -1010,7 +1147,7 @@ async function main(): Promise<void> {
             onFire(anim);
             playGunshot(active.id);
             // The shot is a sound bots can hear → they investigate from idle.
-            for (const e of enemies) if (e.alive && e.team !== PLAYER_TEAM) hearSound(e.brain, playerFeet);
+            for (const e of enemies) if (e.alive && e.team !== playerTeam) hearSound(e.brain, playerFeet);
             // From the eye, not the muzzle (docs/weapon-feel.md §2) — the bullet
             // goes where the crosshair is, which is the point of the whole model.
             shotOrigin.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
@@ -1036,7 +1173,7 @@ async function main(): Promise<void> {
               const enemy = rayHit.collider ? byCollider.get(rayHit.collider.handle) : undefined;
               // Friendly fire off: teammate bullets pass through (no damage), but
               // a hit on an enemy bot resolves the precise hitbox below.
-              if (enemy && enemy.alive && enemy.team === PLAYER_TEAM) {
+              if (enemy && enemy.alive && enemy.team === playerTeam) {
                 // Teammate — bullet absorbed, no effect.
               } else if (enemy && enemy.alive) {
                 // Precise per-bone zone from the shot ray in the bot's frame;
@@ -1111,7 +1248,17 @@ async function main(): Promise<void> {
     },
     render(alpha, frameDt): void {
       renderCtx.stats.begin();
-      if (!playerAlive && !matchOver) {
+      if (gameMode === 'menu') {
+        // Overview camera: fixed angle looking at the map centre.
+        renderCtx.camera.position.copy(OVERVIEW_POS);
+        const dir = new Vector3().subVectors(OVERVIEW_LOOK, OVERVIEW_POS).normalize();
+        // Compute yaw/pitch from the look-at direction so the camera faces centre.
+        const flatLen = Math.hypot(dir.x, dir.z);
+        const yaw = Math.atan2(-dir.x, -dir.z);
+        const pitchUp = Math.atan2(dir.y, flatLen);
+        renderCtx.camera.rotation.order = 'YXZ';
+        renderCtx.camera.rotation.set(-pitchUp, yaw, 0);
+      } else if (!playerAlive && !matchOver) {
         // Bug 3: spectator free-fly — pose the camera straight at specPos
         // (eyeHeight 0, no punch) instead of the frozen corpse view.
         renderCtx.camera.position.copy(specPos);
@@ -1208,7 +1355,11 @@ async function main(): Promise<void> {
         });
       });
       scoreboard.render(roster);
-      scoreboard.visible = input.state.scoreboard;
+      const teamMenuShown = teamMenu.el.style.display !== 'none';
+      if (teamMenuShown) {
+        teamMenu.renderScoreboard(roster);
+      }
+      scoreboard.visible = input.state.scoreboard || teamMenuShown;
       renderCtx.stats.end();
     },
   });

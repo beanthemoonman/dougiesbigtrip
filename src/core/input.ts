@@ -47,6 +47,8 @@ export interface InputState {
   weaponSlot: number;
   /** Held while Tab is pressed; toggles the scoreboard overlay. */
   scoreboard: boolean;
+  /** Latched edge: set to 1 when M is pressed (team-menu request). Caller clears after handling. */
+  teamMenuToggle: number;
 }
 
 export interface InputManager {
@@ -62,6 +64,7 @@ export function createInputManager(target: HTMLElement): InputManager {
     pointerLocked: false,
     weaponSlot: 0,
     scoreboard: false,
+    teamMenuToggle: 0,
   };
 
   function onKeyDown(e: KeyboardEvent): void {
@@ -72,6 +75,7 @@ export function createInputManager(target: HTMLElement): InputManager {
     }
     if (e.code === 'Digit1') state.weaponSlot = 1;
     else if (e.code === 'Digit2') state.weaponSlot = 2;
+    else if (e.code === 'KeyM' && document.pointerLockElement === target) state.teamMenuToggle = 1;
     const bit = KEY_TO_BUTTON[e.code];
     if (bit !== undefined) state.buttons |= bit;
     // Duck is Ctrl, so holding it while pressing a movement/weapon key would fire
@@ -101,8 +105,9 @@ export function createInputManager(target: HTMLElement): InputManager {
     const locked = document.pointerLockElement === target;
     state.pointerLocked = locked;
     if (!locked) {
-      state.buttons = 0; // releasing focus shouldn't leave keys "stuck" held
+      state.buttons = 0;
       state.scoreboard = false;
+      state.teamMenuToggle = 0;
     }
   }
 

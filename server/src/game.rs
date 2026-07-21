@@ -4,9 +4,30 @@
 
 use sim::constants::FIXED_DT;
 
-const FREEZETIME_MS: u32 = 3_000;
-const ROUND_TIME_MS: u32 = 115_000;
-const END_DELAY_MS: u32 = 5_000;
+const DEFAULT_FREEZETIME_MS: u32 = 3_000;
+const DEFAULT_ROUND_MS: u32 = 115_000;
+const DEFAULT_END_MS: u32 = 5_000;
+
+fn freezetime_ms() -> u32 {
+    std::env::var("SERVER_FREEZE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_FREEZETIME_MS)
+}
+
+fn round_time_ms() -> u32 {
+    std::env::var("SERVER_ROUND_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_ROUND_MS)
+}
+
+fn end_delay_ms() -> u32 {
+    std::env::var("SERVER_END_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_END_MS)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Phase {
@@ -36,10 +57,8 @@ pub struct State {
 impl State {
     pub fn new() -> Self {
         Self {
-            // First round begins immediately in Live phase (no freezetime).
-            // Subsequent rounds cycle through the normal freezetime → live → over → reset.
-            phase: Phase::Live,
-            time_left_ms: ROUND_TIME_MS,
+            phase: Phase::Freezetime,
+            time_left_ms: freezetime_ms(),
             round_number: 1,
             score_t: 0,
             score_ct: 0,
@@ -66,7 +85,7 @@ pub fn tick(state: &mut State, t_alive: usize, ct_alive: usize) -> RoundEvent {
         Phase::Freezetime => {
             if state.time_left_ms == 0 {
                 state.phase = Phase::Live;
-                state.time_left_ms = ROUND_TIME_MS;
+                state.time_left_ms = round_time_ms();
                 return RoundEvent::WentLive;
             }
             RoundEvent::None
@@ -75,7 +94,7 @@ pub fn tick(state: &mut State, t_alive: usize, ct_alive: usize) -> RoundEvent {
             let winner = decide_winner(state.time_left_ms, t_alive, ct_alive);
             if let Some(w) = winner {
                 state.phase = Phase::Over;
-                state.time_left_ms = END_DELAY_MS;
+                state.time_left_ms = end_delay_ms();
                 state.winner = Some(w);
                 if w == 'T' {
                     state.score_t += 1;
@@ -89,7 +108,7 @@ pub fn tick(state: &mut State, t_alive: usize, ct_alive: usize) -> RoundEvent {
         Phase::Over => {
             if state.time_left_ms == 0 {
                 state.phase = Phase::Freezetime;
-                state.time_left_ms = FREEZETIME_MS;
+                state.time_left_ms = freezetime_ms();
                 state.round_number += 1;
                 state.winner = None;
                 return RoundEvent::Reset;

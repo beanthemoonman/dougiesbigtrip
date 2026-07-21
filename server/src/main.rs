@@ -11,20 +11,22 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
 use sim::constants::FIXED_DT;
 use sim::map;
 use sim::movement::{tick_movement, PlayerState};
 use sim::protocol::{
-    CommandFrame, EntityState, GameEvent, RoundState, Shot, Snapshot, Welcome, EV_KILL,
+    CommandFrame, EntityState, GameEvent, Join, RoundState, Shot, Snapshot, Welcome, EV_KILL,
     F_ALIVE, F_DUCKED, F_TEAM_CT, SPECTATOR,
 };
 use sim::world::SimWorld;
 use sim::{ColliderHandle, RigidBodyHandle};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 
 mod ai;
 mod game;
@@ -46,23 +48,46 @@ struct BotSpawn {
 
 const DEFAULT_BIND: &str = "127.0.0.1:9876";
 const MAX_SLOTS: usize = 10;
+const MAX_SPECTATORS: usize = 7; // ceil(2/3 * MAX_SLOTS) = ceil(6.666) = 7
 const SEED: u32 = 1;
 const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
+
+/// Phase 9 advisory capacity counters for the GET /status HTTP endpoint (Gate 1).
+/// Updated by the game loop; read by handle_conn before the WebSocket handshake.
+static ACTIVE_HUMANS: AtomicU8 = AtomicU8::new(0);
+static SPECTATOR_COUNT: AtomicU8 = AtomicU8::new(0);
 
 type Out = mpsc::UnboundedSender<Vec<u8>>;
 
 /// Messages from connection tasks into the single game loop.
 enum Ev {
-    Join {
+    /// New WebSocket connection: register it, get back a conn_id.
+    Connect {
         out: Out,
-        reply: oneshot::Sender<u8>, // assigned slot, or SPECTATOR
+        slot_tx: oneshot::Sender<u8>, // assigned slot after JoinTeam, or SPECTATOR
+        reply: oneshot::Sender<Option<u32>>, // Some(conn_id), or None if refused (full)
     },
+    /// Client sent a Join message with their team choice.
+    JoinTeam {
+        conn_id: u32,
+        team: u8, // 0=T, 1=CT, 2=SPEC
+    },
+    /// Per-tick command from an assigned player.
     Cmd {
         slot: u8,
         frame: CommandFrame,
     },
+    /// A player left; free their slot back to a bot.
     Leave {
         slot: u8,
+    },
+    /// A pending connection dropped before sending Join.
+    PendingDrop {
+        conn_id: u32,
+    },
+    /// A spectator disconnected.
+    SpecDrop {
+        conn_id: u32,
     },
 }
 
@@ -70,6 +95,8 @@ struct Slot {
     occupied: bool,
     is_human: bool,
     out: Option<Out>,
+    /// Phase 9: a human waiting to spawn on the next Reset (bot still plays the slot).
+    pending_human: Option<Out>,
     body_handle: RigidBodyHandle,
     collider_handle: ColliderHandle,
     player: PlayerState,
@@ -84,6 +111,9 @@ struct Slot {
     team_ct: bool,
     alive: bool,
     health: u8,
+    armor: u8,
+    weapon: u8,
+    ammo: u8,
 }
 
 async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
@@ -116,6 +146,7 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 occupied: true,       // filled by bot
                 is_human: false,
                 out: None,
+                pending_human: None,
                 body_handle,
                 collider_handle,
                 player: PlayerState::new(s[0], s[1], s[2]),
@@ -130,9 +161,21 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 team_ct,
                 alive: true,
                 health: 100,
+                armor: 0,
+                weapon: 1,
+                ammo: 30,
             }
         })
         .collect();
+
+    // Phase 9: spectators and connections waiting for a team choice.
+    let mut spectators: Vec<(u32, Out)> = Vec::new();
+    // Keyed by conn_id so entries are freed on Join/drop (no unbounded growth,
+    // no wraparound aliasing). conn_id is a monotonic u32 — a distinct sentinel
+    // (None on the reply channel) signals "refused", so ids never collide with it.
+    let mut pending_conns: std::collections::HashMap<u32, (Out, oneshot::Sender<u8>)> =
+        std::collections::HashMap::new();
+    let mut next_conn_id: u32 = 0;
 
     let mut server_tick: u32 = 0;
     let mut interval = tokio::time::interval(std::time::Duration::from_secs_f64(FIXED_DT));
@@ -157,16 +200,29 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
 
                 if round_ev == game::RoundEvent::Reset {
                     for s in &mut slots {
-                        if !s.alive {
-                            let bf = s.bot_spawn.feet;
-                            s.player.reset(bf[0], bf[1], bf[2]);
-                            s.alive = true;
-                            s.health = 100;
-                            world.sync_player_body(
-                                s.body_handle, s.collider_handle,
-                                bf[0], bf[1], bf[2], false,
-                            );
+                        if !s.occupied { continue; }
+                        // Phase 9: promote pending humans at round start.
+                        if s.pending_human.is_some() {
+                            s.is_human = true;
+                            ACTIVE_HUMANS.fetch_add(1, Ordering::Relaxed);
+                            s.out = s.pending_human.take();
+                            s.bot = None;
                         }
+                        let bf = s.bot_spawn.feet;
+                        s.player.reset(bf[0], bf[1], bf[2]);
+                        s.alive = true;
+                        s.health = 100;
+                        s.armor = 0;
+                        s.weapon = 1;
+                        s.ammo = 30;
+                        s.queue.clear();
+                        s.last_buttons = 0;
+                        s.last_shot = None;
+                        s.ack_seq = 0;
+                        world.sync_player_body(
+                            s.body_handle, s.collider_handle,
+                            bf[0], bf[1], bf[2], false,
+                        );
                     }
                     println!("round {} begin", round.round_number);
                 }
@@ -332,41 +388,134 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 let snapshot = build_snapshot(&slots, &round, server_tick, frame_events);
                 for slot in &slots {
                     if let (true, Some(out)) = (slot.occupied, &slot.out) {
-                        // Each client gets its own ackSeq — re-encode per slot.
                         let mut snap = snapshot.clone();
                         snap.ack_seq = slot.ack_seq;
                         let _ = out.send(snap.encode());
                     }
                 }
+                // Also send snapshots to spectators so they can see the match.
+                for (_cid, out) in &spectators {
+                    let _ = out.send(snapshot.encode());
+                }
             }
             Some(ev) = events.recv() => match ev {
-                Ev::Join { out, reply } => {
-                    match slots.iter().position(|s| !s.is_human) {
-                        Some(i) => {
-                            let team_ct = slots[i].team_ct;
-                            let spawn_pt = if team_ct { spawn.ct } else { spawn.t };
-                            let s = &mut slots[i];
-                            s.occupied = true;
-                            s.is_human = true;
-                            s.alive = true;
-                            s.health = 100;
-                            s.out = Some(out);
-                            s.queue.clear();
-                            s.ack_seq = 0;
-                            s.last_buttons = 0;
-                            s.last_yaw = 0.0;
-                            s.player.reset(spawn_pt[0], spawn_pt[1], spawn_pt[2]);
-                            world.sync_player_body(
-                                s.body_handle, s.collider_handle,
-                                spawn_pt[0], spawn_pt[1], spawn_pt[2], false,
-                            );
-                            s.bot = None; // evict the bot
-                            let _ = reply.send(i as u8);
-                            println!("slot {i} joined (human; bot evicted)");
+                Ev::Connect { out, slot_tx, reply } => {
+                    let active_humans: usize = slots.iter().filter(|s| s.is_human).count();
+                    let full = active_humans >= MAX_SLOTS && spectators.len() >= MAX_SPECTATORS;
+                    if full {
+                        let _ = slot_tx.send(SPECTATOR);
+                        let _ = reply.send(None);
+                        let bye_bytes = sim::protocol::Bye { reason: "full".into() }.encode();
+                        let _ = out.send(bye_bytes);
+                        // Don't register the connection — handle_conn sees the None
+                        // reply, drains the Bye, and closes the socket.
+                    } else {
+                    let conn_id = next_conn_id;
+                    next_conn_id += 1;
+                    let w = Welcome {
+                        your_slot: SPECTATOR,
+                        map: "de_douglas".into(),
+                        seed: SEED,
+                        server_tick,
+                        max_players: MAX_SLOTS as u8,
+                        players: active_humans as u8,
+                        spectators: spectators.len() as u8,
+                        spec_cap: MAX_SPECTATORS as u8,
+                    };
+                    let _ = out.send(w.encode());
+                    pending_conns.insert(conn_id, (out, slot_tx));
+                    let _ = reply.send(Some(conn_id));
+                    println!("conn {conn_id} connected (pending)");
+                    }
+                }
+                Ev::JoinTeam { conn_id, team } => {
+                    // Stale or invalid conn_id → no entry → ignored.
+                    if let Some((out, slot_tx)) = pending_conns.remove(&conn_id) {
+                    // Count active + pending humans before the loop (avoids borrow conflict).
+                    let player_count = slots.iter()
+                        .filter(|s| s.is_human || s.pending_human.is_some()).count() as u8;
+                    match team {
+                        0 | 1 => {
+                            let target_ct = team == 1;
+                            let mut out_opt = Some(out);
+                            let mut found_slot: Option<u8> = None;
+                            for (i, s) in slots.iter_mut().enumerate() {
+                                if s.team_ct != target_ct { continue; }
+                                if s.is_human || s.pending_human.is_some() { continue; }
+                                found_slot = Some(i as u8);
+                                let o = out_opt.take().unwrap();
+                                if round.phase == game::Phase::Live {
+                                    s.pending_human = Some(o);
+                                } else {
+                                    let sp = if target_ct { spawn.ct } else { spawn.t };
+                                    s.is_human = true;
+                                    ACTIVE_HUMANS.fetch_add(1, Ordering::Relaxed);
+                                    s.alive = true;
+                                    s.health = 100;
+                                    s.armor = 0;
+                                    s.weapon = 1;
+                                    s.ammo = 30;
+                                    s.out = Some(o);
+                                    s.queue.clear();
+                                    s.ack_seq = 0;
+                                    s.last_buttons = 0;
+                                    s.player.reset(sp[0], sp[1], sp[2]);
+                                    world.sync_player_body(
+                                        s.body_handle, s.collider_handle,
+                                        sp[0], sp[1], sp[2], false,
+                                    );
+                                    s.bot = None;
+                                }
+                                break;
+                            }
+                            if let Some(assigned_slot) = found_slot {
+                                let _ = slot_tx.send(assigned_slot);
+                                let w2 = Welcome {
+                                    your_slot: assigned_slot,
+                                    map: "de_douglas".into(),
+                                    seed: SEED,
+                                    server_tick,
+                                    max_players: MAX_SLOTS as u8,
+                                    players: player_count,
+                                    spectators: spectators.len() as u8,
+                                    spec_cap: MAX_SPECTATORS as u8,
+                                };
+                                let s = &slots[assigned_slot as usize];
+                                let target = if s.pending_human.is_some() {
+                                    s.pending_human.as_ref().unwrap()
+                                } else {
+                                    s.out.as_ref().unwrap()
+                                };
+                                let _ = target.send(w2.encode());
+                                println!("conn {conn_id} assigned to slot {assigned_slot} (team {})",
+                                    if target_ct { "CT" } else { "T" });
+                            } else if let Some(o) = out_opt {
+                                let _ = slot_tx.send(SPECTATOR);
+                                spectators.push((conn_id, o));
+                                SPECTATOR_COUNT.fetch_add(1, Ordering::Relaxed);
+                                println!("conn {conn_id} forced to spectate (team full)");
+                            }
                         }
-                        None => {
-                            let _ = reply.send(SPECTATOR);
+                        2 => {
+                            let _ = slot_tx.send(SPECTATOR);
+                            spectators.push((conn_id, out));
+                            SPECTATOR_COUNT.fetch_add(1, Ordering::Relaxed);
+                            println!("conn {conn_id} joined as spectator");
                         }
+                        _ => { let _ = slot_tx.send(SPECTATOR); }
+                    }
+                    }
+                }
+                Ev::PendingDrop { conn_id } => {
+                    if pending_conns.remove(&conn_id).is_some() {
+                        println!("conn {conn_id} disconnected before Join");
+                    }
+                }
+                Ev::SpecDrop { conn_id } => {
+                    if let Some(pos) = spectators.iter().position(|(id, _)| *id == conn_id) {
+                        spectators.remove(pos);
+                        SPECTATOR_COUNT.fetch_sub(1, Ordering::Relaxed);
+                        println!("spectator {conn_id} disconnected");
                     }
                 }
                 Ev::Cmd { slot, frame } => {
@@ -378,10 +527,20 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 }
                 Ev::Leave { slot } => {
                     if let Some(s) = slots.get_mut(slot as usize) {
+                        // Only decrement if this slot was actually counted. A pending
+                        // human (joined during Live, not yet promoted) never bumped
+                        // ACTIVE_HUMANS, so decrementing here would underflow the u8.
+                        if s.is_human {
+                            ACTIVE_HUMANS.fetch_sub(1, Ordering::Relaxed);
+                        }
                         s.is_human = false;
                         s.alive = true;
                         s.health = 100;
+                        s.armor = 0;
+                        s.weapon = 1;
+                        s.ammo = 30;
                         s.out = None;
+                        s.pending_human = None;
                         s.queue.clear();
                         // Respawn a bot into this slot.
                         let feet = s.bot_spawn.feet;
@@ -421,9 +580,9 @@ fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events:
                 yaw: s.last_yaw,
                 pitch: s.last_pitch,
                 health: s.health,
-                armor: 0,
-                weapon: 1,
-                ammo: 30,
+                armor: s.armor,
+                weapon: s.weapon,
+                ammo: s.ammo,
             }
         })
         .collect();
@@ -442,41 +601,58 @@ fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events:
 }
 
 async fn handle_conn(stream: TcpStream, addr: SocketAddr, events: mpsc::UnboundedSender<Ev>) {
-    let ws = match accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(e) => {
-            eprintln!("[{addr}] handshake failed: {e}");
-            return;
+    let ws = match accept_hdr_async(stream, |req: &Request, _resp: Response| -> Result<Response, ErrorResponse> {
+        if req.uri().path() == "/status" {
+            // Gate 1: GET /status returns advisory capacity info (JSON).
+            let players = ACTIVE_HUMANS.load(Ordering::Relaxed);
+            let spectators = SPECTATOR_COUNT.load(Ordering::Relaxed);
+            let json = format!(
+                "{{\"players\":{},\"maxPlayers\":{},\"spectators\":{},\"specCap\":{}}}",
+                players, MAX_SLOTS, spectators, MAX_SPECTATORS,
+            );
+            let err_resp = Response::builder()
+                .status(200)
+                .header("Content-Type", "application/json")
+                .header("Access-Control-Allow-Origin", "*")
+                .body(Some(json))
+                .unwrap();
+            return Err(err_resp);
         }
+        Ok(_resp)
+    }).await {
+        Ok(ws) => ws,
+        Err(_) => return,
     };
     let (mut tx, mut rx) = ws.split();
 
-    // Ask the game loop for a slot.
+    // Register with the game loop — gets a conn_id and slot back.
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let (reply_tx, reply_rx) = oneshot::channel::<u8>();
+    let (slot_tx, slot_rx) = oneshot::channel::<u8>();
+    let (reply_tx, reply_rx) = oneshot::channel::<Option<u32>>();
     if events
-        .send(Ev::Join {
+        .send(Ev::Connect {
             out: out_tx,
+            slot_tx,
             reply: reply_tx,
         })
         .is_err()
     {
         return;
     }
-    let my_slot = reply_rx.await.unwrap_or(SPECTATOR);
-    println!("[{addr}] connected → slot {my_slot}");
-
-    let welcome = Welcome {
-        your_slot: my_slot,
-        map: "de_douglas".into(),
-        seed: SEED,
-        server_tick: 0,
+    // None → refused (server full) or the loop is gone: drain the Bye and close.
+    let conn_id = match reply_rx.await {
+        Ok(Some(id)) => id,
+        _ => {
+            while let Some(msg) = out_rx.recv().await {
+                let _ = tx.send(Message::Binary(msg.into())).await;
+            }
+            let _ = tx.close().await;
+            return;
+        }
     };
-    if tx.send(Message::Binary(welcome.encode().into())).await.is_err() {
-        return;
-    }
+    println!("[{addr}] connected → conn {conn_id}");
 
-    // Writer task: drain the outbound queue to the socket.
+    // Writer task: drain outbound queue to the socket.
     let writer = tokio::spawn(async move {
         while let Some(bytes) = out_rx.recv().await {
             if tx.send(Message::Binary(bytes.into())).await.is_err() {
@@ -485,17 +661,47 @@ async fn handle_conn(stream: TcpStream, addr: SocketAddr, events: mpsc::Unbounde
         }
     });
 
-    // Reader loop: decode CommandFrames into the game loop.
+    // Reader loop: first message is Join, then await slot assignment, then CommandFrames.
+    let my_slot: u8;
+    loop {
+        match rx.next().await {
+            Some(Ok(Message::Binary(data))) => {
+                // First message must be Join.
+                if let Some(join) = Join::decode(&data) {
+                    let _ = events.send(Ev::JoinTeam { conn_id, team: join.team });
+                    break;
+                }
+                // Backwards compat: old client sends Cmd first; treat as T auto-join.
+                let _ = events.send(Ev::JoinTeam { conn_id, team: 0 });
+                break;
+            }
+            Some(Ok(Message::Close(_))) | None => {
+                let _ = events.send(Ev::PendingDrop { conn_id });
+                writer.abort();
+                return;
+            }
+            _ => continue,
+        }
+    }
+
+    // Wait for the game loop to assign us a slot (or tell us we're a spectator).
+    my_slot = slot_rx.await.unwrap_or(SPECTATOR);
+    if my_slot == SPECTATOR {
+        // Spectator: just drain reader and close on disconnect.
+        while let Some(Ok(msg)) = rx.next().await {
+            if let Message::Close(_) = msg { break; }
+        }
+        let _ = events.send(Ev::SpecDrop { conn_id });
+        writer.abort();
+        return;
+    }
+
+    // Player: read CommandFrames and forward to game loop.
     while let Some(Ok(msg)) = rx.next().await {
         match msg {
             Message::Binary(data) => {
-                if my_slot != SPECTATOR {
-                    if let Some(frame) = CommandFrame::decode(&data) {
-                        let _ = events.send(Ev::Cmd {
-                            slot: my_slot,
-                            frame,
-                        });
-                    }
+                if let Some(frame) = CommandFrame::decode(&data) {
+                    let _ = events.send(Ev::Cmd { slot: my_slot, frame });
                 }
             }
             Message::Close(_) => break,
@@ -503,11 +709,8 @@ async fn handle_conn(stream: TcpStream, addr: SocketAddr, events: mpsc::Unbounde
         }
     }
 
-    if my_slot != SPECTATOR {
-        let _ = events.send(Ev::Leave { slot: my_slot });
-    }
+    let _ = events.send(Ev::Leave { slot: my_slot });
     writer.abort();
-    println!("[{addr}] disconnected");
 }
 
 #[tokio::main]

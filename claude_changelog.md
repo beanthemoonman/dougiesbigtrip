@@ -2011,6 +2011,86 @@ Updated the intro paragraph to describe the 9–13 arc. No code changed.
   join gating). Grounded in existing code — reuses `spectator.ts`, the `SPECTATOR=255` sentinel,
   the 10-slot table + round FSM, and the connect overlay's pre-dial probe rather than rebuilding.
   Six increments (9.0–9.5): SP team menu + gated spawn, spectate-anytime, `Join`/`Welcome`/`Bye`
-  protocol additions, MP join+team-full rule, dual capacity gates (`/status` GET + handshake
-  reject, specCap = ceil(2/3·10) = 7), and a server per-round reset hygiene pass with a T1.
+   protocol additions, MP join+team-full rule, dual capacity gates (`/status` GET + handshake
+   reject, specCap = ceil(2/3·10) = 7), and a server per-round reset hygiene pass with a T1.
+
+## 2026-07-21 — Phase 9.0–9.4 implemented
+
+**9.0 — SP team menu + gated spawn:**
+- `src/ui/teammenu.ts`: new team menu overlay (T / CT / Spectate buttons), shown on boot before
+  anything spawns. Returns `TeamMenu { el, setCounts(players, maxPlayers, spectators, specCap) }`.
+- `src/main.ts`: added `GameMode = 'menu' | 'playing' | 'spectating'`; player body disabled until
+  a team is chosen via `enterGame(team)` or `enterSpectator()`. Overview camera renders the map
+  from `(0, 25, -30)` looking at origin while the menu is open. Setting toggle prevented during
+  team menu. `respawn()` also reset player to spawn position.
+
+**9.1 — Spectate anytime via settings:**
+- `src/core/settings.ts`: added `GameActions` interface (`onSpectate`, `onJoinT`, `onJoinCt`) and
+  `GamePanelMode`. Settings panel gains a "Game" section with Spectate / Join T / Join CT buttons
+  when out of pointer lock. `setGameMode()` controls which buttons are visible.
+
+**9.2 — Protocol: Join, Bye, Welcome capacity fields:**
+- `sim/src/protocol.rs` + `src/net/protocol.ts`: added `TAG_JOIN=4`, `Join { team: u8 }`, `Bye { reason: String }` structs with encode/decode. `Welcome` extended with `maxPlayers, players, spectators, specCap` (backward-compat: old format missing these defaults them to 0). Golden round-trip + compat tests on both sides (32 Rust + 17 TS protocol tests green).
+- `src/net/protocol.test.ts`: Welcome backward-compat tests + Join/Bye encode/decode round-trips.
+- `src/net/connection.ts`: added `onBye` callback, `ConnectionState.status = 'byed'`, Bye decode
+  in `onmessage` (before Welcome decode, so server-full Bye fires before any stale Welcome).
+
+**9.3/9.4 — Server: pending join, spectator tracking, capacity gates, two-phase Welcome:**
+- `server/src/main.rs`: restructured `Ev` enum — `Connect { out, slot_tx, reply }` (with
+  oneshot reply providing conn_id), `JoinTeam { conn_id, team }`, `PendingDrop { conn_id }`,
+  `SpecDrop { conn_id }`. `Slot.pending_human: Option<Out>` added.
+- Server game loop now tracks `pending_conns: Vec<Option<(Out, Sender<u8>)>>` and
+  `spectators: Vec<(u8, Out)>`. On `Connect`: sends first Welcome (slot=SPECTATOR, capacity
+  fields populated), stores pending entry, replies with conn_id. On `JoinTeam { team }`:
+  finds a matching slot (by team_ct and vacancy), fills it (human or pending_human depending
+  on round phase), sends second Welcome with real slot. Full teams → force spectator;
+  spectate-only choice → spectator. On round reset: spawn pending humans into their slots,
+  evict those slot bots.
+- `handle_conn`: first message must be `Join` (backward compat: old Cmd-first = auto T). After
+  Join is sent, await `slot_rx` for the assigned slot (SPECTATOR if spectating). Spectators
+  drain reader loop + send `SpecDrop` on disconnect. Players enter command-frame loop +
+  send `Leave` on disconnect.
+- Dual capacity gates: `Ev::Connect` checks `active_humans >= MAX_SLOTS && spectators.len() >= MAX_SPECTATORS`;
+  if full, sends Bye with reason "full" and releases the socket. Second gate: during `JoinTeam`,
+  if both teams are full of humans, the conn is forced to spectate.
+- Also fixed a pre-existing bug: `break` inside `Ev::Connect`'s full-reject branch was breaking
+  the entire game loop (not just the match arm). Changed to `if full { ... } else { ... }`.
+
+**Client-side two-phase Welcome:**
+- `src/main.ts`: `handleConnect` now handles two-phase Welcome — first Welcome (slot=SPECTATOR)
+  shows team menu with capacity info from server; `sendJoinRef.fn` is wired to send `encodeJoin()`
+  through the WebSocket. Second Welcome (real slot) creates predictor + enters game. `onBye`
+  handler shows connection error for server rejections. `onClose` clears `sendJoinRef.fn`.
+
+**Verification:** `pnpm typecheck` green, `pnpm test` — 187 tests pass (35 files); `cargo check`
+zero warnings, `cargo test` — 32 Rust tests pass. Server integration test (`tests/harness/server.test.ts`)
+still passes (backward-compat old client path works).
+
+**Remaining:** 9.5 (server per-round reset T1 test), ACC-017 acceptance script, and Phase 10–14.
   Exit test = ACC-017. Added a pointer to it in `plan_to_implement.md`'s Phase 9 section.
+
+## Code review of Phase 9 uncommitted work — two server fixes
+
+Reviewed the uncommitted Phase 9 work (team select / spectator / join gating). Two
+correctness fixes to the connection bookkeeping in `server/src/main.rs`:
+
+1. **`ACTIVE_HUMANS` u8 underflow.** `Ev::Leave` decremented the atomic unconditionally,
+   but a *pending* human (joined during Live, awaiting promotion at the next Reset) is
+   tracked via `pending_human` and never incremented `ACTIVE_HUMANS`. Disconnecting one
+   still fired `Ev::Leave` → decrement on `AtomicU8` wraps to 255, corrupting the
+   `/status` capacity JSON. Guarded the decrement with `if s.is_human`. Admission gating
+   was unaffected (it counts `slots` directly), so this was advisory-only.
+
+2. **`conn_id` wraparound / sentinel collision.** `next_conn_id` was a `u8` that wrapped
+   at 256 and could take the value 255 == `SPECTATOR`, which `handle_conn` reads as
+   "refused" — so the 256th lifetime connection was wrongly closed, and wrapped ids
+   aliased in the `spectators` / `pending_conns` lookups. `pending_conns` was also a `Vec`
+   indexed by id that only ever grew (slow leak). Fixes: `conn_id` is now a monotonic
+   `u32`; the `reply` channel carries `Option<u32>` (`None` = refused) so ids never
+   collide with a sentinel; `pending_conns` is a `HashMap<u32, _>` whose entries are freed
+   on Join/drop (bounded memory, no aliasing).
+
+**Verification:** `cargo build -p server` clean; `pnpm test tests/harness/server.test.ts`
+— all 3 pass (two-phase Welcome handshake + round-reset hygiene). Note: the round-reset
+test is wall-clock-timing-fragile and can time out under a fully parallel `pnpm test`
+(server sim is wall-clock-paced, starves under CPU contention) — passes in isolation.
