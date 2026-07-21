@@ -1971,3 +1971,13 @@ Files: src/core/audio.ts, src/ui/hud.ts, src/main.ts, claude_changelog.md
 ## Bugfix: https default port + Ctrl chrome shortcuts (2026-07-20)
 - `src/core/settings.ts`: bare-host port field now defaults to 443 over https (wss:) instead of 9876, matching the :443 reverse proxy.
 - `src/core/input.ts`: preventDefault on mapped game keys while pointer-locked, so Ctrl (duck) + W/1/2 no longer trigger Chrome tab shortcuts.
+
+## CI lint fix (2026-07-20)
+- eslint.config.js: ignore generated `sim/pkg/**` and Rust `target/**`; add node globals (console/process/etc.) for `tools/**`, `*.mjs`, config, tests; disable `no-non-null-assertion` (hard ban stays on `any` only).
+- src/main.ts: silenced prefer-const on `settingsPanel` (assigned once below, captured by earlier closures).
+
+## README expansion
+
+Expanded README.md: added stack badges (TypeScript, Rust, three.js, WASM, Vite, Docker, asset licence), a mermaid tech-stack network diagram, a "why each piece" table, a section on the agent authoring assets in Blender via MCP, architecture notes (server-authoritative/client-predicted shared Rust sim, fixed 64 Hz, determinism), server/Docker run instructions, and repo layout.
+
+Bada Bing!
