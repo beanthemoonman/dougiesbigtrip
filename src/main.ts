@@ -44,7 +44,7 @@ import { createConnection } from './net/connection';
 import { createPredictor, type Predictor } from './net/prediction';
 import { createInterpolationBuffer } from './net/interpolation';
 import { encodeCommand, encodeJoin } from './net/protocol';
-import { SPECTATOR, EV_FIRE } from './net/protocol';
+import { SPECTATOR, EV_FIRE, EV_KILL, F_ALIVE } from './net/protocol';
 import { createDecals } from './render/decals';
 import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
 import { loadLightmappedMap } from './render/lightmap';
@@ -324,6 +324,7 @@ async function main(): Promise<void> {
   let netConn: ReturnType<typeof createConnection> | null = null;
   let serverRoundTimeSec = -1;
   let serverScore: { t: number; ct: number } | null = null;
+  let serverPhase = -1; // 0=freezetime, 1=live, 2=over; -1 = not synced yet
   const interpBuf = createInterpolationBuffer();
 
   // --- Game mode: menu | playing | spectating ---
@@ -434,10 +435,12 @@ async function main(): Promise<void> {
         settingsPanel.hide();
         canvas!.requestPointerLock();
       } else {
+        playerTeam = choice;
+        const spawnPt = choice === 'T' ? T_SPAWN : CT_SPAWN;
+        spawn.set(spawnPt[0], spawnPt[1], spawnPt[2]);
         teamMenu.el.style.display = 'none';
         settingsPanel.hide();
         gameMode = 'playing';
-        playerAlive = false;
         settingsPanel.setGameMode('playing');
         canvas!.requestPointerLock();
       }
@@ -510,8 +513,19 @@ async function main(): Promise<void> {
       interpBuf.push(s);
       serverRoundTimeSec = s.round.timeLeftMs / 1000;
       serverScore = { t: s.round.scoreT, ct: s.round.scoreCt };
-      // Phase 12.2: collect EV_FIRE events for third-person muzzle FX on remotes.
+      serverPhase = s.round.phase;
+      if (predictor) {
+        const slot = predictor.ownSlot;
+        const myEntity = s.entities.find(e => e.slot === slot);
+        playerAlive = myEntity ? (myEntity.flags & F_ALIVE) !== 0 : false;
+      }
       for (const ev of s.events) {
+        if (ev.tag === EV_KILL && predictor && ev.slot === predictor.ownSlot) {
+          playerAlive = false;
+          specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
+          tintPlayerBody(playerTeam === 'CT');
+          playerRagdoll = spawnRagdollBody(ragdollWorld, player.position, player.velocity, simTime);
+        }
         if (ev.tag === EV_FIRE) pendingFireSlots.add(ev.slot);
       }
     };
@@ -522,6 +536,7 @@ async function main(): Promise<void> {
       netConn = null;
       serverRoundTimeSec = -1;
       serverScore = null;
+      serverPhase = -1;
       sendJoinRef.fn = null;
     };
     conn.connect(url);
@@ -1054,18 +1069,16 @@ async function main(): Promise<void> {
       damageFlash = 0;
       shakeTime = 0;
       shakeIntensity = 0;
-      player.position.copy(spawn);
-      player.velocity.set(0, 0, 0);
-      player.onGround = false;
-      // Reset the WASM sim player to the spawn point as well, so the next tick
-      // doesn't pick up the old (dead) position.
-      sim_reset_player(0, spawn.x, spawn.y, spawn.z);
-      // Sync the human kinematic body so bot perception queries see the
-      // capsule at the fresh spawn position, not the death spot.
-      bodyCenterScratch.set(
-        spawn.x, spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, spawn.z,
-      );
-      movementCtx.body.setTranslation(bodyCenterScratch, true);
+      if (!predictor || !netConn) {
+        player.position.copy(spawn);
+        player.velocity.set(0, 0, 0);
+        player.onGround = false;
+        sim_reset_player(0, spawn.x, spawn.y, spawn.z);
+        bodyCenterScratch.set(
+          spawn.x, spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, spawn.z,
+        );
+        movementCtx.body.setTranslation(bodyCenterScratch, true);
+      }
     }
     for (const e of enemies) {
       if (!e.active) continue; // benched: stays hidden/dead while the human holds its seat
@@ -1195,6 +1208,15 @@ async function main(): Promise<void> {
 
   // Centre-banner text for the current phase (empty during normal play).
   function bannerText(): string {
+    if (predictor) {
+      if (serverPhase === 0) return `FREEZE  ${Math.ceil(serverRoundTimeSec)}`;
+      if (serverPhase === 2) {
+        if (gameMode !== 'playing') return `ROUND OVER   ...`;
+        return 'ROUND OVER';
+      }
+      if (!playerAlive) return 'SPECTATING';
+      return '';
+    }
     if (matchOver) return `MATCH OVER   T ${round.score.t} : ${round.score.ct} CT   —   new game in ${Math.ceil(matchRestartTimer)}`;
     if (round.phase === 'freezetime') return `FREEZE  ${Math.ceil(round.timer)}`;
     if (round.phase === 'over') {
@@ -1239,14 +1261,14 @@ async function main(): Promise<void> {
       // match freezes (see the !matchOver guards below). Accumulated fixedDt →
       // deterministic. ponytail: counts freezetime too; gate on
       // round.phase === 'live' if only live time should count.
-      if (!matchOver) {
-        matchClock -= fixedDt;
-        if (matchClock <= 0) { matchClock = 0; matchOver = true; matchRestartTimer = MATCH_RESTART_DELAY; }
-      } else {
-        // Match over: hold the final banner for MATCH_RESTART_DELAY, then loop
-        // straight into a fresh game (scores + clock reset, everyone respawns).
-        matchRestartTimer -= fixedDt;
-        if (matchRestartTimer <= 0) startNewMatch();
+      if (!predictor) {
+        if (!matchOver) {
+          matchClock -= fixedDt;
+          if (matchClock <= 0) { matchClock = 0; matchOver = true; matchRestartTimer = MATCH_RESTART_DELAY; }
+        } else {
+          matchRestartTimer -= fixedDt;
+          if (matchRestartTimer <= 0) startNewMatch();
+        }
       }
 
       prevView.position.copy(currView.position);
@@ -1265,11 +1287,11 @@ async function main(): Promise<void> {
         if (e.team === 'CT') ctAlive++;
         else tAlive++;
       }
-      // Match over: freeze the round FSM entirely (no respawn/reset), and force
-      // live=false so the player sim, bot loop and firing below all skip.
-      const event = matchOver ? 'none' : tickRound(round, DEFAULT_ROUND, tAlive, ctAlive, fixedDt);
-      if (event === 'reset') respawn();
-      const live = !matchOver && round.phase === 'live';
+      const event = (predictor || matchOver) ? 'none' : tickRound(round, DEFAULT_ROUND, tAlive, ctAlive, fixedDt);
+      if (!predictor && event === 'reset') respawn();
+      const live = predictor
+        ? (serverPhase === 1 && playerAlive)
+        : (!matchOver && round.phase === 'live');
 
       playerFeet.copy(player.position);
 
@@ -1319,7 +1341,9 @@ async function main(): Promise<void> {
       }
 
       // Bots (both teams): pick the nearest visible enemy, run the FSM, shoot.
-      if (live) {
+      // In networked mode the server is authoritative for all entities; local bot
+      // simulation would create duplicate models and waste CPU on shadow sim ticks.
+      if (live && !predictor) {
         for (const e of enemies) {
           if (!e.alive) continue;
           e.fireCooldown = Math.max(0, e.fireCooldown - fixedDt);
@@ -1594,30 +1618,34 @@ async function main(): Promise<void> {
 
       // Bot world-models: position + yaw the wrapper group; the Bone
       // hierarchy sits inside it and AnimationMixer drives the poses.
-      for (const e of enemies) {
-        if (e.alive) {
-          const p = e.brain.bot.position;
-          e.root.position.set(p.x, p.y, p.z);
-          // Full reset, not just .y: a prior death drives e.root.quaternion from
-          // the ragdoll (tumbled), leaving nonzero X/Z Euler. Setting only .y on
-          // respawn keeps that tilt — the bot stands upright only if we clear it.
-          e.root.rotation.set(0, e.brain.aim.yaw, 0);
-        } else {
-          // Phase 12.3: dead bots may have a ragdoll body. Drive the model
-          // from the ragdoll transform; despawn when the timer expires.
-          const r = ragdolls.get(e);
-          if (r) {
-            if (ragdollExpired(r, simTime)) {
-              despawnRagdollBody(r);
-              ragdolls.delete(e);
-              e.root.visible = false;
-              continue;
+      // In networked mode the server is authoritative for all entity
+      // positions — render those through remoteRootFor below.
+      if (!predictor) {
+        for (const e of enemies) {
+          if (e.alive) {
+            const p = e.brain.bot.position;
+            e.root.position.set(p.x, p.y, p.z);
+            // Full reset, not just .y: a prior death drives e.root.quaternion from
+            // the ragdoll (tumbled), leaving nonzero X/Z Euler. Setting only .y on
+            // respawn keeps that tilt — the bot stands upright only if we clear it.
+            e.root.rotation.set(0, e.brain.aim.yaw, 0);
+          } else {
+            // Phase 12.3: dead bots may have a ragdoll body. Drive the model
+            // from the ragdoll transform; despawn when the timer expires.
+            const r = ragdolls.get(e);
+            if (r) {
+              if (ragdollExpired(r, simTime)) {
+                despawnRagdollBody(r);
+                ragdolls.delete(e);
+                e.root.visible = false;
+                continue;
+              }
+              e.root.visible = true;
+              const t = r.body.translation();
+              e.root.position.set(t.x, t.y - PLAYER_RADIUS * 0.5, t.z);
+              const q = r.body.rotation();
+              e.root.quaternion.set(q.x, q.y, q.z, q.w);
             }
-            e.root.visible = true;
-            const t = r.body.translation();
-            e.root.position.set(t.x, t.y - PLAYER_RADIUS * 0.5, t.z);
-            const q = r.body.rotation();
-            e.root.quaternion.set(q.x, q.y, q.z, q.w);
           }
         }
       }

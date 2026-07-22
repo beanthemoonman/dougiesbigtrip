@@ -6,6 +6,16 @@ A running log of what Claude Code did in this repo, appended to at the end of ea
 
 ## 2026-07-22
 
+- **Fixed reconnection affecting server game state** (client-side bug). Root cause: the client ran its own independent match clock and round FSM even in networked mode. When a player reconnected, the local `matchClock` (180s) had expired, `startNewMatch()` fired, resetting local `round` to freezetime, which gated movement/live state and showed "FREEZE" banner — while the server was mid-round. Fixed with 7 changes in `src/main.ts`:
+  1. Added `F_ALIVE` to import and `serverPhase` variable (mirrors `serverRoundTimeSec`/`serverScore`).
+  2. `onSnapshot`: sync `serverPhase` from `s.round.phase`; derive `playerAlive` from own slot's `F_ALIVE` flag in snapshot entities instead of relying on local state.
+  3. `onClose`: reset `serverPhase = -1` on disconnect.
+  4. Match clock (lines 1248-1256) gated on `!predictor` — only runs in single-player mode.
+  5. `tickRound()` gated on `!predictor || matchOver` — skipped in networked mode; `live` derived from `serverPhase === 1 && playerAlive` in networked mode, from local round state in single-player.
+  6. `bannerText()`: in networked mode, reads server phase (`serverPhase`) and `serverRoundTimeSec` instead of local `round.phase`/`round.timer`.
+  7. Removed `playerAlive = false` from network team-join path — now set authoritatively from snapshot flags.
+  - `pnpm typecheck` and `pnpm test` (210 tests) green.
+
 - **Implemented Phase 13 — Asset refinement II: textures & liveliness** (see `docs/plan-phase13-asset-refinement.md`):
   - **13.0 Map textures from Poly Haven.** Downloaded 3 CC0 texture sets via Blender MCP: `concrete_wall_003`, `large_sandstone_blocks`, `brown_planks_05` (2K JPG). Saved to `assets/tex/` and `public/tex/`. Rewrote `src/render/surfacetex.ts`: `applySurfaceTextures()` now loads real textures with procedural fallback; changed to `async`. Updated `main.ts` call site to `await applySurfaceTextures(mapRoot)`. Budget: +3.1 MB, total dist ~14 MB (under 48 MB cap).
   - **13.1 Weapon textures.** Modified `tools/blender/build_weapons.py`: added `_make_noise_image()` (128×128 2-octave value noise) and `_add_detail_texture()` (Image Texture → Mix node → Principled BSDF Base Color at ~8% strength). Each of 5 materials gets a unique-seeded noise map. Rebuilt `ak_viewmodel.glb` (449 KB) and `pistol_viewmodel.glb` (500 KB) with embedded textures. Verified via `@gltf-transform inspect`: `baseColorTexture` present on all materials.
@@ -2549,5 +2559,45 @@ Playtest follow-ups.
 
 Verified: pnpm typecheck + 210 tests green; walls/floor visibly distinct and
 lighter sand in-game via Claude-in-Chrome.
+
+Bada Bing!
+
+---
+
+## 2026-07-22: Fix networked player respawn position + death awareness
+
+Three fixes in `src/main.ts` for multiplayer player state management:
+
+1. **Fix A — `playerTeam` and `spawn` never set in networked team menu** (line 436): The
+   networked team-menu callback set `gameMode = 'playing'` and `playerAlive = false` but
+   never set `playerTeam` or updated the `spawn` Vector3. Both stayed at defaults (`'T'` /
+   `T_SPAWN`). Now the callback sets `playerTeam = choice` and `spawn.set(...)` to the
+   correct team's spawn point, matching what `enterGame()` does in the single-player path.
+
+2. **Fix B — Client never learns about own death in networked mode** (line 514): The
+   `onSnapshot` handler only processed `EV_FIRE` events for muzzle flashes. `EV_KILL` was
+   completely ignored. Added a check: when `ev.tag === EV_KILL` and `ev.slot` matches the
+   player's own slot, the client now sets `playerAlive = false`, moves the spec cam to the
+   death eye position, tints the body, and spawns a ragdoll — the same death sequence the
+   single-player path does. `EV_KILL` imported from `./net/protocol`.
+
+3. **Fix C — `respawn()` overwrites server-authoritative position in networked mode**
+   (line 1068): The client's local round FSM triggers `respawn()`, which unconditionally
+   called `sim_reset_player(0, spawn, ...)`, blowing away any position the server's
+   snapshot reconciliation had set. Now the human position reset (copy spawn, sync body,
+   reset WASM sim) is guarded behind `!predictor || !netConn` — in networked mode, the
+   server's reconciliation path is trusted for positioning. Health/armor/ragdoll cleanup
+   still runs.
+
+Verified: `pnpm typecheck` clean, `pnpm test` 210/210 green.
+
+- **Fixed duplicate model spawning in multiplayer.** When connected to a server, both the
+  local bot models (`enemies` array) and the networked entity models (`remoteRoots`/snapshot
+  interpolation) were rendering simultaneously, creating two character meshes per slot.
+  Root cause: `main.ts` sim-tick loop (line 1330) and render loop (line 1605) unconditionally
+  ticked and rendered the 6 local bots even when a `predictor` was active. Fix: guard both
+  the sim-tick bot loop (`if (live && !predictor)`) and the render bot loop (`if (!predictor)`)
+  so local bot simulation and rendering are suppressed in networked mode, where the server
+  is authoritative for all entity positions.
 
 Bada Bing!
