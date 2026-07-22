@@ -500,6 +500,8 @@ spectators hit the 2/3 cap (4) a further connection is refused at *both* the but
 
 ## Phase 10 — Movement & interaction tuning (2–3 days)
 
+**Detailed implementation plan: `docs/plan-phase10-movement-tuning.md`** (increments 10.0–10.3, decisions, tests, ACC-018).
+
 Small, high-value feel fixes. Movement math is a port (`docs/source-movement.md`) — fixes here
 are **bugs against the spec or the input layer**, not re-tuning the formulas. Any golden-value
 change must change the doc in the same PR.
@@ -525,6 +527,8 @@ through an intact one.
 ---
 
 ## Phase 11 — Advanced bot AI: search & engage (1 week)
+
+**Detailed implementation plan: `docs/plan-phase11-bot-ai.md`** (increments 11.0–11.4, the AI dual-port tax, decisions, tests, ACC-019).
 
 Today bots cycle **fixed patrol waypoints** (`brain.patrol` in `src/ai/brain.ts` / the Rust port
 in `server/src/ai.rs`). That reads as scripted, not intelligent. This phase replaces scripted

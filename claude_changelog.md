@@ -2169,3 +2169,17 @@ joined. Now compares `round.winner` against the live `playerTeam`; when spectati
 (`gameMode !== 'playing'`) it shows a neutral `ROUND OVER   <team> WINS` instead of a bogus
 win/lose. `src/main.ts` only. `pnpm typecheck` clean. (T3: ACC-017 step 9 exercises the SP
 team switch.)
+
+---
+
+## 2026-07-21 — Phase 11 plan (advanced bot AI: search & engage)
+
+Wrote `docs/plan-phase11-bot-ai.md` and linked it from `plan_to_implement.md` (Phase 11), matching
+the Phase 9/10 detailed-plan pattern. Grounded in the code: found the AI is **dual-ported and
+already divergent** — SP runs `src/ai/brain.ts` (recast `findPath`), MP runs the authoritative
+`server/src/ai.rs`, which has **no pathfinding at all** (straight-line to goal, `ai.rs:232`). So the
+plan's spine is 11.0, a hand-authored waypoint graph + greedy hop for the server (deliberately NOT a
+Rust recast port — ponytail ceiling), feeding a shared `de_douglas.navnodes.json` both ports read.
+The rest (spread-out search replacing patrol, engage/pursuit routed through the graph, LOS-occlusion
+verify incl. props, give-up→search) is behaviour rework on the existing FSM, not new AI. Exit test →
+ACC-019. Plan doc only; no code changed.
