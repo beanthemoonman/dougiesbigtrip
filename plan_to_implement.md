@@ -6,7 +6,9 @@ a multiplayer deathmatch with an authoritative Rust server (Phase 6), ragdolls (
 a containerized deploy (Phase 8). Phases 9–14 then add the game-flow entry (team select /
 spectator / join gating), movement & interaction tuning, an advanced search-and-engage bot AI,
 a third-person fidelity + ragdoll redux, a real-texture asset refinement, and a final
-end-to-end hardening pass.
+end-to-end hardening pass. Phase 15 tags 1.0; Phases 16–20 then turn the demo into a deployed,
+multi-user product (configurable matches, Keycloak/Google auth, a database of record, and the
+entry/settings/admin screens around it).
 
 Each phase ends with a **demoable build** and an **exit test** you can actually perform.
 Do not start phase N+1 until phase N's exit test passes.
@@ -627,6 +629,131 @@ The final gate. Break it on purpose, in both modes, together.
 
 **Exit test:** A human and an agent each play full SP and MP sessions with no crash, no desync,
 no rubber-band, and no open bug on the list. `pnpm test` green with the new coverage.
+
+---
+
+## Phase 15 — Tag 1.0 (½ day)
+
+Phase 14's exit test passes → the single-player + multiplayer demo is feature-complete and
+hardened. Nothing new to build.
+
+- [ ] Confirm `pnpm test`, `pnpm typecheck`, and the Phase 14 ACC scripts are all green on `main`.
+- [ ] `git tag -a v1.0.0` and push the tag.
+
+**Exit test:** `v1.0.0` points at a commit whose build passes every gate above.
+
+---
+
+# Post-1.0: Configuration, Auth, Persistence, Screens
+
+Phases 16–20 come from the notebook feature notes (`docs/plan-post-1.0-config-auth.md`). They
+turn the demo into a deployed, multi-user product: configurable matches, Google login brokered
+through Keycloak, a database of record, and the menu/admin screens around it.
+
+**Deployment architecture** — one reverse proxy terminates HTTPS/WSS; everything else is plain
+HTTP behind it:
+
+```mermaid
+graph TD
+    User -->|https + wss| Proxy
+    Proxy -->|http| Client
+    Proxy -->|ws + http| Server
+    Proxy -->|http| Auth
+    Server <--> Auth
+    Server --> DB
+    Auth --> DB
+```
+
+Ordering note: the notebook's next-steps list is Configuration → Auth → Persistence → screens.
+Auth (Keycloak) and Persistence (its DB) are coupled — Keycloak *needs* the DB — so Phases 17–18
+land together even though they're numbered apart. Configuration (16) ships first because it's
+pure client/server work with no new infrastructure.
+
+---
+
+## Phase 16 — Configuration (1 week)
+
+Make match parameters data-driven and selectable, ahead of any screens or auth. Values flow
+through the existing game-setup path; no new services yet.
+
+Configurable scope:
+- **Map**, **player count** (bots + humans), capped at a max.
+- **Single-player:** bot count, map, rounds-to-win — chosen locally.
+- **Multiplayer:** which server to connect to.
+- **Server-side:** bot count, map, rounds-to-win — same knobs, applied authoritatively (the
+  admin surface for these arrives in Phase 20).
+
+- [ ] Typed config object (extend `src/game/` round-config, not scattered constants) with
+      validated bounds — reject over-max player counts at the boundary, SP and server both.
+- [ ] SP path reads config at match start (bot count / map / rounds-to-win).
+- [ ] MP client can target a chosen server address; server applies its configured knobs on start.
+
+**Exit test:** Start SP matches with different bot counts / rounds-to-win and see them honoured;
+point the MP client at a server started with a non-default config and observe those values in play.
+
+---
+
+## Phase 17 — Auth (1 week)
+
+Google login, brokered through **Keycloak** (its own service). App code never sees Google
+directly — it trusts Keycloak tokens.
+
+- [ ] Reverse proxy terminates HTTPS/WSS and routes to Client / Server / Auth (per the diagram).
+- [ ] Keycloak configured as an OAuth 2.0 broker to Google.
+- [ ] Admin capability gated by the Keycloak role **`role_admin`** (claim checked server-side, not
+      trusted from the client).
+- [ ] Server validates the Keycloak token on connect; unauthenticated users can't join.
+
+**Exit test:** A fresh user signs in with Google, lands authenticated; a user with `role_admin`
+is recognised as admin and one without is not — verified from the token server-side, not the UI.
+
+---
+
+## Phase 18 — Persistence (½–1 week)
+
+The database of record. Shares infrastructure with Phase 17 (Keycloak persists here too), so
+these two ship as a pair.
+
+DB holds:
+- **Users**
+- **Keycloak schema** (its own tables)
+- **Server configuration** (the Phase 16 knobs, made durable and admin-editable)
+
+- [ ] DB provisioned behind the proxy; Server and Auth both connect.
+- [ ] Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
+- [ ] Users row created/updated on first authenticated login.
+
+**Exit test:** Restart the stack — server config survives, a returning user is recognised from
+their stored record, Keycloak state persists.
+
+---
+
+## Phase 19 — Entry & Settings screens (1 week)
+
+The menu shell around the game. Plain DOM overlay (no React — see `CLAUDE.md`).
+
+**Entry screen:**
+- [ ] Title: **"Counter Douglas"**.
+- [ ] Top-right `Hello, {name} ▾` menu → **Settings**, **Logout** (name from the auth token).
+- [ ] Primary buttons: **Singleplayer**, **Multi-player** (wire to the Phase 16 config flows).
+
+**Settings screen:**
+- [ ] Left-nav sections: **Graphics**, **Game**, **Bindings**.
+
+**Exit test:** Signed-in user sees their name, opens Settings, moves between the three sections,
+and launches SP/MP from the entry buttons.
+
+---
+
+## Phase 20 — Admin screen (½ week)
+
+Server-admin surface for the Phase 16/18 knobs. Visible **only to `role_admin`**.
+
+- [ ] Admin screen exposes server bot count, map, rounds-to-win; writes persist (Phase 18).
+- [ ] Entirely hidden and server-refused for non-admins (gate on the token role, both sides).
+
+**Exit test:** A `role_admin` user changes the server's bot count / map / rounds-to-win, the
+change persists and takes effect; a non-admin cannot see or reach the screen.
 
 ---
 

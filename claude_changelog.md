@@ -2335,3 +2335,11 @@ was confirmed correct against `docs/source-movement.md`).
 a wall" (old code: h≈5.6 m/s pinned; fixed: →0). Spec updated: `docs/source-movement.md`
 gains a `categorizePosition()` ground-detection subsection. All 48 player TS tests + 17 sim
 Rust movement tests + typecheck green.
+
+## Phase 15 + post-1.0 planning (2026-07-22)
+- Added Phase 15 (tag v1.0.0) to plan_to_implement.md.
+- Translated notebook feature notes into Phases 16–20: Configuration, Auth (Keycloak/Google),
+  Persistence (DB), Entry & Settings screens, Admin screen. Included the reverse-proxy
+  architecture mermaid diagram and an ordering note (Auth+Persistence coupled via Keycloak's DB).
+- Updated the plan intro summary. No docs/plan-post-1.0-config-auth.md written yet (referenced as
+  the future detailed-plan home, per existing per-phase doc convention).
