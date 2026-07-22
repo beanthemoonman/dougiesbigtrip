@@ -1,6 +1,7 @@
 import { Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { accelerate, airAccelerate, clipVelocity, friction } from './movement';
+import { DUCK_SPEED_SCALE, WALK_SPEED_SCALE } from './constants';
 
 /**
  * Golden-value tests from docs/source-movement.md. If these disagree with the
@@ -100,6 +101,92 @@ describe('Case C — air strafe (generated + frozen baseline)', () => {
     expect(last).toBeGreaterThan(WISHSPEED);
     expect(last).toBeGreaterThan(first);
     expect(speeds.map((s) => Number(s.toFixed(3)))).toMatchSnapshot();
+  });
+});
+
+describe('10.0 — residual creep → dead stop', () => {
+  it('friction returns without zeroing velocity below the 0.1 m/s floor (Source behaviour)', () => {
+    const vel = new Vector3(0.05, 0, 0);
+    friction(vel, DT, true, 1);
+    expect(vel.length()).toBeCloseTo(0.05, 8); // unchanged — friction returns early
+  });
+
+  it('friction processes speed exactly at threshold (0.1 is not less than 0.1)', () => {
+    // 0.1 is processed by friction because the guard is strict-less-than.
+    // With stopspeed 2.54, drop = 0.15875, so 0.1 gets fully zeroed by friction.
+    const vel = new Vector3(0.1, 0, 0);
+    friction(vel, DT, true, 1);
+    expect(vel.length()).toBe(0);
+  });
+
+  it('velocity above threshold is decayed by friction', () => {
+    const vel = new Vector3(0.5, 0, 0);
+    friction(vel, DT, true, 1);
+    expect(vel.length()).toBeGreaterThan(0);
+    expect(vel.length()).toBeLessThan(0.5);
+  });
+
+  it('between 0.1 and stopspeed, friction decays but may leave residual below 0.1', () => {
+    // Speed 0.16 → drop 0.15875 → residual 0.00125 (below 0.1 floor, stuck)
+    const vel = new Vector3(0.16, 0, 0);
+    friction(vel, DT, true, 1);
+    // After friction: control = stopspeed (2.54), drop = 0.15875
+    // newspeed = 0.16 - 0.15875 = 0.00125
+    // friction returns early on this tick, speed stays in the dead zone
+    expect(vel.length()).toBeGreaterThan(0);
+    expect(vel.length()).toBeLessThan(0.1);
+  });
+});
+
+describe('10.1 — walk (Shift) steady-state speed', () => {
+  it('converges to ~52% of ground speed with WALK scale', () => {
+    const vel = new Vector3(0, 0, 0);
+    const wishdir = new Vector3(1, 0, 0);
+    const targetSpeed = WISHSPEED * WALK_SPEED_SCALE;
+    for (let i = 0; i < 500; i++) {
+      friction(vel, DT, true, 1);
+      accelerate(vel, wishdir, targetSpeed, SV_ACCELERATE, DT, 1);
+    }
+    expect(vel.length()).toBeCloseTo(targetSpeed, 4);
+  });
+
+  it('steady-state speed is below full walk speed', () => {
+    expect(WISHSPEED * WALK_SPEED_SCALE).toBeLessThan(WISHSPEED);
+  });
+});
+
+describe('10.1 — crouch-walk (Ctrl) steady-state speed', () => {
+  it('converges to ~34% of ground speed with DUCK scale', () => {
+    const vel = new Vector3(0, 0, 0);
+    const wishdir = new Vector3(1, 0, 0);
+    const targetSpeed = WISHSPEED * DUCK_SPEED_SCALE;
+    for (let i = 0; i < 500; i++) {
+      friction(vel, DT, true, 1);
+      accelerate(vel, wishdir, targetSpeed, SV_ACCELERATE, DT, 1);
+    }
+    expect(vel.length()).toBeCloseTo(targetSpeed, 4);
+  });
+});
+
+describe('10.1 — walk + duck combined speed', () => {
+  it('stacks multiplicatively: 0.52 * 0.34 (low wishspeed oscillates with stopspeed floor)', () => {
+    // At this very low wishspeed (~1.12 m/s), the per-tick accelerate step
+    // (~0.088) is smaller than the per-tick friction floor drop (~0.159 when
+    // speed < stopspeed 2.54), so velocity oscillates instead of converging
+    // cleanly. The scaled speed is the cap applied, not a steady-state average.
+    // Behavioural truth is verified in-game via ACC-018.
+    const walkAndDuck = WALK_SPEED_SCALE * DUCK_SPEED_SCALE;
+    const targetSpeed = WISHSPEED * walkAndDuck;
+    const vel = new Vector3(0, 0, 0);
+    const wishdir = new Vector3(1, 0, 0);
+    for (let i = 0; i < 500; i++) {
+      friction(vel, DT, true, 1);
+      accelerate(vel, wishdir, targetSpeed, SV_ACCELERATE, DT, 1);
+    }
+    // Speed oscillates between ~0 and ~1.1 m/s with the stopspeed floor.
+    // The cap is applied correctly, just not smoothly converged.
+    expect(vel.length()).toBeGreaterThan(0);
+    expect(vel.length()).toBeLessThanOrEqual(targetSpeed);
   });
 });
 

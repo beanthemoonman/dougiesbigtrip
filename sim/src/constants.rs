@@ -53,6 +53,10 @@ pub const VIEW_PUNCH_PER_MPS: f64 = 0.015; // rad of pitch dip per m/s of landin
 pub const MAX_VIEW_PUNCH: f64 = 0.12; // rad, clamp so hard falls don't whip the camera
 pub const VIEW_PUNCH_DECAY_RATE: f64 = 6.0; // 1/s, exponential-ish decay toward 0
 
+// Phase 10 movement-tuning constants.
+pub const WALK_SPEED_SCALE: f64 = 0.52; // ~52% of wishspeed while Shift is held & on ground
+pub const DUCK_SPEED_SCALE: f64 = 0.34; // Source DUCK speed multiplier; added to this doc in Phase 10
+
 // Surface friction (no per-material system yet — Phase 3 concern).
 pub const DEFAULT_SURFACE_FRICTION: f64 = 1.0;
 

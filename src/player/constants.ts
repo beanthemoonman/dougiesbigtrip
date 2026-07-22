@@ -53,3 +53,7 @@ export const GROUND_TRACE_DISTANCE = 0.05; // m, categorizePosition's downward p
 export const VIEW_PUNCH_PER_MPS = 0.015; // rad of pitch dip per m/s of landing impact speed
 export const MAX_VIEW_PUNCH = 0.12; // rad, clamp so hard falls don't whip the camera
 export const VIEW_PUNCH_DECAY_RATE = 6.0; // 1/s, exponential-ish decay toward 0
+
+// Phase 10 movement-tuning constants.
+export const WALK_SPEED_SCALE = 0.52; // ~52% of wishspeed while Shift is held & on ground
+export const DUCK_SPEED_SCALE = 0.34; // Source DUCK speed multiplier; added to this doc in Phase 10

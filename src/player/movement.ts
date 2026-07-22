@@ -9,6 +9,7 @@ import {
   DEFAULT_GROUND_SPEED,
   DUCKED_HALF_HEIGHT,
   DUCK_TRANSITION_TIME,
+  DUCK_SPEED_SCALE,
   EYE_HEIGHT_DUCKED,
   EYE_HEIGHT_STANDING,
   GRAVITY,
@@ -30,6 +31,7 @@ import {
   SV_STOPSPEED,
   VIEW_PUNCH_DECAY_RATE,
   VIEW_PUNCH_PER_MPS,
+  WALK_SPEED_SCALE,
 } from './constants';
 
 /**
@@ -422,7 +424,9 @@ export function tickMovement(ctx: MovementContext, state: PlayerState, input: Mo
 
   if (state.onGround) friction(state.velocity, dt, true, DEFAULT_SURFACE_FRICTION);
 
-  const wishspeed = Math.min(DEFAULT_GROUND_SPEED, SV_MAXSPEED);
+  let wishspeed = Math.min(DEFAULT_GROUND_SPEED, SV_MAXSPEED);
+  if (state.onGround && (input.buttons & Buttons.WALK)) wishspeed *= WALK_SPEED_SCALE;
+  if (state.onGround && (input.buttons & Buttons.DUCK)) wishspeed *= DUCK_SPEED_SCALE;
   if (state.onGround) {
     accelerate(state.velocity, wishDirScratch, wishspeed, SV_ACCELERATE, dt, DEFAULT_SURFACE_FRICTION);
   } else {
@@ -448,6 +452,16 @@ export function tickMovement(ctx: MovementContext, state: PlayerState, input: Mo
     state.viewPunch = Math.min(MAX_VIEW_PUNCH, state.viewPunch + impactSpeed * VIEW_PUNCH_PER_MPS);
   }
   state.viewPunch = Math.max(0, state.viewPunch - state.viewPunch * VIEW_PUNCH_DECAY_RATE * dt);
+
+  // Dead-stop check: if on ground, no wishdir input, and horizontal speed is
+  // bottled in the friction dead zone (speed < 0.1, where friction returns
+  // without touching), zero velocity to eliminate residual creep (Phase 10.0).
+  // Accelerate is blocked from pulling speed out of the dead zone when input IS
+  // held — this only triggers when the player has released all movement keys.
+  const hasInput = wishX !== 0 || wishZ !== 0;
+  if (state.onGround && !hasInput && state.velocity.length() < 0.1) {
+    state.velocity.set(0, 0, 0);
+  }
 
   // Keep the bookkeeping collider live for future systems (bots, hit detection).
   capsuleCenterFromFeet(state.position, STANDING_HALF_HEIGHT, PLAYER_RADIUS, colliderCenterScratch);

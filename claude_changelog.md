@@ -4,6 +4,19 @@ A running log of what Claude Code did in this repo, appended to at the end of ea
 
 ---
 
+## 2026-07-22
+
+- **Implemented Phase 10 — Movement & interaction tuning** (see `docs/plan-phase10-movement-tuning.md`):
+  - **10.0 Residual creep → dead stop.** The friction dead zone (`speed < 0.1` → return without zeroing) left a perpetual residual velocity anywhere in (0, 0.1) m/s after friction dropped below the floor. Added a dead-stop check in `tickMovement` (TS `movement.ts`, Rust `movement.rs`) that zeroes horizontal velocity when on ground, no wishdir input, and speed < 0.1 m/s. The pure friction function is untouched (golden tests still match Source behaviour); creep is eliminated at the movement level only when the player has released all keys. `source-movement.md` §Friction updated to document the friction floor and the dead-stop addition. T0 tests in `movement.test.ts` + `movement_wasm.test.ts`; T1 dead-stop world test in `movement_map.test.ts`; Rust creep tests in `movement.rs`.
+  - **10.1 Walk (Shift) + crouch-walk speed cap.** Added `Buttons.WALK` (bit 8) to both `input.ts` and `input.rs`. ShiftLeft/ShiftRight map to WALK in `KEY_TO_BUTTON`. Added `WALK_SPEED_SCALE` (0.52) and `DUCK_SPEED_SCALE` (0.34) constants. In `tickMovement`, `wishspeed` is scaled by 0.52 if WALK held & on ground, and by 0.34 if DUCK held & on ground (both stack multiplicatively). Shift/duck keys are swallowed via the existing preventDefault logic (keys in KEY_TO_BUTTON are catch-all blocked while pointer-locked). `source-movement.md` updated with duck scale line. T0 convergence tests in TS + WASM + Rust for walk-only, duck-only, and walk+duck (combined walk+duck ~1.12 m/s oscillates with the stopspeed floor — capped, not smoothly converged). ACC-018 covers Shift/Ctrl non-triggering browser shortcuts.
+  - **10.2 Breakable collision verify.** Added T1 world test in `movement_map.test.ts`: player blocked by a static box, collider disabled → player passes through. Confirmed existing `main.ts` codepath (`collider.setEnabled(false)` on prop break) is correct.
+  - **10.3 Crouch-jump onto crates.** Added T1 world test: duck-jump reaches crate-top height (0.7m); standard jump lifts but without duck-clearance. ACC-018 covers the in-game scenario.
+  - **WASM rebuild.** `wasm-pack build sim --target bundler --features wasm` → `rm -rf node_modules/.vite`. Cleared cache for Vite to pick up the updated Rust sim.
+  - **Docs.** `source-movement.md`: friction floor note updated (dead zone + dead-stop check), duck scale line added. ACC-018 written at `tests/acceptance/ACC-018-movement-tuning.md`. `plan_to_implement.md` Phase 10 marked complete.
+  - **Tests.** 204 TS tests, 39 Rust tests — all green. `pnpm typecheck` / `pnpm lint` / `pnpm test` / `cargo test` all pass.
+
+
+
 ## 2026-07-16
 
 - Implemented Phase 0 (Scaffold) from `plan_to_implement.md`:

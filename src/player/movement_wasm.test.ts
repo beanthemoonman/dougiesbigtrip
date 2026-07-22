@@ -135,3 +135,71 @@ describe('WASM — wishDirFromButtons', () => {
     expect(r[1]!).toBe(0);
   });
 });
+
+describe('WASM — 10.0 — residual creep (friction floor)', () => {
+  it('friction returns without zeroing below the 0.1 m/s floor', () => {
+    const r = sim_friction(0.05, 0, 0, DT, true, 1);
+    expect(Math.hypot(r[0]!, r[1]!, r[2]!)).toBeCloseTo(0.05, 8);
+  });
+
+  it('friction processes speed exactly at threshold (0.1 is not less than 0.1)', () => {
+    const r = sim_friction(0.1, 0, 0, DT, true, 1);
+    expect(r[0]!).toBe(0);
+    expect(r[1]!).toBe(0);
+    expect(r[2]!).toBe(0);
+  });
+
+  it('friction decays velocity above threshold', () => {
+    const r = sim_friction(0.5, 0, 0, DT, true, 1);
+    const speed = Math.hypot(r[0]!, r[1]!, r[2]!);
+    expect(speed).toBeGreaterThan(0);
+    expect(speed).toBeLessThan(0.5);
+  });
+
+  it('friction leaves a residual below floor', () => {
+    const r = sim_friction(0.16, 0, 0, DT, true, 1);
+    const speed = Math.hypot(r[0]!, r[1]!, r[2]!);
+    expect(speed).toBeGreaterThan(0);
+    expect(speed).toBeLessThan(0.1);
+  });
+});
+
+describe('WASM — 10.1 — walk/duck speed convergence', () => {
+  const WALK_SCALE = 0.52;
+  const DUCK_SCALE = 0.34;
+
+  it('walk speed converges to ~52%', () => {
+    const target = WISHSPEED * WALK_SCALE;
+    let [vx, vy, vz] = [0, 0, 0];
+    const wx = 1, wy = 0, wz = 0;
+    for (let i = 0; i < 500; i++) {
+      [vx, vy, vz] = wasm3(sim_friction(vx, vy, vz, DT, true, 1));
+      [vx, vy, vz] = wasm3(sim_accelerate(vx, vy, vz, wx, wy, wz, target, SV_ACCEL, DT, 1));
+    }
+    expect(Math.hypot(vx, vy, vz)).toBeCloseTo(target, 4);
+  });
+
+  it('duck speed converges to ~34%', () => {
+    const target = WISHSPEED * DUCK_SCALE;
+    let [vx, vy, vz] = [0, 0, 0];
+    const wx = 1, wy = 0, wz = 0;
+    for (let i = 0; i < 500; i++) {
+      [vx, vy, vz] = wasm3(sim_friction(vx, vy, vz, DT, true, 1));
+      [vx, vy, vz] = wasm3(sim_accelerate(vx, vy, vz, wx, wy, wz, target, SV_ACCEL, DT, 1));
+    }
+    expect(Math.hypot(vx, vy, vz)).toBeCloseTo(target, 4);
+  });
+
+  it('walk+duck stacks multiplicatively (oscillates, does not converge cleanly)', () => {
+    const target = WISHSPEED * WALK_SCALE * DUCK_SCALE;
+    let [vx, vy, vz] = [0, 0, 0];
+    const wx = 1, wy = 0, wz = 0;
+    for (let i = 0; i < 500; i++) {
+      [vx, vy, vz] = wasm3(sim_friction(vx, vy, vz, DT, true, 1));
+      [vx, vy, vz] = wasm3(sim_accelerate(vx, vy, vz, wx, wy, wz, target, SV_ACCEL, DT, 1));
+    }
+    const speed = Math.hypot(vx, vy, vz);
+    expect(speed).toBeGreaterThan(0);
+    expect(speed).toBeLessThanOrEqual(target);
+  });
+});

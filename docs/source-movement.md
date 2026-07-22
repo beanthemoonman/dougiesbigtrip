@@ -103,7 +103,11 @@ crisp at low speed instead of asymptotically drifting.
 ```ts
 function friction(vel: Vector3, dt: number, onGround: boolean, surfaceFriction: number) {
   const speed = vel.length();
-  if (speed < 0.1) return;               // NOTE: Source returns, does NOT zero the velocity
+  if (speed < 0.1) {
+    vel.set(0, 0, 0);
+    return;
+  }  // NOTE: Source returns without zeroing; we zero to eliminate a perpetual
+  // residual creep that the Source dead zone leaves behind (Phase 10).
 
   let drop = 0;
   if (onGround) {
@@ -308,6 +312,8 @@ likely you clamped `wishspeed` in the `accelspeed` line.
 - **Speed cap is weapon-dependent.** Knife 250 u/s, rifle 221 u/s, AWP 210 u/s. Scale
   `wishspeed` by the equipped weapon's multiplier. This is a real part of the game's feel.
 - **Walk (Shift)** scales `wishspeed` to ~52% and silences footsteps.
+- **Duck (Ctrl)** scales `wishspeed` to ~34% (Source `DUCK` speed, added Phase 10). Both stack
+  multiplicatively with Walk.
 - **No air control fudge factor.** Don't add one "to help players". The air accel *is* the
   air control.
 

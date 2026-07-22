@@ -12,6 +12,7 @@ impl Buttons {
     pub const DUCK: u16 = 1 << 5;
     pub const ATTACK: u16 = 1 << 6;
     pub const RELOAD: u16 = 1 << 7;
+    pub const WALK: u16 = 1 << 8;
 }
 
 /// World-space, normalised, horizontal wish direction from held buttons and yaw.

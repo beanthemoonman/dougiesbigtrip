@@ -9,6 +9,7 @@ use nalgebra::Vector3;
 use rapier3d::prelude::ColliderHandle;
 
 use crate::constants::*;
+use crate::input::Buttons;
 use crate::shapecast;
 use crate::world::SimWorld;
 
@@ -486,7 +487,13 @@ pub fn tick_movement(
         friction(&mut state.velocity, dt, true, DEFAULT_SURFACE_FRICTION);
     }
 
-    let wishspeed = DEFAULT_GROUND_SPEED.min(SV_MAXSPEED);
+    let mut wishspeed = DEFAULT_GROUND_SPEED.min(SV_MAXSPEED);
+    if state.on_ground && (buttons & Buttons::WALK) != 0 {
+        wishspeed *= WALK_SPEED_SCALE;
+    }
+    if state.on_ground && (buttons & Buttons::DUCK) != 0 {
+        wishspeed *= DUCK_SPEED_SCALE;
+    }
     if state.on_ground {
         accelerate(
             &mut state.velocity,
@@ -545,6 +552,15 @@ pub fn tick_movement(
             .min(state.view_punch + impact_speed * VIEW_PUNCH_PER_MPS);
     }
     state.view_punch = (0.0f64).max(state.view_punch - state.view_punch * VIEW_PUNCH_DECAY_RATE * dt);
+
+    // Dead-stop check: if on ground, no wishdir input, and speed is bottled in
+    // the friction dead zone (speed < 0.1), zero velocity to eliminate residual
+    // creep (Phase 10.0). Accelerate is blocked from pulling speed out when input
+    // IS held — this only triggers when the player has released all movement keys.
+    let has_input = wish_x != 0.0 || wish_z != 0.0;
+    if state.on_ground && !has_input && state.velocity.norm() < 0.1 {
+        state.velocity = Vector3::zeros();
+    }
 }
 
 #[cfg(test)]
@@ -679,6 +695,77 @@ mod tests {
                 "tick {i}: expected {expected}, got {actual:.3}"
             );
         }
+    }
+
+    #[test]
+    fn creep_friction_returns_below_floor() {
+        let mut vel = Vector3::new(0.05, 0.0, 0.0);
+        friction(&mut vel, DT, true, 1.0);
+        assert!((vel.norm() - 0.05).abs() < 1e-8); // unchanged — friction returns early
+    }
+
+    #[test]
+    fn creep_friction_processes_at_threshold() {
+        // 0.1 is NOT less than 0.1, so friction processes it.
+        // drops 0.15875 (stopspeed floor) → zeroes.
+        let mut vel = Vector3::new(0.1, 0.0, 0.0);
+        friction(&mut vel, DT, true, 1.0);
+        assert_eq!(vel.norm(), 0.0);
+    }
+
+    #[test]
+    fn creep_friction_decays_above_threshold() {
+        let mut vel = Vector3::new(0.5, 0.0, 0.0);
+        friction(&mut vel, DT, true, 1.0);
+        assert!(vel.norm() > 0.0);
+        assert!(vel.norm() < 0.5);
+    }
+
+    #[test]
+    fn creep_residual_below_floor() {
+        let mut vel = Vector3::new(0.16, 0.0, 0.0);
+        friction(&mut vel, DT, true, 1.0);
+        assert!(vel.norm() > 0.0);
+        assert!(vel.norm() < 0.1);
+    }
+
+    #[test]
+    fn walk_speed_converges() {
+        let wishdir = Vector3::new(1.0, 0.0, 0.0);
+        let target = WISHSPEED * WALK_SPEED_SCALE;
+        let mut vel = Vector3::zeros();
+        for _ in 0..500 {
+            friction(&mut vel, DT, true, 1.0);
+            accelerate(&mut vel, &wishdir, target, SV_ACCELERATE, DT, 1.0);
+        }
+        assert!((vel.norm() - target).abs() < 1e-4);
+    }
+
+    #[test]
+    fn duck_speed_converges() {
+        let wishdir = Vector3::new(1.0, 0.0, 0.0);
+        let target = WISHSPEED * DUCK_SPEED_SCALE;
+        let mut vel = Vector3::zeros();
+        for _ in 0..500 {
+            friction(&mut vel, DT, true, 1.0);
+            accelerate(&mut vel, &wishdir, target, SV_ACCELERATE, DT, 1.0);
+        }
+        assert!((vel.norm() - target).abs() < 1e-4);
+    }
+
+    #[test]
+    fn walk_plus_duck_speed_stacks() {
+        // Low wishspeed (~1.12 m/s) oscillates with the stopspeed floor.
+        // The cap is applied correctly but doesn't converge cleanly.
+        let wishdir = Vector3::new(1.0, 0.0, 0.0);
+        let target = WISHSPEED * WALK_SPEED_SCALE * DUCK_SPEED_SCALE;
+        let mut vel = Vector3::zeros();
+        for _ in 0..500 {
+            friction(&mut vel, DT, true, 1.0);
+            accelerate(&mut vel, &wishdir, target, SV_ACCELERATE, DT, 1.0);
+        }
+        assert!(vel.norm() > 0.0);
+        assert!(vel.norm() <= target);
     }
 }
 

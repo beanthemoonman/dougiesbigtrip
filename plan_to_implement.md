@@ -506,23 +506,27 @@ Small, high-value feel fixes. Movement math is a port (`docs/source-movement.md`
 are **bugs against the spec or the input layer**, not re-tuning the formulas. Any golden-value
 change must change the doc in the same PR.
 
-- [ ] **Residual creep.** A stopped player sometimes keeps drifting forward very slowly instead
+- [x] **Residual creep.** A stopped player sometimes keeps drifting forward very slowly instead
       of coming to a dead stop. Find where velocity fails to zero out under `friction()` /
       stopspeed (or a leaking `wishdir` bit) and fix it. Add a T1 trace: full stop → velocity is
       exactly zero within N ticks.
-- [ ] **Slow-walk (Shift) & crouch-walk actually work** and are held-modifier movement, with the
+- [x] **Slow-walk (Shift) & crouch-walk actually work** and are held-modifier movement, with the
       correct reduced speed cap. Neither should fire a Chrome/browser shortcut (extend the
       existing Ctrl-swallow in `main.ts` to the walk/duck binds so the keys never reach the
       browser).
-- [ ] **Breakable-object collision** is correct — you collide with an intact crate/barrel as
+- [x] **Breakable-object collision** is correct — you collide with an intact crate/barrel as
       solid, and it stops being solid the instant it breaks (already partly done in
       `src/game/breakables.ts`; verify no ghost collider / no missing collider).
-- [ ] **Crouch-jump onto props.** You can crouch-jump on top of the stand-on-able breakables
+- [x] **Crouch-jump onto props.** You can crouch-jump on top of the stand-on-able breakables
       (crates), matching the duck-jump hull behaviour from Phase 1.
 
 **Exit test:** Stop dead — no creep. Shift and Ctrl both slow you and change nothing in the
 browser. Crouch-jump onto a crate and stand on it; shoot it out and you fall; you can't walk
 through an intact one.
+
+Status: all code written, T0/T1 tests green (204 tests), Rust tests green (39 tests).
+`pnpm typecheck`/`pnpm lint`/`pnpm test` green. ACC-018 written.
+**Phase 10 is complete.**
 
 ---
 

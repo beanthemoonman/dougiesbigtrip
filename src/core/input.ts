@@ -13,6 +13,7 @@ export const Buttons = {
   DUCK: 1 << 5,
   ATTACK: 1 << 6,
   RELOAD: 1 << 7,
+  WALK: 1 << 8,
 } as const;
 
 const KEY_TO_BUTTON: Record<string, number> = {
@@ -28,6 +29,8 @@ const KEY_TO_BUTTON: Record<string, number> = {
   ControlLeft: Buttons.DUCK,
   ControlRight: Buttons.DUCK,
   KeyR: Buttons.RELOAD,
+  ShiftLeft: Buttons.WALK,
+  ShiftRight: Buttons.WALK,
 };
 
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
@@ -78,11 +81,12 @@ export function createInputManager(target: HTMLElement): InputManager {
     else if (e.code === 'KeyM' && document.pointerLockElement === target) state.teamMenuToggle = 1;
     const bit = KEY_TO_BUTTON[e.code];
     if (bit !== undefined) state.buttons |= bit;
-    // Duck is Ctrl, so holding it while pressing a movement/weapon key would fire
-    // Chrome shortcuts (Ctrl+W closes the tab, Ctrl+1 switches tabs). Swallow our
-    // mapped keys while in-game so they never reach the browser.
-    if ((bit !== undefined || e.code === 'Digit1' || e.code === 'Digit2') &&
-        document.pointerLockElement === target) {
+    // When pointer-locked the game owns the keyboard. Swallow every keydown so
+    // no browser shortcut fires — Ctrl+W (close tab), Ctrl+T (new tab),
+    // Ctrl+D (bookmark), Ctrl+N (new window), Ctrl+H (history), etc. The
+    // per-key check was too narrow; browsers handle many more shortcuts than
+    // we have game binds.
+    if (document.pointerLockElement === target) {
       e.preventDefault();
     }
   }
