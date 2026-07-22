@@ -768,7 +768,7 @@ are the same height-band placeholder as the bots (bots hit the player's torso fl
 
 ## 2026-07-18 (plan/rename update)
 
-- Renamed the project from `hl-demo` to **Counter Douglas Global Offensive**: `package.json`
+- Renamed the project from `hl-demo` to **Counter Douglas Globally Offended**: `package.json`
   name (slugified), `index.html` title, `src/main.ts` boot log, and the `CLAUDE.md` intro line.
 - Reworked `plan_to_implement.md`:
   - Inserted **Phase 4.5 — Art & asset refinement** between Phases 4 and 5 (de-lopside the map,

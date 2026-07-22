@@ -1,4 +1,4 @@
-# Counter Douglas Global Offensive
+# Counter Douglas Globally Offended
 
 [![CI](https://github.com/beanthemoonman/dougiesbigtrip/actions/workflows/ci.yml/badge.svg)](https://github.com/beanthemoonman/dougiesbigtrip/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)

@@ -31,7 +31,7 @@ export function createTeamMenu(
     'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);color:#dfe6ee;font:14px monospace;z-index:1000;';
 
   const title = document.createElement('div');
-  title.textContent = 'Counter Douglas Global Offensive';
+  title.textContent = 'Counter Douglas Globally Offended';
   title.style.cssText = 'font-size:22px;margin-bottom:6px;letter-spacing:2px';
   el.appendChild(title);
 

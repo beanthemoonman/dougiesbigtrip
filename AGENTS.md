@@ -4,7 +4,7 @@ Context for Claude Code working in this repo. Read this before making changes.
 
 ## What this is
 
-`Counter Douglas Global Offensive` — a browser FPS demo that imitates the look and feel of
+`Counter Douglas Globally Offended` — a browser FPS demo that imitates the look and feel of
 **Counter-Strike: Source** using only CC0/permissively-licensed assets. Started single-player
 vs. bots; a Rust deathmatch server (Phase 6) adds netcode later.
 
