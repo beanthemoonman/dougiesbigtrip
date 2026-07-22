@@ -2183,3 +2183,14 @@ Rust recast port — ponytail ceiling), feeding a shared `de_douglas.navnodes.js
 The rest (spread-out search replacing patrol, engage/pursuit routed through the graph, LOS-occlusion
 verify incl. props, give-up→search) is behaviour rework on the existing FSM, not new AI. Exit test →
 ACC-019. Plan doc only; no code changed.
+
+## Phase 12 planning (2026-07-22)
+- Wrote `docs/plan-phase12-thirdperson-ragdoll.md`: detailed implementation plan for third-person
+  fidelity + ragdoll (redux of Phase 7). Increments 12.0 (rig & weapon orientation), 12.1 (per-weapon
+  stances), 12.2 (third-person shooting feedback via a new `EV_FIRE` GameEvent tag), 12.3 (single-body
+  cosmetic ragdoll). Documented the two-surface tax (SP local bots vs. MP snapshot remotes), reuse map
+  (attachBotWeapon, vfx pools, GameEvent channel, Rapier collision groups), locked decisions, T0/T1/T2/T3
+  Definition of Done, ACC-020 exit test, and risk/deferred registers.
+- Linked the doc from `plan_to_implement.md` Phase 12 header (matching the Phase 9–11 convention).
+- Noted a deliberate divergence for 12.3 to resolve in the impl PR: ragdoll uses zero RNG (render-side,
+  fully determined by last pose + death velocity) rather than Phase 7's "driven off the seeded RNG" line.

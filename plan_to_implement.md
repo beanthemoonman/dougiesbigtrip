@@ -560,6 +560,8 @@ ever tracks or shoots you through it.
 
 ## Phase 12 — Third-person fidelity + ragdoll (redux of Phase 7) (1 week)
 
+**Detailed implementation plan: `docs/plan-phase12-thirdperson-ragdoll.md`** (increments 12.0–12.3, the two-surface tax, decisions, tests, ACC-020).
+
 Everything Phase 7 (ragdoll) called for, **plus** the third-person model work that makes other
 players read as players. Today the character models walk a plain walk with the gun hanging
 awkwardly off one hand, and other players show no shooting feedback.
