@@ -19,7 +19,6 @@ const navBytes = new Uint8Array(
   readFileSync(fileURLToPath(new URL('../../assets/maps/de_douglas.navmesh.bin', import.meta.url))),
 );
 
-/** A floor so the bot stays grounded during the standing engage tests. */
 function worldWithFloor() {
   const world = createWorld();
   addStaticBox(world, { x: 0, y: -0.5, z: -5 }, { x: 20, y: 0.5, z: 20 });
@@ -39,16 +38,14 @@ describe('brain FSM', () => {
     const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.normal);
     const rng = makeRng(1);
-    const target = new Vector3(0, 0.05, -5); // straight ahead, in the open
+    const target = new Vector3(0, 0.05, -5);
 
-    // No fire before the reaction time elapses.
     const reactionTicks = Math.ceil(DIFFICULTIES.normal.reactionTime / DT);
     for (let t = 0; t < reactionTicks - 1; t++) {
       expect(tickBrain(brain, world, nav, rng, target, true, DT).fire).toBe(false);
     }
     expect(brain.mode).toBe('engage');
 
-    // Fires within a short window after the delay (aim is basically on target).
     let fired = false;
     for (let t = 0; t < 32 && !fired; t++) {
       fired = tickBrain(brain, world, nav, rng, target, true, DT).fire;
@@ -58,7 +55,7 @@ describe('brain FSM', () => {
 
   it('never fires at a target it cannot see (wall between)', () => {
     const world = worldWithFloor();
-    addStaticBox(world, { x: 0, y: 1, z: -2.5 }, { x: 3, y: 2, z: 0.25 }); // wall
+    addStaticBox(world, { x: 0, y: 1, z: -2.5 }, { x: 3, y: 2, z: 0.25 });
     world.step();
     const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.hard);
@@ -68,10 +65,10 @@ describe('brain FSM', () => {
     for (let t = 0; t < 128; t++) {
       expect(tickBrain(brain, world, nav, rng, target, true, DT).fire).toBe(false);
     }
-    expect(brain.mode).toBe('idle'); // never acquired
+    expect(brain.mode).toBe('search');
   });
 
-  it('loses a target that dies mid-engage and gives up to idle', () => {
+  it('loses a target that dies mid-engage and gives up to search', () => {
     const world = worldWithFloor();
     world.step();
     const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
@@ -82,7 +79,6 @@ describe('brain FSM', () => {
     tickBrain(brain, world, nav, rng, target, true, DT);
     expect(brain.mode).toBe('engage');
 
-    // Target dies: no longer visible. Bot should reposition, then give up.
     const giveUpTicks = Math.ceil((DIFFICULTIES.easy.loseMemory + 1) / DT);
     let sawReposition = false;
     for (let t = 0; t < giveUpTicks; t++) {
@@ -90,16 +86,16 @@ describe('brain FSM', () => {
       if (brain.mode === 'reposition') sawReposition = true;
     }
     expect(sawReposition).toBe(true);
-    expect(brain.mode).toBe('idle');
+    expect(brain.mode).toBe('search');
   });
 
-  it('a heard sound switches an idle bot to investigate', () => {
+  it('a heard sound switches the bot to reposition (investigate the spot)', () => {
     const world = worldWithFloor();
     world.step();
     const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
     const brain = createBrain(bot, DIFFICULTIES.normal);
     hearSound(brain, new Vector3(0, 0.05, -5));
-    expect(brain.mode).toBe('investigate');
+    expect(brain.mode).toBe('reposition');
     expect(brain.lastKnown).not.toBeNull();
   });
 

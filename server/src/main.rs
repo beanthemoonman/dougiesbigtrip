@@ -31,20 +31,16 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 
 mod ai;
 mod game;
+mod nav_graph;
 
-// Bot patrol waypoints (de_douglas map, same as TS botDefs patrol routes).
-// Each bot is assigned one waypoint set.
-static PATROL_CT: &[(f64, f64, f64)] = &[
-    (-16.0, 0.05, 14.0), (-12.0, 0.05, 4.0), (-16.0, 0.05, 24.0),
-];
-static PATROL_T: &[(f64, f64, f64)] = &[
-    (-16.0, 0.05, -14.0), (-12.0, 0.05, -4.0), (-16.0, 0.05, -24.0),
-];
+// Bot patrol waypoints (de_douglas map) — replaced by nav_graph in Phase 11.
+// Each bot is assigned a start node from the navnode graph.
+// PATROL_CT/T remain here as spawn positions (feet coords) for each side;
+// the waypoint_routes are no longer used — bots pick graph nodes via spread-out search.
 
 #[derive(Clone, Copy)]
 struct BotSpawn {
     feet: [f64; 3],
-    waypoints: &'static [(f64, f64, f64)],
 }
 
 const DEFAULT_BIND: &str = "127.0.0.1:9876";
@@ -52,6 +48,7 @@ const MAX_SLOTS: usize = 6; // 3 T + 3 CT player slots (3v3 by default, all bot-
 const MAX_SPECTATORS: usize = 4; // ceil(2/3 * MAX_SLOTS) = ceil(4.0) = 4 → 10 total capacity
 const SEED: u32 = 1;
 const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
+const NAVNODES_JSON: &str = include_str!("../../assets/maps/de_douglas.navnodes.json");
 
 /// Phase 9 advisory capacity counters for the GET /status HTTP endpoint (Gate 1).
 /// Updated by the game loop; read by handle_conn before the WebSocket handshake.
@@ -119,6 +116,8 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
     let mut world = SimWorld::new();
     let spawn = map::load(&mut world, MAP_JSON);
     world.ensure_broad_phase_ready();
+    let nav_graph = nav_graph::NavGraph::from_json(NAVNODES_JSON);
+    let mut search_state = ai::SearchState::new(nav_graph.node_count());
 
     let mut slots: Vec<Slot> = (0..MAX_SLOTS)
         .map(|i| {
@@ -134,22 +133,18 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
             };
             world.sync_player_body(body_handle, collider_handle, s[0], s[1], s[2], false);
 
-            let waypoints: &'static [(f64, f64, f64)] = if team_ct {
-                PATROL_CT
-            } else {
-                PATROL_T
-            };
-            let bot = Some(ai::Bot::new(waypoints));
+            let start_node = if team_ct { 7 } else { 0 }; // CT=node 7, T=node 0
+            let bot = Some(ai::Bot::new(start_node, i as u32 * 17));
 
             Slot {
-                occupied: true,       // filled by bot
+                occupied: true,
                 is_human: false,
                 out: None,
                 body_handle,
                 collider_handle,
                 player: PlayerState::new(s[0], s[1], s[2]),
                 bot,
-                bot_spawn: BotSpawn { feet: s, waypoints },
+                bot_spawn: BotSpawn { feet: s },
                 queue: VecDeque::new(),
                 last_buttons: 0,
                 last_yaw: 0.0,
@@ -197,12 +192,15 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 let is_live = round.phase == game::Phase::Live;
 
                 if round_ev == game::RoundEvent::Reset {
-                    for s in &mut slots {
+                    for (i, s) in slots.iter_mut().enumerate() {
                         if !s.occupied { continue; }
                         // Phase 9: a slot a human left is vacant (no bot, dead) until now —
                         // backfill a bot at round start (a bot never replaces a player mid-round).
                         if !s.is_human && s.bot.is_none() {
-                            s.bot = Some(ai::Bot::new(s.bot_spawn.waypoints));
+                            s.bot = Some(ai::Bot::new(
+                                if s.team_ct { 7 } else { 0 },
+                                i as u32 * 17,
+                            ));
                         }
                         let bf = s.bot_spawn.feet;
                         s.player.reset(bf[0], bf[1], bf[2]);
@@ -229,6 +227,46 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                     .map(|s| if s.occupied { Some(s.player.position) } else { None })
                     .collect();
                 let alive: Vec<bool> = slots.iter().map(|s| s.alive).collect();
+
+                // Build teammate positions per slot (owned, for bot AI).
+                // Each entry: positions of alive same-team members (excl. self).
+                let teammate_positions: Vec<Vec<nalgebra::Vector3<f64>>> = (0..MAX_SLOTS)
+                    .map(|idx| {
+                        let slot = &slots[idx];
+                        if !slot.occupied || !slot.alive {
+                            return Vec::new();
+                        }
+                        let mut tm: Vec<nalgebra::Vector3<f64>> = Vec::new();
+                        for (oidx, other) in slots.iter().enumerate() {
+                            if oidx == idx { continue; }
+                            if !other.occupied || !other.alive { continue; }
+                            if other.team_ct != slot.team_ct { continue; }
+                            tm.push(other.player.position);
+                        }
+                        tm
+                    })
+                    .collect();
+
+                // Build teammate goal nodes per slot: each teammate's current
+                // path_goal_node, so bots avoid picking the same node (gentle divergence).
+                let teammate_goals: Vec<Vec<usize>> = (0..MAX_SLOTS)
+                    .map(|idx| {
+                        let slot = &slots[idx];
+                        if !slot.occupied || !slot.alive {
+                            return Vec::new();
+                        }
+                        let mut tm: Vec<usize> = Vec::new();
+                        for (oidx, other) in slots.iter().enumerate() {
+                            if oidx == idx { continue; }
+                            if !other.occupied || !other.alive { continue; }
+                            if other.team_ct != slot.team_ct { continue; }
+                            if let Some(ref b) = other.bot {
+                                tm.push(b.path_goal_node);
+                            }
+                        }
+                        tm
+                    })
+                    .collect();
 
                 for (_idx, slot) in slots.iter_mut().enumerate() {
                     if !slot.occupied { continue; }
@@ -257,6 +295,9 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                         }
                     } else if let Some(ref mut bot) = slot.bot {
                         if is_live {
+                            let tm_refs: Vec<&nalgebra::Vector3<f64>> =
+                                teammate_positions[_idx].iter().collect();
+                            let tm_goals: &[usize] = &teammate_goals[_idx];
                             let (buttons, yaw) = ai::tick_bot(
                                 bot,
                                 &world,
@@ -264,6 +305,11 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                                 slot.collider_handle,
                                 &positions,
                                 &alive,
+                                &nav_graph,
+                                &mut search_state,
+                                &tm_refs,
+                                tm_goals,
+                                server_tick,
                             );
                             slot.last_buttons = buttons;
                             slot.last_yaw = yaw as f32;

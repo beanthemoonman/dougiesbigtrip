@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-const BOT_MODES = ['idle', 'investigate', 'engage', 'reposition', 'dead'] as const;
+const BOT_MODES = ['search', 'engage', 'reposition', 'dead'] as const;
 
 describe('anim clip selection logic', () => {
   it('dead bot selects death and never walks/idles again', () => {
@@ -26,9 +26,9 @@ describe('anim clip selection logic', () => {
       return 'idle';
     }
 
-    expect(selectClip(2, true, 'idle')).toBe('walk');
-    expect(selectClip(5, true, 'idle')).toBe('walk');
-    expect(selectClip(0.51, true, 'patrol')).toBe('walk');
+    expect(selectClip(2, true, 'search')).toBe('walk');
+    expect(selectClip(5, true, 'search')).toBe('walk');
+    expect(selectClip(0.51, true, 'search')).toBe('walk');
   });
 
   it('standing still or slow selects idle', () => {
@@ -38,9 +38,9 @@ describe('anim clip selection logic', () => {
       return 'idle';
     }
 
-    expect(selectClip(0, true, 'idle')).toBe('idle');
-    expect(selectClip(0.4, true, 'idle')).toBe('idle'); // below threshold
-    expect(selectClip(0.5, true, 'idle')).toBe('idle'); // at threshold, not above
+    expect(selectClip(0, true, 'search')).toBe('idle');
+    expect(selectClip(0.4, true, 'search')).toBe('idle'); // below threshold
+    expect(selectClip(0.5, true, 'search')).toBe('idle'); // at threshold, not above
   });
 
   it('airborne bot is idle regardless of speed', () => {

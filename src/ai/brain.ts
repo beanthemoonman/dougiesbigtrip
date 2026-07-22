@@ -3,17 +3,15 @@
  * non-snapping aim (aim.ts) into behaviour, all driving the shared player
  * movement (bot.ts). States:
  *
- *   Patrol/Idle → Investigate → Engage → Reposition → (back) ; Dead is terminal.
+ *   Search → Engage → Reposition → (back) ; Dead is terminal.
  *
- * Engage stands and aims (Reposition does the moving), so bots don't run at you
- * spraying. Sight/LOS gates (perception) mean they lose you behind cover — that
- * plus a reaction delay + aim error + turn-rate cap is what makes them beatable
- * and not-free, never an aimbot. All randomness comes from the injected seeded
- * rng (determinism rule).
+ * Search replaces the old fixed patrol: bots pick nav-graph nodes that spread
+ * the squad across the map (shared spec with the Rust server). Engage stands
+ * and aims; Reposition paths to lastKnown via the nav graph.
  *
- * Phase 6.2: movement application (sim_tick) is the caller's responsibility.
- * The brain only returns the desired buttons+yaw; the caller feeds them to the
- * WASM sim and syncs state back into Bot.
+ * Phase 11: the shared goal-selection formula lives in navnodes.ts. Bots pick
+ * the same node across ports; TS routes to it via recast findPath (smooth),
+ * while the server routes via graph hops (exact).
  */
 import type { World } from '@dimforge/rapier3d-compat';
 import { Vector3 } from 'three';
@@ -21,86 +19,96 @@ import type { Rng } from '../core/rng';
 import { EYE_HEIGHT_STANDING } from '../player/constants';
 import { desiredYawPitch, onTarget, stepAim, type AimState } from './aim';
 import { botInput, type Bot } from './bot';
+import { Buttons } from '../core/input';
 import { findPath, type Nav } from './nav';
 import { canSee } from './perception';
+import { NAVNODES, nearestNode, atNode, SearchScore } from './navnodes';
 
-export type BotMode = 'idle' | 'investigate' | 'engage' | 'reposition' | 'dead';
+export type BotMode = 'search' | 'engage' | 'reposition' | 'dead';
 
-/** Per-difficulty aim/behaviour knobs. Lower = easier to beat. */
 export interface Difficulty {
-  /** Seconds after acquiring a target before the bot starts tracking/firing. */
   readonly reactionTime: number;
-  /** Aim turn-rate cap, rad/s. */
   readonly turnRate: number;
-  /** Aim scatter at the target, metres — bots miss by up to this. */
   readonly errorRadius: number;
-  /** Give up chasing a lost target after this long in Reposition (s). */
   readonly loseMemory: number;
 }
 
 export const DIFFICULTIES: Record<'easy' | 'normal' | 'hard', Difficulty> = {
-  easy: { reactionTime: 0.6, turnRate: 3.0, errorRadius: 0.6, loseMemory: 2 },
-  normal: { reactionTime: 0.35, turnRate: 6.0, errorRadius: 0.3, loseMemory: 4 },
+  easy: { reactionTime: 0.8, turnRate: 3.0, errorRadius: 0.6, loseMemory: 2 },
+  normal: { reactionTime: 0.5, turnRate: 6.0, errorRadius: 0.3, loseMemory: 4 },
   hard: { reactionTime: 0.18, turnRate: 10.0, errorRadius: 0.12, loseMemory: 6 },
 };
 
-const FIRE_TOL = 0.05; // rad — aim must be within this cone of the target to fire
+type CautionPhase = 'moving' | 'pausing';
+
+const FIRE_TOL = 0.05;
+const CAUTION_MOVE_TICKS = 64 * 5 / 2;
+const CAUTION_PAUSE_TICKS = 64 * 3 / 2;
+const CAUTION_JITTER = 64;
+const SCAN_RATE = 1.0;
+// In search mode, press FORWARD only 3 of every 4 ticks so bots roam at ~50-60%
+// of ground speed — matches the server's SEARCH_DUTY (ai.rs).
+const SEARCH_DUTY_ON = 3;
+const SEARCH_DUTY_PERIOD = 4;
 
 export interface BotBrain {
   readonly bot: Bot;
   readonly cfg: Difficulty;
   mode: BotMode;
   aim: AimState;
-  /** Counts down after acquiring; while > 0 the bot reacts but doesn't fire. */
   reactionTimer: number;
-  /** Time since LOS was last lost while repositioning (s). */
   lostTimer: number;
-  /** Last place the target was seen/heard; the goal when chasing. */
   lastKnown: Vector3 | null;
-  /** Aim-error offset, resampled each time a target is acquired. */
   errorOffset: Vector3;
-  /** Waypoints to wander when idle; cycled. Empty = stand still. */
-  patrol: Vector3[];
-  patrolIndex: number;
+  pathGoalNode: number;
+  currentNode: number;
+  cautionTimer: number;
+  cautionPhase: CautionPhase;
+  /** Deterministic per-bot tick offset for de-synchronising caution timers. */
+  readonly tickOffset: number;
 }
 
-export function createBrain(bot: Bot, cfg: Difficulty, patrol: Vector3[] = []): BotBrain {
+export function createBrain(bot: Bot, cfg: Difficulty): BotBrain {
+  const tickOffset = bot.wasmIndex * 17;
+  const baseMove = CAUTION_MOVE_TICKS + (tickOffset % CAUTION_JITTER);
+  // Start the goal at the bot's own node so pathGoalNode === currentNode on
+  // tick 1 forces an immediate search re-pick (matches server Bot::new).
+  const startNode = nearestNode(bot.position.x, bot.position.y, bot.position.z);
   return {
     bot,
     cfg,
-    mode: 'idle',
+    mode: 'search',
     aim: { yaw: bot.yaw, pitch: 0 },
     reactionTimer: 0,
     lostTimer: 0,
     lastKnown: null,
     errorOffset: new Vector3(),
-    patrol,
-    patrolIndex: 0,
+    pathGoalNode: startNode,
+    currentNode: startNode,
+    cautionTimer: baseMove,
+    cautionPhase: 'moving',
+    tickOffset,
   };
 }
 
-/** Kill the bot: freeze it in the terminal Dead state. */
 export function killBot(brain: BotBrain): void {
   brain.mode = 'dead';
 }
 
-/** A nearby sound (gunfire/footstep) the bot noticed — go look, unless engaged. */
 export function hearSound(brain: BotBrain, at: Vector3): void {
   if (brain.mode === 'dead' || brain.mode === 'engage') return;
   brain.lastKnown = at.clone();
-  brain.mode = 'investigate';
+  brain.mode = 'reposition';
+  brain.lostTimer = 0;
 }
 
 const eye = new Vector3();
 const aimPoint = new Vector3();
 const desired: AimState = { yaw: 0, pitch: 0 };
 
-/** Result of one brain tick — the caller applies movement via sim_tick. */
 export interface TickResult {
   fire: boolean;
-  /** WASM sim_tick buttons bitmask. */
   buttons: number;
-  /** WASM sim_tick yaw (radians). */
   yaw: number;
 }
 
@@ -109,15 +117,13 @@ function acquire(brain: BotBrain, rng: Rng, targetFeet: Vector3): void {
   brain.reactionTimer = brain.cfg.reactionTime;
   brain.lastKnown = targetFeet.clone();
   const r = brain.cfg.errorRadius;
-  brain.errorOffset.set((rng.next() - 0.5) * 2 * r, (rng.next() - 0.5) * 2 * r, (rng.next() - 0.5) * 2 * r);
+  brain.errorOffset.set(
+    (rng.next() - 0.5) * 2 * r,
+    (rng.next() - 0.5) * 2 * r,
+    (rng.next() - 0.5) * 2 * r,
+  );
 }
 
-/**
- * One AI tick. Perceives `targetFeet` (the player), updates the FSM, aims, and
- * synthesises a movement input. Returns whether the bot wants to fire this tick
- * plus the buttons+yaw to feed to sim_tick — the caller owns the actual shot
- * (hitscan/damage) and the WASM movement call.
- */
 export function tickBrain(
   brain: BotBrain,
   world: World,
@@ -126,6 +132,10 @@ export function tickBrain(
   targetFeet: Vector3,
   targetAlive: boolean,
   dt: number,
+  search?: SearchScore,
+  teammateFeet?: readonly Vector3[],
+  serverTick?: number,
+  teammateGoals?: readonly number[],
 ): TickResult {
   const { bot, cfg } = brain;
   if (brain.mode === 'dead') return { fire: false, buttons: 0, yaw: bot.yaw };
@@ -135,15 +145,32 @@ export function tickBrain(
 
   let fire = false;
 
+  // Update current node from position.
+  brain.currentNode = nearestNode(bot.position.x, bot.position.y, bot.position.z);
+  const reachedGoal = atNode(brain.pathGoalNode, bot.position.x, bot.position.y, bot.position.z);
+  if (reachedGoal && brain.mode === 'search' && search) {
+    // Arrival — lastVisited was already claimed on goal pick below.
+  }
+
   switch (brain.mode) {
-    case 'idle':
-    case 'investigate':
+    case 'search':
     case 'reposition': {
       if (sees) {
         acquire(brain, rng, targetFeet);
       } else if (brain.mode === 'reposition') {
         brain.lostTimer += dt;
-        if (brain.lostTimer >= cfg.loseMemory) brain.mode = 'idle';
+        const gaveUp = brain.lostTimer >= cfg.loseMemory;
+        const arrived = brain.lastKnown
+          ? (() => {
+              const ln = nearestNode(brain.lastKnown.x, brain.lastKnown.y, brain.lastKnown.z);
+              return brain.currentNode === ln ||
+                atNode(ln, bot.position.x, bot.position.y, bot.position.z);
+            })()
+          : false;
+        if (gaveUp || arrived) {
+          brain.mode = 'search';
+          brain.lastKnown = null;
+        }
       }
       break;
     }
@@ -160,9 +187,7 @@ export function tickBrain(
       break;
   }
 
-  // --- Act on the (possibly new) mode ---
   if (brain.mode === 'engage') {
-    // Stand and aim: clear any movement goal so botInput presses nothing.
     bot.path = [];
     bot.waypoint = 0;
     eye.set(bot.position.x, bot.position.y + EYE_HEIGHT_STANDING, bot.position.z);
@@ -180,47 +205,92 @@ export function tickBrain(
   }
 
   // Moving states: pick/refresh a goal, walk it.
-  const goal = pickGoal(brain, nav);
+  if (brain.mode === 'search') {
+    // --- Caution: stop-and-scan rhythm ---
+    brain.cautionTimer--;
+    if (brain.cautionTimer <= 0) {
+      if (brain.cautionPhase === 'moving') {
+        brain.cautionPhase = 'pausing';
+        brain.cautionTimer = CAUTION_PAUSE_TICKS + ((brain.tickOffset * 13) % CAUTION_JITTER);
+      } else {
+        brain.cautionPhase = 'moving';
+        brain.cautionTimer = CAUTION_MOVE_TICKS + ((brain.tickOffset * 7) % CAUTION_JITTER);
+      }
+    }
+
+    if (brain.cautionPhase === 'pausing') {
+      const scanDir = ((Math.floor((serverTick ?? 0) + brain.tickOffset) / 128) % 2 === 0) ? 1 : -1;
+      bot.yaw += scanDir * SCAN_RATE * dt;
+      brain.aim.yaw = bot.yaw;
+      return { fire: false, buttons: 0, yaw: bot.yaw };
+    }
+  }
+
+  const goal = pickGoal(brain, nav, search, teammateFeet ?? [], serverTick ?? 0, teammateGoals);
   if (goal) {
     bot.path = goal;
     bot.waypoint = 0;
   }
   const input = botInput(bot);
-  brain.aim.yaw = bot.yaw; // aim follows movement facing while roaming
-  return { fire: false, buttons: input.buttons, yaw: input.yaw };
+  let buttons = input.buttons;
+  if (brain.mode === 'search') {
+    const allowMove =
+      ((serverTick ?? 0) + brain.tickOffset) % SEARCH_DUTY_PERIOD < SEARCH_DUTY_ON;
+    if (!allowMove) buttons &= ~Buttons.FORWARD;
+  }
+  brain.aim.yaw = bot.yaw;
+  return { fire: false, buttons, yaw: input.yaw };
 }
 
-/**
- * Choose where a non-engaged bot walks. Investigate/Reposition head to
- * lastKnown; idle cycles the patrol route (or stands if there is none). Returns
- * a fresh path only when one is needed, else null (keep walking the current one).
- */
-function pickGoal(brain: BotBrain, nav: Nav): Vector3[] | null {
+function pickGoal(
+  brain: BotBrain,
+  nav: Nav,
+  search?: SearchScore,
+  teammateFeet?: readonly Vector3[],
+  serverTick?: number,
+  teammateGoals?: readonly number[],
+): Vector3[] | null {
   const { bot } = brain;
 
-  if ((brain.mode === 'investigate' || brain.mode === 'reposition') && brain.lastKnown) {
+  if (brain.mode === 'reposition' && brain.lastKnown) {
     if (bot.path.length === 0) {
       const p = findPath(nav, bot.position, brain.lastKnown);
       if (p.length > 1) return p;
-      if (brain.mode === 'investigate') {
-        brain.mode = 'idle';
-        brain.lastKnown = null;
-      }
+      brain.mode = 'search';
+      brain.lastKnown = null;
       return null;
     }
     if (bot.waypoint >= bot.path.length) {
-      brain.mode = 'idle';
+      brain.mode = 'search';
       brain.lastKnown = null;
     }
     return null;
   }
 
-  // Idle: cycle patrol points, or stand.
-  if (brain.patrol.length === 0) return null;
-  if (bot.waypoint >= bot.path.length) {
-    const next = brain.patrol[brain.patrolIndex % brain.patrol.length];
-    brain.patrolIndex++;
-    return next ? findPath(nav, bot.position, next) : null;
+  if (brain.mode === 'search') {
+    const reached = atNode(brain.pathGoalNode, bot.position.x, bot.position.y, bot.position.z)
+      || brain.currentNode === brain.pathGoalNode;
+    if (reached) {
+      const teammateCoords: [number, number, number][] = (teammateFeet ?? []).map(
+        (v) => [v.x, v.y, v.z] as [number, number, number],
+      );
+      const newGoal = (search ?? new SearchScore()).pickSearchNode(
+        brain.currentNode,
+        bot.position,
+        serverTick ?? 0,
+        teammateCoords,
+        teammateGoals,
+      );
+      // Claim the node so the next bot picks a different one.
+      if (search) search.lastVisited[newGoal] = serverTick ?? 0;
+      brain.pathGoalNode = newGoal;
+    }
+    const node = NAVNODES.nodes[brain.pathGoalNode];
+    if (node && bot.waypoint >= bot.path.length) {
+      return findPath(nav, bot.position, new Vector3(node[0], node[1], node[2]));
+    }
+    return null;
   }
+
   return null;
 }

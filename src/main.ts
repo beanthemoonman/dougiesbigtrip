@@ -14,6 +14,7 @@ import rifleUrl from '../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../assets/weapons/pistol_viewmodel.glb?url';
 import { createBot } from './ai/bot';
 import { createBrain, DIFFICULTIES, hearSound, killBot, tickBrain, type BotBrain } from './ai/brain';
+import { SearchScore, nearestNode } from './ai/navnodes';
 import { canSee } from './ai/perception';
 import { botShotLands } from './ai/aim';
 import { loadNav } from './ai/nav';
@@ -599,6 +600,8 @@ async function main(): Promise<void> {
   // Fixed seed: the sim stays reproducible for a recorded trace. core/rng.ts is
   // the only randomness allowed under src/.
   const rng = makeRng(1);
+  const searchState = new SearchScore();
+  let localTick = 0; // monotonic counter for the search-spread recency formula
   const shotDir = new Vector3();
   const shotOrigin = new Vector3();
   const hitNormal = new Vector3();
@@ -727,18 +730,18 @@ async function main(): Promise<void> {
   // one bot on that side is benched and the human takes its place. T bots patrol north
   // toward CT (mirror of the CT routes with z negated). Bots pick the nearest visible
   // ENEMY each tick (human + opposing bots), so both sides fight.
-  const botDefs: { team: Team; s: Vector3; patrol: Vector3[] }[] = [
-    { team: 'CT', s: new Vector3(-18, F, 25), patrol: [new Vector3(-16, F, 14), new Vector3(-12, F, 4), new Vector3(-16, F, 24)] },
-    { team: 'CT', s: new Vector3(-13, F, 26), patrol: [new Vector3(-8, F, 8), new Vector3(-4, F, 0), new Vector3(-10, F, 24)] },
-    { team: 'CT', s: new Vector3(-10, F, 24), patrol: [new Vector3(6, F, 12), new Vector3(14, F, 0), new Vector3(-10, F, 22)] },
-    { team: 'T', s: new Vector3(-18, F, -25), patrol: [new Vector3(-16, F, -14), new Vector3(-12, F, -4), new Vector3(-16, F, -24)] },
-    { team: 'T', s: new Vector3(-13, F, -26), patrol: [new Vector3(-8, F, -8), new Vector3(-4, F, 0), new Vector3(-10, F, -24)] },
-    { team: 'T', s: new Vector3(-10, F, -24), patrol: [new Vector3(6, F, -12), new Vector3(14, F, 0), new Vector3(-10, F, -22)] },
+  const botDefs: { team: Team; s: Vector3 }[] = [
+    { team: 'CT', s: new Vector3(-18, F, 25) },
+    { team: 'CT', s: new Vector3(-13, F, 26) },
+    { team: 'CT', s: new Vector3(-10, F, 24) },
+    { team: 'T', s: new Vector3(-18, F, -25) },
+    { team: 'T', s: new Vector3(-13, F, -26) },
+    { team: 'T', s: new Vector3(-10, F, -24) },
   ];
   // Tint teammates so they read apart from enemies at a glance (one shared CT
   // model). CT keep their baked colour; T get a warm tan.
   const T_TINT = new Color(0xc8a06a);
-  const enemies: Enemy[] = botDefs.map(({ team, s, patrol }) => {
+  const enemies: Enemy[] = botDefs.map(({ team, s }) => {
     const wasmIndex = sim_add_player(s.x, s.y, s.z);
     const bot = createBot(world, s, wasmIndex);
     const clone = cloneSkeleton(ctTemplateScene);
@@ -761,7 +764,7 @@ async function main(): Promise<void> {
     renderCtx.scene.add(root);
     return {
       team,
-      brain: createBrain(bot, DIFFICULTIES.normal, patrol),
+      brain: createBrain(bot, DIFFICULTIES.normal),
       root,
       anim: createBotAnim(clone, ctTemplateClips),
       spawn: s,
@@ -895,9 +898,13 @@ async function main(): Promise<void> {
       b.path = [];
       b.waypoint = 0;
       sim_reset_player(b.wasmIndex, e.spawn.x, e.spawn.y, e.spawn.z);
-      e.brain.mode = 'idle';
+      e.brain.mode = 'search';
       e.brain.lastKnown = null;
       e.brain.reactionTimer = 0;
+      // Reseed the search goal to the spawn node so tick 1 re-picks immediately
+      // (else the bot walks to a stale cross-map goal from the previous round).
+      e.brain.currentNode = nearestNode(e.spawn.x, e.spawn.y, e.spawn.z);
+      e.brain.pathGoalNode = e.brain.currentNode;
       e.root.position.set(e.spawn.x, e.spawn.y, e.spawn.z);
       resetBotAnim(e.anim);
       // Sync the collider to the spawn position now. Without this
@@ -1011,6 +1018,8 @@ async function main(): Promise<void> {
       // The overview camera is driven by the render function below.
       if (gameMode === 'menu') return;
 
+      localTick++;
+
       // updateSceneQueries is called AFTER the human sync (so bots can see
       // the player at the current position) and AGAIN after the bot sync (so
       // the player's raycast sees bots at the current position). The BVH
@@ -1104,7 +1113,19 @@ async function main(): Promise<void> {
           const target = pickTarget(e);
           const targetAlive = target === 'human' ? playerAlive : target !== null && target.alive;
           const targetFeet = target === 'human' ? playerFeet : target ? target.brain.bot.position : playerFeet;
-          const { fire, buttons, yaw } = tickBrain(e.brain, world, nav, rng, targetFeet, targetAlive, fixedDt);
+          // Build teammate positions for spread-out search (same-team, excl. self).
+          const teammateFeet: Vector3[] = [];
+          const teammateGoals: number[] = [];
+          for (const other of enemies) {
+            if (other === e || !other.alive) continue;
+            if (other.team !== e.team) continue;
+            teammateFeet.push(other.brain.bot.position);
+            teammateGoals.push(other.brain.pathGoalNode);
+          }
+          const { fire, buttons, yaw } = tickBrain(
+            e.brain, world, nav, rng, targetFeet, targetAlive, fixedDt,
+            searchState, teammateFeet, localTick, teammateGoals,
+          );
           // Apply WASM movement for this bot, then sync the TS kinematic body
           // so perception and hit-detection are up-to-date.
           const bs = sim_tick(e.brain.bot.wasmIndex, buttons, yaw);

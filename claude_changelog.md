@@ -2207,3 +2207,101 @@ ACC-019. Plan doc only; no code changed.
 - Linked the doc from `plan_to_implement.md` Phase 12 header (matching the Phase 9–11 convention).
 - Noted a deliberate divergence for 12.3 to resolve in the impl PR: ragdoll uses zero RNG (render-side,
   fully determined by last pose + death velocity) rather than Phase 7's "driven off the seeded RNG" line.
+
+## Phase 11 implementation (2026-07-22)
+- **11.0 — Server pathing foundation:** Created `assets/maps/de_douglas.navnodes.json` (13 nodes, 17
+  edges covering the full D-loop: spine corridor, curve, counter, both spawns). Created
+  `server/src/nav_graph.rs` — Rust NavGraph module with `nearest_node()`, `next_hop()` (BFS over edges),
+  `at_node()`, and 6 unit tests. Added `serde`/`serde_json` to `server/Cargo.toml`. Created
+  `src/ai/navnodes.ts` — TS mirror loading the same JSON, with `nearestNode()`, `atNode()`, and
+  `SearchScore` class (shared spread-out search formula). All 6 Rust tests pass.
+- **11.1 — Spread-out search:** Replaced fixed patrol with search-goal selection formula in both ports.
+  `SearchScore.pickSearchNode()` maximises `w1·min_distance_to_any_teammate + w2·ticks_since_visited`.
+  Tracked per-node `lastVisited` ticks (server-side global, TS-side local). Deleted the `PATROL_CT`/
+  `PATROL_T` constants, `Bot.waypoints`, and `waypoint_index` cycling. Removed `patrol` parameter from
+  `createBrain()` and `botDefs`. FSM mode names changed: `idle` → `search`, `investigate` removed.
+  `hearSound()` now sets mode to `reposition` (bot walks to the sound then times out back to search).
+- **11.2 — Engage loop:** `Reposition` now routes through the nav graph on both ports. Server computes
+  `nearest_node(last_known)` → `path_goal_node` → `next_hop()` walk. TS does the same via `findPath`.
+  Engage/fire path untouched (aim model, reaction_timer, fire tolerance).
+- **11.3 — No wall-hacks:** Verified the `can_see` / `canSee` LOS raycast already occludes against all
+  map colliders including breakable props (they are part of the static collider set loaded from
+  `de_douglas.json`). The existing `brain.test.ts` "wall between" test already asserts no acquisition
+  through geometry. No gaps found — prop colliders are baked into the map JSON consumed by both ports.
+- **11.4 — Give-up timeout:** Extended the existing `LOSE_MEMORY` (server) / `cfg.loseMemory` (TS) to
+  also trigger on reaching the last-known node with no LOS re-acquisition. On give-up, `target_slot =
+  None`, `last_known = None`, falls back into spread-out search (not a camp). Both ports match.
+- Updated `main.ts` to create a `SearchScore`, build per-bot teammate positions, and pass them to
+  `tickBrain` along with a `localTick` counter. Updated `brain.test.ts` and `anim.test.ts` to match
+  the new mode names. Created `tests/acceptance/ACC-019-bot-search-engage.md` (T3 exit test, SP + MP).
+- TypeScript: 204 tests pass. Rust: 39 sim tests + 6 server tests pass. `pnpm typecheck` green.
+  `pnpm build` succeeds. `cargo build -p server` clean (0 warnings). Phase 11 is complete.
+
+## Phase 11 caution tuning (2026-07-22)
+- Bots felt too aggressive — rushing full-speed into killboxes with no tactical pacing. Added a caution
+  rhythm to search mode in both ports (Rust `ai.rs` + TS `brain.ts`): bots now alternate **move (~2.5 s)**
+  and **pause-and-scan (~1.5 s)** phases. During pauses, yaw rotates slowly (SCAN_RATE=1.0 rad/s) with
+  deterministic left/right panning. Bots also walk at reduced speed: server uses a 3/4 duty cycle on
+  FORWARD; TS pauses bypass `botInput()` entirely. Per-bot `tick_offset` de-synchronises the rhythm so
+  bots don't all pause in lockstep.
+- Tuned search-spread weight: `W_TEAMMATE_DIST` 1.0 → 3.0 (bots spread further from teammates).
+- Tuned normal reaction time: 0.35 s → 0.5 s (both ports); TS easy: 0.6 → 0.8.
+- Added `CautionPhase` enum + `caution_timer`/`caution_phase` fields to `Bot` (Rust) and `BotBrain`
+  (TS). Updated `Bot::new()` to accept `tick_offset`; wired slot index → `i * 17` through `main.rs`.
+- Updated `tests/acceptance/ACC-019-bot-search-engage.md` with A1b (caution pause expectations).
+- Documented all new constants in `docs/plan-phase11-bot-ai.md`. All 204 TS tests, 39 sim tests,
+  6 server tests green. Typecheck and build clean. Zero warnings.
+
+## Phase 11 routing fix: tactical node weights (2026-07-22)
+- **Root cause:** At spawn, all 3 bots computed identical search scores (same teammate positions,
+  same recency for all nodes). The farthest node from spawn (node 7, far end of spine) won every
+  time → all bots rushed the killbox in single file.
+- **Fix 1 — Per-node tactical weights:** Added a 4th element `weight` to each node in
+  `de_douglas.navnodes.json`. Spine corridor nodes (0,2,3,4,5,7) = 0.3 (killbox, discouraged);
+  transitions (1,6) = 1.0; curve/east flank nodes (8,9,10,11,12) = 3.0. New `W_TACTICAL = 10.0`
+  multiplier in search scoring: `score += W_TACTICAL * nodeWeight`. Curve nodes get +30 bonus,
+  spine nodes get +3 — a 27-point gap that overwhelms minor distance differences.
+- **Fix 2 — Claim node on goal PICK:** `lastVisited` is now updated when `pickSearchNode` selects
+  a goal (not on arrival). Since all bots tick the same frame, bot 1 picks node 12 → marks it
+  visited → bot 2 sees recency=0 for 12 → picks node 10 → bot 3 picks node 8 or 11. They
+  diverge to different curve nodes immediately instead of all piling onto the same furthest node.
+- Updated `server/src/nav_graph.rs`: `NavNodes.nodes` changed from `Vec<[f64; 3]>` to
+  `Vec<Vec<f64>>` to handle variable-length arrays; added `weights` field and `weight(idx)`
+  accessor. Updated `src/ai/navnodes.ts`: `RawGraph.nodes` → `readonly number[]`, added
+  `weights` mapping and `SearchScore.nodeWeight()`.
+- Updated `pick_search_node` (Rust) and `SearchScore.pickSearchNode` (TS) to include tactical
+  term. Updated `tick_bot` / `tickBrain` to claim `lastVisited` on goal pick (not wait for
+  arrival). ACC-019 A1 now expects "minimum 2 of 3 bots take the east curve path."
+- All 204 TS, 39 sim, 6 server tests green. Typecheck + build clean.
+
+## Phase 11 goal-conflict divergence (2026-07-22)
+- Even with tactical weights, bots on the same team still converged on identical paths because they
+  all share the same `lastVisited` array and scoring formula. Added `W_GOAL_CONFLICT = 20.0`: for
+  each teammate whose current `path_goal_node` matches node `i`, subtract 20 from the score. This
+  gently pushes bots to pick different nodes — not a hard exclusion, just a soft penalty so they
+  naturally diverge.
+- `pick_search_node` now accepts `teammate_goals: &[usize]` (Rust) / `teammateGoals?: readonly
+  number[]` (TS). Built per-slot in both `server/src/main.rs` (collecting `other.bot.path_goal_node`
+  from same-team slots) and `src/main.ts` (collecting `other.brain.pathGoalNode` from same-team enemies).
+- `tick_bot` and `tickBrain` signatures extended with the new parameter. All 204 TS, 39 sim, 6
+  server tests green. Typecheck + build clean (zero warnings).
+
+## Code review fixes (Phase 11 bot AI, uncommitted diff)
+
+Reviewed the uncommitted Phase 11 diff and fixed the findings:
+
+1. **[P0] TS bots ignored their spawn node.** `createBrain` hardcoded `pathGoalNode: 0`, so a
+   CT bot (spawning near node 7) would path all the way to node 0 (the T back spawn) before the
+   search-spread formula ever re-picked. Now `createBrain` seeds `pathGoalNode`/`currentNode` to
+   `nearestNode(bot.position)` so `pathGoalNode === currentNode` forces an immediate re-pick on
+   tick 1 — matching the server's `Bot::new(start_node, …)`. Also reseeded on round-reset in
+   `src/main.ts`.
+2. **Search duty-cycle divergence.** Server search bots press FORWARD only 3-of-4 ticks (~50-60%
+   speed); TS bots ran at full speed. Added the same `SEARCH_DUTY_ON/PERIOD` gate in `tickBrain`.
+3. **Overstated cross-port comment** in `navnodes.ts` softened — the two ports match by algorithm,
+   not lockstep (independent tick counters + physics).
+4. **Dead code** removed: empty `if at_node && mode == Search {}` block in `ai.rs`.
+5. **Redundant condition** simplified in `pickGoal` (`reached || pathGoalNode === currentNode` →
+   `reached`, since `reached` already covers it).
+
+All 204 TS tests, 6 nav_graph Rust tests green; typecheck + cargo build clean.

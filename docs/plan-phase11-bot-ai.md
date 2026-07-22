@@ -143,3 +143,27 @@ tracks or shoots you through it. Verify in SP and in a two-client MP session (se
   search + engage, not team play. A later AI pass.
 - Difficulty-scaled search aggression — reuse existing difficulty knobs; add a search-specific field
   only if a trace proves the single timing feels wrong.
+- Full per-weapon aim patterns (burst-fire, tap discipline, target-tracking — Phase 2 covers human
+  weapons only).
+
+## Phase 11.5 — Caution tuning (post-implementation)
+
+After the initial playtest, bots felt too aggressive — rushing full-speed between nodes into the
+killbox with no tactical pacing. The following constants were added to both ports to make search
+behaviour read as "cautious sweep" rather than "speed-run the waypoint graph":
+
+| Constant | Value | What |
+|---|---|---|
+| `CAUTION_MOVE_TICKS` | 160 (~2.5 s) | How long a search-mode bot walks before pausing |
+| `CAUTION_PAUSE_TICKS` | 96 (~1.5 s) | How long it stands still and scans before walking again |
+| `CAUTION_JITTER` | 64 (±1 s) | Per-bot tick offset so they don't pause in lockstep |
+| `SCAN_RATE` | 1.0 rad/s | Yaw rotation speed during the pause scan |
+| `SEARCH_DUTY_ON` / `_PERIOD` | 3 / 4 | FORWARD pressed only 3 of every 4 ticks in search mode |
+| `W_TEAMMATE_DIST` | 3.0 (was 1.0) | Weight on teammate-spread in search-goal scoring |
+| `W_RECENCY` | 2.0 (unchanged) | Weight on avoiding recently-visited nodes |
+| `REACTION_TIME` | 0.5 s (was 0.35 s) | Server-side normal difficulty reaction time |
+| TS easy/normal reactionTime | 0.8 / 0.5 (was 0.6 / 0.35) | Matched to new server constant |
+
+The caution rhythm lives entirely in `ai.rs:search` and `brain.ts:search` — it does not affect
+Engage (stand + shoot) or Reposition (full-speed pursuit) modes. The stop-and-scan head turn uses
+`server_tick + tick_offset` to produce a deterministic left/right pan so replays stay identical.

@@ -1,0 +1,37 @@
+{
+  "_comment": "Hand-authored waypoint graph for server-side bot nav (Phase 11.0). Nodes placed so every edge has clear LOS between its endpoints — straight-line + collide-and-slide between adjacent nodes never snags. The graph covers the full D-loop: spine corridor, curve, counter, and both spawns. Seed points from the original PATROL_CT/T. Single source of truth: loaded by both Rust server (serde) and TS client (import). 13 nodes, symmetric across z=0. 'weight' biases search-goal selection: spine nodes (killbox) are low, curve/flank nodes are high.",
+  "nodes": [
+    [ -15, 0.05, -24, 0.3 ],
+    [  -8, 0.05, -18, 1.0 ],
+    [ -15, 0.05, -18, 0.3 ],
+    [ -15, 0.05,  -6, 0.3 ],
+    [ -15, 0.05,   6, 0.3 ],
+    [ -15, 0.05,  18, 0.3 ],
+    [  -8, 0.05,  18, 1.0 ],
+    [ -15, 0.05,  24, 0.3 ],
+    [   0, 0.05, -18, 3.0 ],
+    [   0, 0.05,  18, 3.0 ],
+    [   8, 0.05, -12, 3.0 ],
+    [   8, 0.05,  12, 3.0 ],
+    [  16, 0.05,   0, 3.0 ]
+  ],
+  "edges": [
+    [ 0, 1 ],
+    [ 1, 2 ],
+    [ 1, 8 ],
+    [ 2, 3 ],
+    [ 3, 4 ],
+    [ 4, 5 ],
+    [ 5, 6 ],
+    [ 6, 7 ],
+    [ 2, 8 ],
+    [ 5, 9 ],
+    [ 3, 10 ],
+    [ 4, 11 ],
+    [ 8, 10 ],
+    [ 9, 11 ],
+    [ 10, 11 ],
+    [ 10, 12 ],
+    [ 11, 12 ]
+  ]
+}

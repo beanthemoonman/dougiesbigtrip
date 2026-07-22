@@ -540,18 +540,18 @@ routes with an emergent **search ↔ engage** loop. The FSM, `lastKnown` pursuit
 perception already exist — this is a behavior rework on top of them, not a from-scratch AI. Bot AI
 runs server-side, so all of this lands in the Rust sim and is covered by T1 deterministic replays.
 
-- [ ] **Spread-out search (replaces fixed patrol).** Instead of cycling a hand-authored route,
+- [x] **Spread-out search (replaces fixed patrol).** Instead of cycling a hand-authored route,
       idle/searching bots pick nav goals that **spread the squad across the map** — bias toward
       unvisited/uncovered areas and away from where teammates already are — so they sweep for
       targets rather than conga-line a loop.
-- [ ] **Engage loop.** On acquiring a target, switch out of search into an engage loop: **shoot
+- [x] **Engage loop.** On acquiring a target, switch out of search into an engage loop: **shoot
       while the target is visible**, and when LOS is lost, **path to the last-known position** to
       re-acquire (the `lastKnown` machinery already exists — drive it from this loop).
-- [ ] **No wall-hacks (verify + harden).** Bots must not see through geometry. Perception already
+- [x] **No wall-hacks (verify + harden).** Bots must not see through geometry. Perception already
       does an LOS raycast (`src/ai/perception.ts`); confirm it occludes against **all** world
       colliders (incl. props) with no gaps, and add a T1 that puts a wall between bot and target
       and asserts no acquisition.
-- [ ] **Give-up timeout → back to search.** If a bot reaches the last-known position (or a short
+- [x] **Give-up timeout → back to search.** If a bot reaches the last-known position (or a short
       timer elapses) without re-acquiring, it **drops back into the spread-out search loop**
       rather than camping the spot.
 
@@ -559,6 +559,10 @@ runs server-side, so all of this lands in the Rust sim and is covered by T1 dete
 yourself: a bot engages and fires while it can see you; break LOS and it moves to where it last
 saw you; stay hidden and after a short beat it resumes searching. Standing behind a wall, no bot
 ever tracks or shoots you through it.
+
+Status: all code written, all tests green (204 TS, 39 sim, 6 server). ACC-019 written.
+Server-side nav via hand-authored waypoint graph (`de_douglas.navnodes.json`) loaded by both
+ports. **Phase 11 is complete.**
 
 ---
 
