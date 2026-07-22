@@ -1,7 +1,7 @@
 import type { Capsule, Collider, RigidBody, World } from '@dimforge/rapier3d-compat';
 import { Vector3 } from 'three';
 import { Buttons, wishDirFromButtons } from '../core/input';
-import { capsuleCast, capsuleOverlapsAnything } from '../physics/shapecast';
+import { capsuleCast, capsuleOverlapsAnything, rayCast } from '../physics/shapecast';
 import { createKinematicCapsule, makeCapsuleShape } from '../physics/world';
 import {
   AIR_WISHSPEED_CAP,
@@ -231,7 +231,15 @@ function horizontalDistSq(a: Vector3, b: Vector3): number {
   return dx * dx + dz * dz;
 }
 
+// Ray origin sits this far above the feet so a straight-down floor ray still
+// hits when the feet are a hair below the floor top (collide-and-slide can end
+// slightly penetrating).
+const GROUND_RAY_START = 0.05;
+
 function categorizePosition(ctx: MovementContext, shape: Capsule, position: Vector3, outNormal: Vector3): boolean {
+  // Primary: the full-hull footprint capsule swept down GROUND_TRACE_DISTANCE.
+  // This is what keeps you grounded on ledges/steps where only the capsule's
+  // edge overhangs floor.
   capsuleCenterFromFeet(position, shape.halfHeight, shape.radius, groundTraceCenterScratch);
   groundTraceDispScratch.set(0, -GROUND_TRACE_DISTANCE, 0);
   const fraction = capsuleCast(
@@ -241,9 +249,28 @@ function categorizePosition(ctx: MovementContext, shape: Capsule, position: Vect
     groundTraceDispScratch,
     outNormal,
     ctx.collider,
+    false,
   );
-  if (fraction === null) return false;
-  return outNormal.y >= GROUND_NORMAL_THRESHOLD;
+  if (fraction !== null && outNormal.y >= GROUND_NORMAL_THRESHOLD) return true;
+
+  // Fallback: a straight-down ray from just above the feet. When you stand flush
+  // against a wall, the footprint capsule grazes the wall's vertical face and
+  // reports it (horizontal normal) instead of the floor — onGround goes false,
+  // friction stops, and horizontal velocity gets pinned against the wall instead
+  // of bleeding out. A zero-radius ray from the centre can't touch a side wall,
+  // so it finds the actual floor below. Strictly additive: it can only rescue a
+  // false "in air", never take ground away.
+  groundTraceCenterScratch.set(position.x, position.y + GROUND_RAY_START, position.z);
+  groundTraceDispScratch.set(0, -1, 0);
+  const rayDist = rayCast(
+    ctx.world,
+    groundTraceCenterScratch,
+    groundTraceDispScratch,
+    GROUND_RAY_START + GROUND_TRACE_DISTANCE,
+    outNormal,
+    ctx.collider,
+  );
+  return rayDist !== null && outNormal.y >= GROUND_NORMAL_THRESHOLD;
 }
 
 /** Single straight sweep, capped at `displacement`'s length. Moves `position` in

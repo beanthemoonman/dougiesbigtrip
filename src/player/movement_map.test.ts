@@ -128,6 +128,29 @@ describe('movement vs greybox colliders', () => {
     expect(player.velocity.z).toBe(0);
   });
 
+  it('velocity bleeds to zero when sliding into a wall (no ground-detection stall)', () => {
+    // Regression: sliding flush against a wall used to make categorizePosition
+    // report the wall's horizontal normal instead of the floor below, so
+    // onGround went false, friction stopped, and horizontal velocity got PINNED
+    // (e.g. h≈5.6 m/s here) instead of decaying. The straight-down ray fallback
+    // finds the floor a side-grazing capsule misses. See docs/source-movement.md.
+    const world = createWorld();
+    buildMapColliders(world);
+
+    // (0,-13.5) slides +X straight into a wall on the real greybox. No input.
+    const spawn = new Vector3(0, 0.05, -13.5);
+    const ctx = createMovementContext(world, spawn);
+    const player = createPlayerState(spawn);
+    player.velocity.set(6.35, 0, 0);
+
+    for (let t = 0; t < 100; t++) {
+      tickMovement(ctx, player, { buttons: 0, yaw: 0 }, DT);
+    }
+
+    const hSpeed = Math.hypot(player.velocity.x, player.velocity.z);
+    expect(hSpeed).toBeLessThan(1e-4); // bled out, not pinned against the wall
+  });
+
   // --- 10.3 Crouch-jump ---
 
   it('duck-jump reaches above crate-top height', () => {

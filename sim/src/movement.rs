@@ -196,16 +196,43 @@ fn categorize_position(
         0.0, -GROUND_TRACE_DISTANCE, 0.0,
         &mut hit_normal,
         exclude,
-        true, // stop_at_penetration for ground probe
+        // stop_at_penetration=false: a wall the probe already touches shouldn't
+        // register as a downward-blocking floor (Source semantics).
+        false,
     );
-    match fraction {
-        Some(_) => {
+    if fraction.is_some() && hit_normal.y >= GROUND_NORMAL_THRESHOLD {
+        *out_normal = hit_normal;
+        return true;
+    }
+
+    // Fallback: a straight-down ray from just above the feet. When you stand
+    // flush against a wall, the footprint capsule grazes the wall's vertical
+    // face and reports it (horizontal normal) instead of the floor — on_ground
+    // goes false, friction stops, and horizontal velocity gets pinned against
+    // the wall instead of bleeding out. A zero-radius ray from the centre can't
+    // touch a side wall, so it finds the actual floor below. Strictly additive:
+    // it can only rescue a false "in air", never take ground away.
+    let ray_dist = shapecast::ray_cast(
+        &world.physics,
+        feet.x, feet.y + GROUND_RAY_START, feet.z,
+        0.0, -1.0, 0.0,
+        GROUND_RAY_START + GROUND_TRACE_DISTANCE,
+        &mut hit_normal,
+        exclude,
+    );
+    match ray_dist {
+        Some(_) if hit_normal.y >= GROUND_NORMAL_THRESHOLD => {
             *out_normal = hit_normal;
-            out_normal.y >= GROUND_NORMAL_THRESHOLD
+            true
         }
-        None => false,
+        _ => false,
     }
 }
+
+/// Ray origin sits this far above the feet so a straight-down floor ray still
+/// hits when the feet are a hair below the floor top (collide-and-slide can end
+/// slightly penetrating).
+const GROUND_RAY_START: f64 = 0.05;
 
 fn trace_straight(
     world: &SimWorld,

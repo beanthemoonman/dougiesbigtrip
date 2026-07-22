@@ -91,6 +91,23 @@ gravity before and half after (`StartGravity`/`FinishGravity`) for better integr
 is defensible; **pick one and put a comment saying which**, because switching later will
 subtly change jump arcs and invalidate the golden tests.
 
+### `categorizePosition()` — ground detection
+
+Two probes, in order; grounded if **either** reports a walkable floor (`normal.y >= 0.7`)
+within `GROUND_TRACE_DISTANCE` (0.05 m) below the feet:
+
+1. **Footprint capsule** — the player hull swept straight down. Keeps you grounded on ledges
+   and step edges where only the hull's edge overhangs floor. Cast with
+   `stopAtPenetration = false` so a wall the probe is already flush against is not mistaken for
+   a downward-blocking surface (Source semantics: a wall beside you doesn't block a down-trace).
+2. **Straight-down centre ray** (fallback, only if the capsule found no floor) — a zero-radius
+   ray from just above the feet. When you stand flush against a wall, the footprint capsule
+   grazes the wall's vertical face and returns *its* horizontal normal instead of the floor
+   below; `onGround` then goes false, friction stops, and horizontal velocity gets **pinned
+   against the wall instead of bleeding out**. The ray can't touch a side wall, so it finds the
+   real floor. Strictly additive — it can only rescue a false "in air", never remove ground.
+   Regression: `movement_map.test.ts` "velocity bleeds to zero when sliding into a wall".
+
 ---
 
 ## The functions

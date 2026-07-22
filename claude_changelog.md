@@ -2305,3 +2305,33 @@ Reviewed the uncommitted Phase 11 diff and fixed the findings:
    `reached`, since `reached` already covers it).
 
 All 204 TS tests, 6 nav_graph Rust tests green; typecheck + cargo build clean.
+
+## Ground-detection fix — horizontal velocity pinned against walls ("doesn't zero out")
+
+**Symptom (reported):** "Throughout the map, sometimes you get the Source feel and sometimes
+you keep sliding — velocity gets stuck along the friction curve before hitting zero."
+
+**Root cause:** `categorizePosition()`'s downward capsule probe returned the wall's horizontal
+normal (`normal.y ≈ 0 < 0.7`) when the player slid flush against a wall/prop, because a swept
+capsule grazes the wall's vertical face. That made `onGround = false`, so friction was skipped
+and horizontal velocity was **pinned** (e.g. 6.35 m/s retained indefinitely) instead of
+bleeding out. Position-dependent → "sometimes, throughout the map." Fuzzing 442 decelerations
+across the greybox found 20 such stalls, several holding full speed.
+
+**Fix** (mirrored in `src/player/movement.ts` and `sim/src/movement.rs`, WASM rebuilt + synced):
+- Primary footprint-capsule probe now casts with `stopAtPenetration = false` (a wall you're
+  flush against no longer counts as a downward-blocking floor — Source semantics).
+- Added a straight-down **centre-ray fallback**: if the capsule finds no floor, a zero-radius
+  ray from just above the feet finds the real floor a side-grazing capsule misses. Strictly
+  additive — can only rescue a false "in air", never remove ground. New const `GROUND_RAY_START`.
+- Fuzz stalls 20 → 3; the 3 residual cases are pathological wedges *inside* an angled wall's
+  footprint (full-speed run straight into an angled corner) — a separate collision-clipping
+  issue, not the reported symptom.
+
+**Not changed:** the accel/friction curve (the ~1 s momentum bleed is authentic Source and
+was confirmed correct against `docs/source-movement.md`).
+
+**Tests:** new T1 regression `movement_map.test.ts` "velocity bleeds to zero when sliding into
+a wall" (old code: h≈5.6 m/s pinned; fixed: →0). Spec updated: `docs/source-movement.md`
+gains a `categorizePosition()` ground-detection subsection. All 48 player TS tests + 17 sim
+Rust movement tests + typecheck green.
