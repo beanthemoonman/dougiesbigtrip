@@ -24,9 +24,8 @@ import { dirname, join } from 'node:path';
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '../../assets/maps/de_douglas.json');
 
 // docs/art-direction.md palette (hex ints).
-const CONCRETE = 0xa5a29b;
-const CONCRETE_DARK = 0x5e5c58;
-const SAND = 0xc9ae7c;
+const CONCRETE = 0xa5a29b; // floor only — the sole Concrete surface now
+const SAND = 0xe3d5b0; // pale beach-sand cream (walls)
 const WOOD = 0x7a5b3c;
 
 // Outer D. West spine wall at x=WALL_X, z in [-HALF_Z, +HALF_Z]; curve is a
@@ -67,9 +66,9 @@ const floor = { c: [0, -0.1, 0], s: [A, 0.2, HALF_Z * 2], color: CONCRETE, surfa
 
 // --- Perimeter walls (z=0 straight walls are self-symmetric) ------------------
 const westWall = { c: [WALL_X, WALL_H / 2, 0], s: [WALL_T, WALL_H, HALF_Z * 2], color: SAND, surface: 'Sandstone', ry: 0 };
-const innerWest = { c: [IN_X, WALL_H / 2, 0], s: [WALL_T, WALL_H, IN_HALF_Z * 2], color: CONCRETE_DARK, surface: 'Concrete', ry: 0 };
+const innerWest = { c: [IN_X, WALL_H / 2, 0], s: [WALL_T, WALL_H, IN_HALF_Z * 2], color: SAND, surface: 'Sandstone', ry: 0 };
 arcWall(WALL_X, A, HALF_Z, 8, SAND, 'Sandstone'); // outer curve
-arcWall(IN_X, IN_A, IN_HALF_Z, 7, CONCRETE_DARK, 'Concrete'); // inner curve (the hole)
+arcWall(IN_X, IN_A, IN_HALF_Z, 7, SAND, 'Sandstone'); // inner curve (the hole)
 
 // --- Spawn walls (cover in front of each spawn, doorway on the east side) ------
 push([-16, 2, 22], [12, 4, 0.5], SAND, 'Sandstone'); // spans x -22..-10, exit east
@@ -82,15 +81,15 @@ push([-16, 2, 22], [12, 4, 0.5], SAND, 'Sandstone'); // spans x -22..-10, exit e
 
 // --- West spine corridor (DENSE) — 3 staggered chokes down the direct lane -----
 // Choke A (~z=13, far-west low wall + crate against the inner wall).
-push([-18, 1, 13], [8, 2, 0.5], CONCRETE_DARK, 'Concrete');
+push([-18, 1, 13], [8, 2, 0.5], SAND, 'Sandstone');
 push([-12, 0.75, 13], [1.5, 1.5, 1.5], WOOD, 'Wood');
 push([-11, 2, 10], [0.6, 4, 0.6], SAND, 'Sandstone');
 // Choke B (~z=6, crate cluster + boost box on the far-west side).
 push([-19, 0.75, 6], [1.5, 1.5, 1.5], WOOD, 'Wood');
 push([-17.5, 0.75, 7], [1.5, 1.5, 1.5], WOOD, 'Wood');
-push([-14, 0.4, 6], [3, 0.8, 2.5], CONCRETE_DARK, 'Concrete');
+push([-14, 0.4, 6], [3, 0.8, 2.5], SAND, 'Sandstone');
 // Choke C (~z=2, low wall hugging the inner wall — gap on the far-west side).
-push([-12, 1, 2], [6, 2, 0.5], CONCRETE_DARK, 'Concrete');
+push([-12, 1, 2], [6, 2, 0.5], SAND, 'Sandstone');
 
 // --- North connector (rounds the top of the hole; links spine <-> arc) --------
 push([-1, 0.75, 19], [1.5, 1.5, 1.5], WOOD, 'Wood');

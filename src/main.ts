@@ -975,8 +975,10 @@ async function main(): Promise<void> {
   // Bug 4: fixed 3-minute match. When it expires the world freezes on a final
   // banner instead of looping into another round.
   const MATCH_TIME = 180; // s
+  const MATCH_RESTART_DELAY = 5; // s shown on the MATCH OVER banner before a fresh game
   let matchClock = MATCH_TIME;
   let matchOver = false;
+  let matchRestartTimer = 0; // counts down while matchOver, then startNewMatch()
   let playerAlive = false; // Phase 9: not alive until a team is chosen
   let health = 100;
   let armor = 100;
@@ -1112,6 +1114,21 @@ async function main(): Promise<void> {
     restoreBreakables();
   }
 
+  // Loop into a fresh game after a match ends: reset scores, the match clock,
+  // and the round FSM back to round 1 / freezetime, then respawn everyone.
+  function startNewMatch(): void {
+    matchClock = MATCH_TIME;
+    matchOver = false;
+    matchRestartTimer = 0;
+    round.phase = 'freezetime';
+    round.timer = DEFAULT_ROUND.freezetime;
+    round.round = 1;
+    round.score.t = 0;
+    round.score.ct = 0;
+    round.winner = null;
+    respawn();
+  }
+
   // Both weapons, welded to the eye on layer 1 (viewmodel pass, renderer.ts).
   // Each keeps its own rest pose (hand-tuned lower-right hold) and its own
   // ammo/recoil state that persists across switches, like CS. The inactive
@@ -1178,7 +1195,7 @@ async function main(): Promise<void> {
 
   // Centre-banner text for the current phase (empty during normal play).
   function bannerText(): string {
-    if (matchOver) return `MATCH OVER   T ${round.score.t} : ${round.score.ct} CT`;
+    if (matchOver) return `MATCH OVER   T ${round.score.t} : ${round.score.ct} CT   —   new game in ${Math.ceil(matchRestartTimer)}`;
     if (round.phase === 'freezetime') return `FREEZE  ${Math.ceil(round.timer)}`;
     if (round.phase === 'over') {
       if (gameMode !== 'playing') return `ROUND OVER   ${round.winner} WINS`;
@@ -1224,7 +1241,12 @@ async function main(): Promise<void> {
       // round.phase === 'live' if only live time should count.
       if (!matchOver) {
         matchClock -= fixedDt;
-        if (matchClock <= 0) { matchClock = 0; matchOver = true; }
+        if (matchClock <= 0) { matchClock = 0; matchOver = true; matchRestartTimer = MATCH_RESTART_DELAY; }
+      } else {
+        // Match over: hold the final banner for MATCH_RESTART_DELAY, then loop
+        // straight into a fresh game (scores + clock reset, everyone respawns).
+        matchRestartTimer -= fixedDt;
+        if (matchRestartTimer <= 0) startNewMatch();
       }
 
       prevView.position.copy(currView.position);

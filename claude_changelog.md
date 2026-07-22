@@ -2509,3 +2509,45 @@ skipped: no roughness/normal maps re-added — the baked lightmap carries lighti
 materials flatten to unlit, so diffuse is all that reads. Add when a lit surface needs them.
 
 Bada Bing!
+
+## 2026-07-22 — AK grip colour
+
+Changed AK pistol grip material from bakelite (reddish) to M_Wood_Grip (brown) in tools/blender/build_weapons.py; rebuilt ak_viewmodel.glb.
+
+Playtested via Claude-in-Chrome and found the grip (and every weapon part) was
+rendering as flat grey noise, not its material colour. Root cause: mat() routed
+base colour through an RGB→Mix(noise)→Base Color node graph for surface breakup,
+but the glTF exporter can't represent that graph — it dropped the colour,
+exporting baseColorFactor=white plus the grey noise as a baseColorTexture. So the
+grip→wood change (and gunmetal/steel/bakelite/polymer) were all invisible.
+Fixed by setting a plain baseColor value (deleted _make_noise_image /
+_add_detail_texture / _noise / _smooth_noise); rebuilt both viewmodels. Verified
+in-game: brown wood grip + handguard, dark gunmetal receiver, black steel barrel.
+Lost the subtle detail-noise breakup — worth it to get colours back; re-add via a
+baked texture if wanted.
+
+Bada Bing!
+
+## 2026-07-22 — walls≠floor + beach-sand walls + 5s match restart
+
+Playtest follow-ups.
+
+1. Walls/floor looked identical: the floor AND ~21 interior walls all used the
+   'Concrete' material (same texture/tint). Per user pick, kept the floor as the
+   sole Concrete surface and reassigned every interior concrete wall to Sandstone
+   in tools/maps/build_douglas.mjs (removed the now-unused CONCRETE_DARK). Regen'd
+   de_douglas.json, rebuilt de_douglas.glb + baked lightmap.exr, re-encoded
+   lightmap.ktx2.
+2. Beach-sand walls: sandstone read too dark/brown. The darkness lives in the
+   texture (avg 86/255), so brightened assets/tex/sandstone_diff.jpg (gamma lift,
+   avg→162) AND set the SAND tint to a pale beach-sand cream (0xc9ae7c→0xe3d5b0)
+   in the generator; rebuilt map. CREDITS notes the texture is a levels-adjusted
+   derivative (still CC0).
+3. Match restart: MATCH OVER used to freeze forever. Added MATCH_RESTART_DELAY=5s
+   and startNewMatch() in src/main.ts — the banner now counts down "new game in N"
+   then resets scores/clock/round FSM to round 1 and respawns everyone.
+
+Verified: pnpm typecheck + 210 tests green; walls/floor visibly distinct and
+lighter sand in-game via Claude-in-Chrome.
+
+Bada Bing!

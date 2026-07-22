@@ -21,5 +21,5 @@ One row per asset, added at the moment the asset is added. See `docs/licensing-a
 | assets/maps/de_douglas/lightmap.ktx2 | Original (UASTC-encoded from lightmap.exr via `pnpm assets:lightmap`) | Alexander Bean Apmann | CC0-1.0 | — | 2026-07-18 |
 | public/basis/basis_transcoder.{js,wasm} | Bundled with three.js (Basis Universal transcoder) | Binomial LLC / Khronos | Apache-2.0 | https://github.com/BinomialLLC/basis_universal | 2026-07-18 |
 | assets/tex/concrete_diff.jpg | Poly Haven (concrete_wall_003) | Poly Haven | CC0-1.0 | https://polyhaven.com/a/concrete_wall_003 | 2026-07-22 |
-| assets/tex/sandstone_diff.jpg | Poly Haven (large_sandstone_blocks) | Poly Haven | CC0-1.0 | https://polyhaven.com/a/large_sandstone_blocks | 2026-07-22 |
+| assets/tex/sandstone_diff.jpg | Poly Haven (large_sandstone_blocks), brightness/levels adjusted toward beach-sand | Poly Haven | CC0-1.0 | https://polyhaven.com/a/large_sandstone_blocks | 2026-07-22 |
 | assets/tex/wood_diff.jpg | Poly Haven (brown_planks_05) | Poly Haven | CC0-1.0 | https://polyhaven.com/a/brown_planks_05 | 2026-07-22 |
