@@ -624,20 +624,33 @@ The look pass Phase 4.5 deferred. Real CC0 textures, characters that read as sol
 destructible scenery, and a map that feels inhabited. Every asset gets a `CREDITS.md` row at
 add-time; budgets still hold (< 400 draw calls, < 60 MB total).
 
-- [ ] **Textures from Poly Haven.** Swap the procedural detail maps for photographic CC0 albedo/
+- [x] **Textures from Poly Haven.** Swap the procedural detail maps for photographic CC0 albedo/
       normal/roughness on the map materials and the weapon/prop/character models. Wiring stays as
       Phase 4.5 left it (`mat.map` swap); keep ≤ 4 map materials.
-- [ ] **De-floaty characters.** CT and T models read as **connected, solid bodies** — not real
+- [x] **De-floaty characters.** CT and T models read as **connected, solid bodies** — not real
       humans, but at least a coherent basic robot: limbs joined to torso, weight on the ground,
       no floating segments.
-- [ ] **More breakables, round-scoped respawn.** Add destructible props. Anything destroyed
+- [x] **More breakables, round-scoped respawn.** Add destructible props. Anything destroyed
       **respawns at round reset** (only if it was broken) — ties into the Phase 9 per-round reset.
-- [ ] **Map life.** Set-dressing (props, signage, decals, colour variation) so the space feels
+- [x] **Map life.** Set-dressing (props, signage, decals, colour variation) so the space feels
       lived-in rather than a greybox with textures.
 
 **Exit test:** Side-by-side against the Phase 4.5 build — surfaces read as real materials, the
 characters look like solid units at range, broken props are back next round, and the map reads as
 a place. Budgets still pass; re-verify on integrated graphics.
+
+**Status:** all code written, `pnpm typecheck`/`pnpm build`/`pnpm test` green (210 tests).
+ACC-021 written. **Phase 13 is substantively complete.**
+- Map textures: 3 Poly Haven CC0 texture sets (concrete_wall_003, large_sandstone_blocks,
+  brown_planks_05) at 2K, loaded by surfacetex.ts with procedural fallback.
+- Weapon textures: 5× 128² noise detail maps per gun, generated at Blender export time,
+  embedded in the .glb.
+- De-floaty characters: 9 joint spheres (shoulders, elbows, hips, knees, neck) bridge gaps
+  between rigid body-part boxes. 1566 tris per character (under 8K budget).
+- Breakables: 6 additional destructible placements, round-scoped respawn via restoreBreakables()
+  (re-clones from cached templates, restores colliders). T0 tests in breakables.test.ts.
+- Map life: spawn-area signs (CanvasTexture on PlaneGeometry), 5 additional scenery props,
+  per-placement colour tints on barrels/crates for variety.
 
 ---
 

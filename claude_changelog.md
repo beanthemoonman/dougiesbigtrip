@@ -6,6 +6,15 @@ A running log of what Claude Code did in this repo, appended to at the end of ea
 
 ## 2026-07-22
 
+- **Implemented Phase 13 — Asset refinement II: textures & liveliness** (see `docs/plan-phase13-asset-refinement.md`):
+  - **13.0 Map textures from Poly Haven.** Downloaded 3 CC0 texture sets via Blender MCP: `concrete_wall_003`, `large_sandstone_blocks`, `brown_planks_05` (2K JPG). Saved to `assets/tex/` and `public/tex/`. Rewrote `src/render/surfacetex.ts`: `applySurfaceTextures()` now loads real textures with procedural fallback; changed to `async`. Updated `main.ts` call site to `await applySurfaceTextures(mapRoot)`. Budget: +3.1 MB, total dist ~14 MB (under 48 MB cap).
+  - **13.1 Weapon textures.** Modified `tools/blender/build_weapons.py`: added `_make_noise_image()` (128×128 2-octave value noise) and `_add_detail_texture()` (Image Texture → Mix node → Principled BSDF Base Color at ~8% strength). Each of 5 materials gets a unique-seeded noise map. Rebuilt `ak_viewmodel.glb` (449 KB) and `pistol_viewmodel.glb` (500 KB) with embedded textures. Verified via `@gltf-transform inspect`: `baseColorTexture` present on all materials.
+  - **13.2 De-floaty characters.** Modified `tools/blender/build_characters.py`: added `_joint_sphere()` helper and 9 joint spheres (shoulders, elbows, hips, knees, neck) at skeletal pivot positions, skinned to parent bones. Updated `_find_bone()` for joint name mapping. Rebuilt `ct_player.glb` and `t_player.glb` (1566 tris, 405 KB each — up from ~700 tris, under 8K budget).
+  - **13.3 More breakables + round-scoped respawn.** Added `resetBrokenBreakables()` pure function to `src/game/breakables.ts` with T0 tests (3 new). Added `restoreBreakables()` to `main.ts`: re-clones broken props from cached `PropTemplate` map, recreates colliders, restores hp/broken flags. Called from `respawn()`. Added 6 more breakable placements (4 barrels, 2 crates). Updated `placeProps` return type to include `templates` map.
+  - **13.4 Map life: set-dressing.** Added `makeSign()`: canvas-textured quads with orange-bordered metal-plate signage. Placed "SPAWN" signs at T and CT spawn areas. Extended `PROP_PLACEMENTS` tuples with optional `tintHex` for per-placement colour variation (barrels get different rust shades, crates get wood tone variation). Added 5 extra scenery props (cones, jerry can). Updated `placeProps` and `restoreBreakables` to apply tints.
+  - **Docs & tests.** Created `docs/plan-phase13-asset-refinement.md` (decisions, increment plan, Poly Haven selections). Wrote ACC-021 acceptance script (`tests/acceptance/ACC-021-phase13-assets.md`). Updated `CREDITS.md` with 3 new Poly Haven texture entries. Updated `plan_to_implement.md`: all Phase 13 boxes ticked, status recorded.
+  - **Build.** `pnpm typecheck` / `pnpm build` / `pnpm test` all green (210 tests). Dist: 14 MB (under 48 MB cap).
+
 - **Implemented Phase 10 — Movement & interaction tuning** (see `docs/plan-phase10-movement-tuning.md`):
   - **10.0 Residual creep → dead stop.** The friction dead zone (`speed < 0.1` → return without zeroing) left a perpetual residual velocity anywhere in (0, 0.1) m/s after friction dropped below the floor. Added a dead-stop check in `tickMovement` (TS `movement.ts`, Rust `movement.rs`) that zeroes horizontal velocity when on ground, no wishdir input, and speed < 0.1 m/s. The pure friction function is untouched (golden tests still match Source behaviour); creep is eliminated at the movement level only when the player has released all keys. `source-movement.md` §Friction updated to document the friction floor and the dead-stop addition. T0 tests in `movement.test.ts` + `movement_wasm.test.ts`; T1 dead-stop world test in `movement_map.test.ts`; Rust creep tests in `movement.rs`.
   - **10.1 Walk (Shift) + crouch-walk speed cap.** Added `Buttons.WALK` (bit 8) to both `input.ts` and `input.rs`. ShiftLeft/ShiftRight map to WALK in `KEY_TO_BUTTON`. Added `WALK_SPEED_SCALE` (0.52) and `DUCK_SPEED_SCALE` (0.34) constants. In `tickMovement`, `wishspeed` is scaled by 0.52 if WALK held & on ground, and by 0.34 if DUCK held & on ground (both stack multiplicatively). Shift/duck keys are swallowed via the existing preventDefault logic (keys in KEY_TO_BUTTON are catch-all blocked while pointer-locked). `source-movement.md` updated with duck scale line. T0 convergence tests in TS + WASM + Rust for walk-only, duck-only, and walk+duck (combined walk+duck ~1.12 m/s oscillates with the stopspeed floor — capped, not smoothly converged). ACC-018 covers Shift/Ctrl non-triggering browser shortcuts.
@@ -2474,5 +2483,29 @@ forward, sights up. `pnpm typecheck` + 207 tests green. Bada Bing!
 skipped: a live third-person view / self-shadow while alive (no third-person camera exists);
 add when a TP/killcam mode lands. skipped: player walk/idle anim on the body (only ever seen
 as a frozen ragdoll corpse) — add a mixer if the body becomes visible while moving.
+
+Bada Bing!
+
+## 2026-07-22 — Phase 13 review pass (cleanup)
+
+Reviewed the Phase 13 asset/code work and fixed three issues, no behaviour change:
+- **Texture bloat.** Deleted 3 unused, uncredited `assets/tex/*_rough.png` roughness maps
+  (~7.6 MB — surfacetex only ever loads the diffuse `map`, never a `roughnessMap`) and the
+  duplicate `public/tex/*_diff.jpg` copies (~3 MB). `surfacetex.ts` now imports the 3 diffuse
+  JPGs via Vite `?url` (content-hashed into dist like every other asset) instead of hardcoded
+  `/tex/` public paths. Net ~10.6 MB removed from the repo.
+- **Dead tested code.** `resetBrokenBreakables()` (breakables.ts, T0-tested) was exported but
+  main.ts's `restoreBreakables()` re-implemented the same hp/broken reset inline, so the tested
+  function was never the one running. Wired the helper into `restoreBreakables()` — mesh/collider
+  rebuild stays in main.ts, the pure reset is now the tested path.
+- **Doc drift.** `docs/plan-phase13-asset-refinement.md` still specified embedding textures in
+  `de_douglas.glb` via Blender; the build actually loads them at runtime with a procedural
+  fallback and never re-exported the glb. Amended the "Texture delivery for map" decision and
+  the 13.0 increment to match what was built.
+
+typecheck + 210 tests + build green. dist 14 MB (< 48 MB budget).
+
+skipped: no roughness/normal maps re-added — the baked lightmap carries lighting and world
+materials flatten to unlit, so diffuse is all that reads. Add when a lit surface needs them.
 
 Bada Bing!

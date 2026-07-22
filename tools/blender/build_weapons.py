@@ -16,29 +16,113 @@ from mathutils import Vector, Euler
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(ROOT, "assets", "weapons")
-# Curves traced from reference photos via tools/refextract/outline.py. The source
-# photos live under assets/reference/ (gitignored — may be copyrighted); only the
-# extracted geometry (these JSONs) is committed here.
 CURVES = os.path.join(ROOT, "tools", "blender", "curves")
 
-# ---- materials -------------------------------------------------------------
+# ---- material detail textures -----------------------------------------------
 
-def mat(name, color, metallic, roughness):
+NOISE_SIZE = 128
+
+def _noise(seed, x, y):
+    """Simple hash noise [0,1] from 2D seed."""
+    h = seed
+    h = ((h * 1103515245 + x * 1935289 + y * 3266489917) & 0xFFFFFFFF)
+    h = (h ^ (h >> 13)) * 0x5bd1e995
+    h = h ^ (h >> 15)
+    return (h & 0xFFFF) / 65535.0
+
+def _smooth_noise(seed, x, y):
+    """2-octave smoothed noise [0,1]."""
+    s = 0
+    for o in range(2):
+        scale = 1 << o
+        sx = x * scale / NOISE_SIZE
+        sy = y * scale / NOISE_SIZE
+        ix, iy = int(sx), int(sy)
+        fx, fy = sx - ix, sy - iy
+        a = _noise(seed + o, ix, iy)
+        b = _noise(seed + o, ix + 1, iy)
+        c = _noise(seed + o, ix, iy + 1)
+        d = _noise(seed + o, ix + 1, iy + 1)
+        s += ((a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy) / (1 << o)
+    return s / 2.0
+
+def _make_noise_image(name, seed, scale=0.06):
+    """Create a Blender image with subtle value-noise detail, intended as a
+    low-strength colour mix so the material surface isn't perfectly flat."""
+    img = bpy.data.images.get(name)
+    if img:
+        bpy.data.images.remove(img)
+    img = bpy.data.images.new(name, NOISE_SIZE, NOISE_SIZE, alpha=False, float_buffer=False)
+    pixels = [0.0] * (NOISE_SIZE * NOISE_SIZE * 4)
+    for y in range(NOISE_SIZE):
+        for x in range(NOISE_SIZE):
+            n = _smooth_noise(seed, x, y)
+            v = 0.5 + (n - 0.5) * scale  # centre at 0.5 with small spread
+            o = (y * NOISE_SIZE + x) * 4
+            pixels[o] = v
+            pixels[o + 1] = v
+            pixels[o + 2] = v
+            pixels[o + 3] = 1.0
+    img.pixels = pixels
+    img.pack()
+    return img
+
+def _add_detail_texture(node_tree, image, mix_factor=0.08):
+    """Wire an Image Texture (detail noise) through a MixRGB (Overlay) into the
+    Principled BSDF's Base Color. Low mix_factor keeps the base hue dominant."""
+    bsdf = node_tree.nodes.get("Principled BSDF")
+    loc = bsdf.location
+
+    tex = node_tree.nodes.new("ShaderNodeTexImage")
+    tex.name = "DETAIL_TEX"
+    tex.image = image
+    tex.location = (loc[0] - 800, loc[1] + 100)
+
+    mix = node_tree.nodes.new("ShaderNodeMix")
+    mix.name = "DETAIL_MIX"
+    mix.data_type = "RGBA"
+    mix.blend_type = "MIX"
+    mix.inputs["Factor"].default_value = mix_factor
+    mix.location = (loc[0] - 400, loc[1] + 100)
+
+    # Route: Base Color socket → Mix A, detail tex → Mix B, Mix Result → BSDF Base Color
+    bc_input = bsdf.inputs["Base Color"]
+    old_link = bc_input.links[0] if bc_input.is_linked else None
+    if old_link:
+        node_tree.links.remove(old_link)
+
+    node_tree.links.new(tex.outputs["Color"], mix.inputs["B"])
+    node_tree.links.new(mix.outputs["Result"], bc_input)
+
+    if old_link:
+        node_tree.links.new(old_link.from_socket, mix.inputs["A"])
+    else:
+        # No prior link — set the base color on an RGB node and feed into A
+        rgb = node_tree.nodes.new("ShaderNodeRGB")
+        rgb.name = "DETAIL_RGB"
+        rgb.outputs[0].default_value = bsdf.inputs["Base Color"].default_value
+        rgb.location = (loc[0] - 800, loc[1] - 100)
+        node_tree.links.new(rgb.outputs["Color"], mix.inputs["A"])
+
+def mat(name, color, metallic, roughness, noise_seed, noise_scale=0.06, mix_factor=0.08):
     m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     m.use_nodes = True
     bsdf = m.node_tree.nodes.get("Principled BSDF")
     bsdf.inputs["Base Color"].default_value = (*color, 1.0)
     bsdf.inputs["Metallic"].default_value = metallic
     bsdf.inputs["Roughness"].default_value = roughness
+
+    noise_img = _make_noise_image(f"NOISE_{name}", noise_seed, noise_scale)
+    _add_detail_texture(m.node_tree, noise_img, mix_factor)
     return m
 
 def materials():
     return {
-        "gunmetal": mat("M_Gunmetal", (0.045, 0.045, 0.05), 1.0, 0.35),
-        "steel":    mat("M_Steel", (0.10, 0.10, 0.11), 1.0, 0.22),
-        "wood":     mat("M_Wood_Grip", (0.28, 0.13, 0.04), 0.0, 0.52),
-        "bakelite": mat("M_Bakelite", (0.24, 0.085, 0.028), 0.0, 0.40),
-        "polymer":  mat("M_Polymer", (0.02, 0.02, 0.025), 0.0, 0.45),
+        "gunmetal": mat("M_Gunmetal", (0.045, 0.045, 0.05), 1.0, 0.35, noise_seed=42, noise_scale=0.06),
+        "steel":    mat("M_Steel", (0.10, 0.10, 0.11), 1.0, 0.22, noise_seed=43, noise_scale=0.04),
+        "wood":     mat("M_Wood_Grip", (0.28, 0.13, 0.04), 0.0, 0.52, noise_seed=44, noise_scale=0.10),
+        "bakelite": mat("M_Bakelite", (0.24, 0.085, 0.028), 0.0, 0.40, noise_seed=45, noise_scale=0.08),
+        "polymer":  mat("M_Polymer", (0.02, 0.02, 0.025), 0.0, 0.45, noise_seed=46, noise_scale=0.06),
     }
 
 # ---- primitive helpers -----------------------------------------------------

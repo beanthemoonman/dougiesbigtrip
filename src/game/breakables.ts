@@ -47,3 +47,26 @@ export function damageProp(props: readonly (Breakable | null)[], i: number, dmg:
   }
   return broke;
 }
+
+/**
+ * Reset broken breakables to their starting hp, ready for a new round.
+ * Mutates `props[*].hp`/`broken`. Returns indices that were reset.
+ * Caller is responsible for re-creating meshes and colliders.
+ */
+export function resetBrokenBreakables(
+  props: (Breakable | null)[],
+  hpByUrl: Map<string, number>,
+  urlAt: (i: number) => string,
+): number[] {
+  const reset: number[] = [];
+  for (let i = 0; i < props.length; i++) {
+    const b = props[i];
+    if (!b || !b.broken) continue;
+    const url = urlAt(i);
+    const hp = hpByUrl.get(url);
+    b.hp = hp ?? 90;
+    b.broken = false;
+    reset.push(i);
+  }
+  return reset;
+}

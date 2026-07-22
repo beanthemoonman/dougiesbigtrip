@@ -92,12 +92,32 @@ def _box(name, center, size, material):
     bev.angle_limit = math.radians(40)
     return o
 
+def _joint_sphere(name, center, radius, material, segments=8, rings=6):
+    """Small sphere at a skeletal pivot to bridge gaps between rigid body-part boxes."""
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, location=center,
+                                          segments=segments, ring_count=rings)
+    o = bpy.context.active_object
+    o.name = name
+    o.data.materials.append(material)
+    return o
+
 def _find_bone(name):
     for bone_name, parts in BONE_MAP.items():
-        if name in parts:
+        if name in parts or any(name.startswith(p) for p in parts):
             return bone_name
     if "vest" in name:
         return "mixamorig:Spine2"
+    # Joint spheres: map to the parent bone (the bone whose head is the pivot)
+    if "joint_shoulder" in name:
+        return "mixamorig:LeftShoulder" if "l" in name else "mixamorig:RightShoulder"
+    if "joint_elbow" in name:
+        return "mixamorig:LeftArm" if "l" in name else "mixamorig:RightArm"
+    if "joint_hip" in name:
+        return "mixamorig:LeftUpLeg" if "l" in name else "mixamorig:RightUpLeg"
+    if "joint_knee" in name:
+        return "mixamorig:LeftUpLeg" if "l" in name else "mixamorig:RightUpLeg"
+    if "joint_neck" in name:
+        return "mixamorig:Neck"
     return "mixamorig:Hips"
 
 # ---- armature --------------------------------------------------------------
@@ -190,6 +210,30 @@ def _build_mesh(arm_obj, team, pal):
     boxes.append(_box("neck",   (0, -0.02, 1.53), (0.11, 0.11, 0.08), M["skin"]))
     boxes.append(_box("head",   (0, -0.01, 1.64), (0.19, 0.21, 0.22), M["skin"]))
     boxes.append(_box("helmet", (0, -0.01, 1.74), (0.21, 0.23, 0.10), M["gear"]))
+
+    # Joint spheres — bridge gaps between rigidly-rotated body-part boxes so
+    # the character reads as one connected unit rather than floating segments.
+    # Skinned to the parent bone (e.g., elbow sphere → upper-arm bone), same
+    # material as the connected parts. Positions = bone head locations from
+    # _build_armature().
+    JS = 0.065  # joint-sphere radius
+
+    for side, sx in [("r", 1), ("l", -1)]:
+        # Shoulder: sphere at upper-arm origin (ball joint)
+        boxes.append(_joint_sphere(f"joint_shoulder_{side}",
+                     (ARM_X * sx, -0.02, 1.30), JS, M["vest"]))
+        # Elbow: sphere at forearm origin
+        boxes.append(_joint_sphere(f"joint_elbow_{side}",
+                     (0.22 * sx, -0.02, 0.95), JS, M["suit"]))
+        # Hip: sphere at thigh origin
+        boxes.append(_joint_sphere(f"joint_hip_{side}",
+                     (0.10 * sx, -0.02, 0.95), JS * 1.1, M["suit"]))
+        # Knee: sphere at shin origin
+        boxes.append(_joint_sphere(f"joint_knee_{side}",
+                     (0.10 * sx, -0.02, 0.52), JS, M["suit"]))
+
+    # Neck joint — bridges neck box to head box
+    boxes.append(_joint_sphere("joint_neck", (0, -0.02, 1.56), 0.06, M["skin"]))
 
     # Apply bevel and skin each box to its bone
     for o in boxes:
