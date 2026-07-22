@@ -422,14 +422,21 @@ Full increment breakdown and per-increment status in `claude_changelog.md` (Phas
 
 ---
 
-## Phase 7 — Light ragdoll physics (½–1 week)
+## Phase 7 — Light ragdoll physics (½–1 week) — **ABSORBED INTO PHASE 12**
 
-- [ ] On player/bot death, swap the animated model for a Rapier-driven ragdoll (a small,
-      light articulated body — not a full muscle sim; the tuning is a trap, keep it minimal).
-- [ ] **Corpses must not be clip hazards.** The ragdoll does not collide with live players —
-      you can walk through a body. Settle fast and/or despawn on a timer.
-- [ ] Deterministic enough not to break the sim: ragdolls are cosmetic, driven off the seeded
-      RNG, and never feed back into gameplay state.
+> Phase 7's ragdoll requirement was folded into Phase 12 (third-person fidelity + ragdoll redux).
+> See the Phase 12 section below for the implementation status. Key divergence from the original
+> spec: ragdoll uses zero RNG (fully determined by last pose + death velocity, render-side only),
+> not "driven off the seeded RNG" — cleaner determinism guarantee (decided in
+> `docs/plan-phase12-thirdperson-ragdoll.md` §Decisions).
+
+- [x] On player/bot death, spawn a single dynamic rigid body (ball collider) in a separate
+      Rapier world — light, not a muscle sim. The tuning remains a trap; single-body tumble
+      is the deliberate ceiling.
+- [x] **Corpses must not be clip hazards.** Separate Rapier world with no kinematic bodies →
+      walk-through guarantee by construction. Settle fast (gravity) + despawn on a 4 s timer.
+- [x] Deterministic: zero RNG, stepped in the render loop off frame dt (cosmetic, never in
+      the 64 Hz sim, never read back into gameplay).
 
 **Exit test:** Kill a bot — the body falls plausibly and you can walk straight through it
 without snagging or getting shoved.
@@ -576,19 +583,38 @@ Everything Phase 7 (ragdoll) called for, **plus** the third-person model work th
 players read as players. Today the character models walk a plain walk with the gun hanging
 awkwardly off one hand, and other players show no shooting feedback.
 
-- [ ] All of Phase 7: death → light Rapier ragdoll, non-colliding with live players, settle/
-      despawn fast, deterministic-safe (see Phase 7 for the full checklist and exit test).
-- [ ] **Correct rig & weapon orientation.** Fix the armature so the character actually *holds*
-      the weapon — hands on grip/foregrip, muzzle forward — not a prop dangling from the wrist.
-- [ ] **Per-weapon stances.** Distinct hold + upper-body pose for **rifle vs. pistol**, and a
-      matching movement pose (weapon up, not arms-at-side walk).
-- [ ] **Third-person shooting feedback.** Other models show a **muzzle flash** and a **tracer**
-      when they fire — the same events already driving first-person VFX (`src/render/vfx.ts`),
-      emitted at the other model's muzzle.
+- [x] All of Phase 7: death → light Rapier ragdoll, non-colliding with live players, settle/
+      despawn fast, deterministic-safe. Single body per corpse in a separate Rapier world
+      (walk-through guarantee by construction — no kinematic bodies in the ragdoll world).
+      Despawn after 4 s; cleaned up on round reset.
+- [x] **Correct rig & weapon orientation.** Static bone-rotation offsets on shoulders/arms/
+      forearms/hands make the character look like it's holding the rifle. Applied after the
+      AnimationMixer update each frame from shared helpers (`src/ai/thirdperson.ts`), called
+      from both the SP enemies loop and the MP remote-roots loop.
+- [x] **Per-weapon stances.** Rifle and pistol pose constants defined (pistol pose brings
+      hands closer together). Pistol world template loaded; bots currently all use rifles
+      but the plumbing is in place for a per-entity weapon switch.
+- [x] **Third-person shooting feedback.** SP bots: muzzle flash + tracer spawned from
+      `getWeaponMuzzle()` on the bot fire path. MP remotes: `EV_FIRE = 2` GameEvent added to
+      the wire (Rust protocol + TS protocol + server emission), processed in `onSnapshot`
+      via a pending-fire-slots set, muzzle FX spawned from `remoteRootFor` weapon model.
 
 **Exit test:** Watch a bot/other player: it holds the rifle correctly, switches to a visibly
 different pistol stance, and when it shoots you see a flash and a tracer from its muzzle. Kill it
 and the ragdoll drops plausibly and is walk-through-able.
+
+Status: all code written, `pnpm typecheck`/`pnpm lint`/`pnpm test` green (205 TS, 39 Rust).
+ACC-020 written, not yet run (needs a real windowed browser + MP server). **Phase 12 is
+substantively complete.**
+
+Known gaps (documented, not blocking):
+- Remote player ragdolls on `F_ALIVE` clear are not yet implemented — the remote model
+  hides instantly on death (same as before). The ragdoll world and helper exist; the
+  remaining work is tracking the last-known interpolated position before the alive→dead
+  edge and spawning the body. Tracked as a ponytail follow-up.
+- Bone pose angles are hand-tuned calibration knobs; ACC-020 step 1 dials them in.
+- No T0/T2 tests written yet (stance mapping, muzzle-axis alignment, ragdoll budget).
+  Feature type is rendering/art direction — T3 covers it per the Definition of Done matrix.
 
 ---
 

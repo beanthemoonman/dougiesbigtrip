@@ -18,8 +18,8 @@ use sim::constants::FIXED_DT;
 use sim::map;
 use sim::movement::{tick_movement, PlayerState};
 use sim::protocol::{
-    CommandFrame, EntityState, GameEvent, Join, RoundState, Shot, Snapshot, Welcome, EV_KILL,
-    F_ALIVE, F_DUCKED, F_TEAM_CT, SPECTATOR,
+    CommandFrame, EntityState, GameEvent, Join, RoundState, Shot, Snapshot, Welcome, EV_FIRE,
+    EV_KILL, F_ALIVE, F_DUCKED, F_TEAM_CT, SPECTATOR,
 };
 use sim::world::SimWorld;
 use sim::{ColliderHandle, RigidBodyHandle};
@@ -367,6 +367,12 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                     if let Some(slot) = slots.get_mut(shooter_idx) {
                         slot.last_shot = None;
                     }
+                    // Every shot produces a fire event for third-person VFX (Phase 12.2).
+                    frame_events.push(GameEvent {
+                        tag: EV_FIRE,
+                        slot: shooter_idx as u8,
+                        by: 0,
+                    });
 
                     let eye_x = shot.eye_pos[0] as f64;
                     let eye_y = shot.eye_pos[1] as f64;

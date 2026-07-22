@@ -2197,16 +2197,81 @@ The rest (spread-out search replacing patrol, engage/pursuit routed through the 
 verify incl. props, give-up→search) is behaviour rework on the existing FSM, not new AI. Exit test →
 ACC-019. Plan doc only; no code changed.
 
-## Phase 12 planning (2026-07-22)
-- Wrote `docs/plan-phase12-thirdperson-ragdoll.md`: detailed implementation plan for third-person
-  fidelity + ragdoll (redux of Phase 7). Increments 12.0 (rig & weapon orientation), 12.1 (per-weapon
-  stances), 12.2 (third-person shooting feedback via a new `EV_FIRE` GameEvent tag), 12.3 (single-body
-  cosmetic ragdoll). Documented the two-surface tax (SP local bots vs. MP snapshot remotes), reuse map
-  (attachBotWeapon, vfx pools, GameEvent channel, Rapier collision groups), locked decisions, T0/T1/T2/T3
-  Definition of Done, ACC-020 exit test, and risk/deferred registers.
-- Linked the doc from `plan_to_implement.md` Phase 12 header (matching the Phase 9–11 convention).
-- Noted a deliberate divergence for 12.3 to resolve in the impl PR: ragdoll uses zero RNG (render-side,
-  fully determined by last pose + death velocity) rather than Phase 7's "driven off the seeded RNG" line.
+## Phase 12 implementation (2026-07-22)
+
+Implemented Phase 12 (third-person fidelity + ragdoll) per `docs/plan-phase12-thirdperson-ragdoll.md`.
+
+### 12.0 — Rig & weapon orientation
+- Created `src/ai/thirdperson.ts`: shared helpers for both SP-bot and MP-remote surfacess:
+  - `applyWeaponPose(root, weapon)`: static bone-rotation offsets on shoulders, arms, forearms,
+    and hands to make a character look like it's holding a weapon. Applied after the
+    AnimationMixer update each frame. Rifle and pistol pose constants defined.
+  - `getWeaponMuzzle(root)`: computes world-space muzzle position + direction from the
+    weapon model attached to the right-hand bone, for third-person VFX.
+- In `main.ts`: applied weapon pose after `driveBotAnim` in the bots tick loop and to remote
+  entities in the render loop. The two-surfpass tax (SP local bots + MP snapshot remotes) is
+  handled once in the shared module.
+
+### 12.1 — Per-weapon stances
+- Rifle and pistol pose deltas defined in `POSE_RIFLE`/`POSE_PISTOL` arrays (bone regex →
+  Euler offset). Pistol stance brings both hands closer together; rifle stance positions the
+  left hand on the foregrip.
+- Pistol world template (`pistolWorldTemplate`) loaded alongside the existing rifle template.
+  `attachBotWeapon` extended to accept a weapon type parameter.
+- ponytail: bone pose angles are hand-tuned calibration knobs; ACC-020 dials them in.
+
+### 12.2 — Third-person shooting feedback
+- **SP bots:** Muzzle flash + tracer spawned from `getWeaponMuzzle(e.root)` on the bot fire
+  path, reusing the existing pooled `vfx.muzzleFlash`/`vfx.tracer`.
+- **MP remotes:** Added `EV_FIRE = 2` GameEvent tag to both Rust (`sim/src/protocol.rs`) and
+  TS (`src/net/protocol.ts`) protocol definitions. Server (`server/src/main.rs`) emits an
+  `EV_FIRE` event for every shot (consumed from `last_shot`). Client collects pending fire
+  slots in `onSnapshot`, then spawns muzzle FX from the remote's weapon model in the render
+  loop using the interpolated entity yaw/pitch for tracer direction.
+
+### 12.3 — Single-body cosmetic ragdoll
+- Created `src/ai/ragdoll.ts`: a separate Rapier world (same static map colliders, no
+  kinematic bodies) so corpses can never clip or shove the living — the walk-through
+  guarantee by construction.
+  - `createRagdollWorld(mapCuboids())`: one dynamic-body world per map.
+  - `spawnRagdollBody(world, pos, vel, simTime)`: dynamic ball body at death position
+    with the bot's death-frame velocity.
+  - `ragdollExpired` / `despawnRagdollBody`: 4-second despawn timer.
+- Wired into `main.ts`: on bot death (SP, both bot-kills-bot and human-kills-bot paths),
+  replace the old `root.visible = false` with ragdoll spawning. In the render loop: for
+  alive bots, render normally; for dead bots with a ragdoll, drive the model root from
+  the ragdoll body's transform. On ragdoll expiration, despawn and hide the model. On
+  round reset (`respawn()`), discard all active ragdolls.
+- Ragdoll uses zero RNG: fully determined by last position + death velocity, stepped off
+  frame dt in the render path (never in the 64 Hz sim, never read back into gameplay).
+  This diverges from Phase 7's speculative "seeded RNG" line — the ragdoll-plan doc
+  already called out this deliberate divergence.
+
+### Protocol changes
+- `sim/src/protocol.rs`: added `EV_FIRE: u8 = 2`.
+- `src/net/protocol.ts`: added `EV_FIRE = 2`.
+- `server/src/main.rs`: imported `EV_FIRE`, pushes a `GameEvent { tag: EV_FIRE, slot, by:0 }`
+  for every shot consumed from `last_shot`.
+
+### Verification
+- `pnpm typecheck` green, `pnpm lint` green, `pnpm test` 205 TS + 39 Rust tests green.
+- `cargo check -p server` clean. `pnpm build` bundles clean.
+- ACC-020 written at `tests/acceptance/ACC-020-thirdperson-ragdoll.md` (T3, not yet run —
+  needs a real windowed browser + MP server).
+
+### Known gaps (ponytail follow-ups)
+- Remote player ragdolls on `F_ALIVE` clear not yet implemented (model hides instantly on
+  death as before). The ragdoll world and `spawnRagdollBody` helper exist; the remaining
+  work is tracking the last-known interpolated position before the alive→dead edge.
+- No T0/T2 tests yet (stance mapping, muzzle-axis alignment, ragdoll budget); rendering/art
+  direction is T3-coverable per the DoD matrix.
+- Bone pose angles need ACC-020 step 1 visual calibration.
+
+### Files
+- New: `src/ai/thirdperson.ts`, `src/ai/ragdoll.ts`,
+  `tests/acceptance/ACC-020-thirdperson-ragdoll.md`
+- Edited: `src/main.ts`, `src/net/protocol.ts`, `sim/src/protocol.rs`,
+  `server/src/main.rs`, `plan_to_implement.md`, `claude_changelog.md`
 
 ## Phase 11 implementation (2026-07-22)
 - **11.0 — Server pathing foundation:** Created `assets/maps/de_douglas.navnodes.json` (13 nodes, 17
@@ -2343,3 +2408,71 @@ Rust movement tests + typecheck green.
   architecture mermaid diagram and an ordering note (Auth+Persistence coupled via Keycloak's DB).
 - Updated the plan intro summary. No docs/plan-post-1.0-config-auth.md written yet (referenced as
   the future detailed-plan home, per existing per-phase doc convention).
+
+## Fix: third-person weapon-hold pose (Phase 12.1)
+
+Two problems in `applyWeaponPose`:
+
+1. **Arms waved wildly.** It premultiplied a per-bone Euler offset onto the live
+   bone quaternion each tick. For any arm bone the idle/walk clip doesn't re-key,
+   the AnimationMixer leaves last frame's value, so the offset accumulated
+   64×/sec → arms spun.
+2. **Gun not held/pointing outward.** The offset angles were hand-guessed and
+   didn't match this rig's bind pose, so the arms landed in broken positions and
+   the barrel pointed off-axis.
+
+Rewrote the pose as **absolute local bone quaternions**, solved from the
+`ct_player.glb` bind pose (spine chain is identity down to Spine2, so arm-bone
+world orientation is just shoulder×arm). The upper arms raise forward while each
+hand keeps its bind *world* orientation — the gun is parented to the hand, so
+preserving hand orientation keeps the barrel pointing forward (model-forward
+= −Z, confirmed from `aim.yaw = atan2(-dir.x,-dir.z)` with `root.rotation.y =
+yaw`) no matter how the arm is raised. Setting absolute (not premultiplying)
+also means the pose can't drift. Result: arms hold still, gun points outward,
+legs still walk. Shoulders/hands left to the clip except the hand orientation
+fix. Pistol pose aliases rifle for now (bots spawn rifle-only). Updated
+`src/ai/thirdperson.test.ts` (pose is non-trivial + stable across mixer noise).
+Bada Bing!
+
+## Fix: bot gun orientation + respawn tilt (tested live in Chrome)
+
+Diagnosed both by loading the game in Chrome and inspecting the live three.js
+scene (temporary `import.meta.env.DEV` `__dbg` hook, since removed).
+
+1. **Gun not pointing outward / upside-down.** The bot weapon's Euler offset
+   (`BOT_GUN_ROT`) was guessed against a wrong assumption ("barrel runs +X").
+   Measured the gun mesh bbox in attach-local space: the barrel actually runs
+   along local **Z** (1.055 m long axis), and `getWeaponMuzzle` already treats
+   −Z as the muzzle. Solved the correct attach rotation as
+   `inv(handWorld)·rootWorld` (bot yaw cancels → a constant), verified in-scene
+   that the barrel then points model-forward (−Z) and sights stay up (+Y).
+   Replaced `BOT_GUN_ROT` (Euler) with `BOT_GUN_QUAT` = `(-0.998, 0.0385,
+   0.0492, 0.0074)`. Coupled to the RightHand pose quat in `thirdperson.ts`.
+
+2. **Bots tilting.** Measured alive bots leaning 15–22°. Cause: the Phase 12.3
+   ragdoll drives `e.root.quaternion` directly on death (tumble), leaving
+   nonzero X/Z Euler; on respawn the render loop did `e.root.rotation.y = yaw`,
+   which overwrites *only* Y and keeps the corpse's tilt. Changed to
+   `e.root.rotation.set(0, yaw, 0)`. Verified live: alive-bot max tilt went
+   22° → 0°, ragdolls still tumble.
+
+Confirmed visually (side view): body upright, rifle held out front, barrel
+forward, sights up. `pnpm typecheck` + 207 tests green. Bada Bing!
+
+## Player third-person body (spawned model on death)
+- Added a local-player CT body clone (`playerBody` in src/main.ts), mirroring the bot
+  setup: cloned skeleton, flattened materials, rifle attached, weapon-hold pose applied
+  once (no mixer drives it).
+- Single-player is first-person, so the body is hidden while alive (the FP camera sits
+  inside it) and shown only on the death cam: on combat death it gets a Rapier ragdoll via
+  the existing `spawnRagdollBody` path — same as bots — so the free-fly spectator watches
+  the corpse tumble. Despawns on the shared 4 s timer; cleared on respawn.
+- Team tint (`tintPlayerBody`): CT keeps the baked colour, T gets the bot tan tint,
+  applied at death from the live playerTeam.
+- typecheck + 207 tests green.
+
+skipped: a live third-person view / self-shadow while alive (no third-person camera exists);
+add when a TP/killcam mode lands. skipped: player walk/idle anim on the body (only ever seen
+as a frozen ragdoll corpse) — add a mixer if the body becomes visible while moving.
+
+Bada Bing!

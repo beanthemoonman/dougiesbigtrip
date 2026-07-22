@@ -220,6 +220,7 @@ export interface GameEvent {
 }
 
 export const EV_KILL = 1;
+export const EV_FIRE = 2;
 
 export interface Snapshot {
   serverTick: number;

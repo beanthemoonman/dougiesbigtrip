@@ -221,6 +221,7 @@ pub const F_TEAM_CT: u8 = 1 << 2; // set = CT, clear = T
 
 // Game event tags (one byte each, payload follows).
 pub const EV_KILL: u8 = 1;
+pub const EV_FIRE: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GameEvent {

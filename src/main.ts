@@ -19,6 +19,8 @@ import { canSee } from './ai/perception';
 import { botShotLands } from './ai/aim';
 import { loadNav } from './ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './ai/anim';
+import { applyWeaponPose, getWeaponMuzzle } from './ai/thirdperson';
+import { createRagdollWorld, despawnRagdollBody, ragdollExpired, spawnRagdollBody, type RagdollBody } from './ai/ragdoll';
 import { playFootstep, playGunshot, playHurt, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
 import { createSettingsPanel, DEFAULT_SETTINGS, type GameActions } from './core/settings';
@@ -29,7 +31,7 @@ import { makeRng } from './core/rng';
 import { type Breakable, damageProp } from './game/breakables';
 import { computeDamage } from './game/damage';
 import { hitboxAt, hitboxRay } from './game/hitbox';
-import { buildMapColliders, CT_SPAWN, MAP_BOXES, MAP_RAMPS, T_SPAWN } from './game/map_douglas';
+import { buildMapColliders, CT_SPAWN, MAP_BOXES, MAP_RAMPS, T_SPAWN, mapCuboids } from './game/map_douglas';
 import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
 import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
@@ -42,7 +44,7 @@ import { createConnection } from './net/connection';
 import { createPredictor, type Predictor } from './net/prediction';
 import { createInterpolationBuffer } from './net/interpolation';
 import { encodeCommand, encodeJoin } from './net/protocol';
-import { SPECTATOR } from './net/protocol';
+import { SPECTATOR, EV_FIRE } from './net/protocol';
 import { createDecals } from './render/decals';
 import { createVfx, SURFACE_FX, type Surface } from './render/vfx';
 import { loadLightmappedMap } from './render/lightmap';
@@ -443,6 +445,10 @@ async function main(): Promise<void> {
       interpBuf.push(s);
       serverRoundTimeSec = s.round.timeLeftMs / 1000;
       serverScore = { t: s.round.scoreT, ct: s.round.scoreCt };
+      // Phase 12.2: collect EV_FIRE events for third-person muzzle FX on remotes.
+      for (const ev of s.events) {
+        if (ev.tag === EV_FIRE) pendingFireSlots.add(ev.slot);
+      }
     };
     conn.onClose = (): void => {
       if (netConn !== conn) return;
@@ -556,6 +562,11 @@ async function main(): Promise<void> {
   }
   loading.step('Loading map…');
 
+  // Phase 12.3: separate Rapier world for cosmetic ragdoll bodies. Same static
+  // map colliders so corpses tumble against walls/ramps; no kinematic bodies so
+  // dead bots can never clip or shove the living (the walk-through guarantee).
+  const ragdollWorld = createRagdollWorld(mapCuboids());
+
   // Map visuals: baked-lightmap glb (built by tools/blender/build_map.py) plus
   // procedural tiling surface detail (surfacetex.ts) and a gradient skybox
   // (sky.ts) whose sun matches the bake. Fog colour stays the horizon haze.
@@ -602,6 +613,10 @@ async function main(): Promise<void> {
   const rng = makeRng(1);
   const searchState = new SearchScore();
   let localTick = 0; // monotonic counter for the search-spread recency formula
+  let simTime = 0; // accumulated sim time (s), used for ragdoll despawn timers
+  // Phase 12.3: per-bot ragdoll bodies, spawned on death and despawned after a timer.
+  const ragdolls = new Map<Enemy, RagdollBody>();
+  const pendingFireSlots = new Set<number>(); // EV_FIRE slots for muzzle FX this frame
   const shotDir = new Vector3();
   const shotOrigin = new Vector3();
   const hitNormal = new Vector3();
@@ -683,15 +698,22 @@ async function main(): Promise<void> {
   // down the arm so the barrel points forward out of the bot's chest. Verify with
   // ACC-014 step 2 after any change.
   const rifleWorldTemplate = (await new GLTFLoader().loadAsync(rifleUrl)).scene;
+  const pistolWorldTemplate = (await new GLTFLoader().loadAsync(pistolUrl)).scene;
   const BOT_GUN_POS = new Vector3(0, 0.02, 0.08); // metres, in hand-bone space
-  const BOT_GUN_ROT = new Vector3(0, -Math.PI / 2, 0); // yaw barrel down the arm
-  function attachBotWeapon(character: Object3D): void {
+  // Gun orientation in hand-bone space. SOLVED (not eyeballed): measured live in
+  // the running scene so the barrel (weapon local −Z) points along the model's
+  // forward (−Z) and the sights stay up (+Y). Value = inv(handWorld) · rootWorld
+  // for the weapon-hold hand pose; the bot yaw cancels, so it's a constant.
+  // ponytail: coupled to the RightHand pose quat in src/ai/thirdperson.ts — if
+  // that hand rotation changes, re-measure this (barrel points down otherwise).
+  const BOT_GUN_QUAT = new Quaternion(-0.998, 0.0385, 0.0492, 0.0074);
+  function attachBotWeapon(character: Object3D, weapon: 'rifle' | 'pistol' = 'rifle'): void {
     let hand: Object3D | undefined;
     character.traverse((o) => {
       if (!hand && /righthand/i.test(o.name)) hand = o;
     });
     if (!hand) return; // rig without a named right-hand bone → bot just goes unarmed
-    const gun = rifleWorldTemplate.clone(true);
+    const gun = (weapon === 'pistol' ? pistolWorldTemplate : rifleWorldTemplate).clone(true);
     gun.traverse((o) => {
       o.layers.set(0); // world layer (viewmodel is layer 1)
       if (o instanceof Mesh) {
@@ -700,7 +722,7 @@ async function main(): Promise<void> {
       }
     });
     gun.position.copy(BOT_GUN_POS);
-    gun.rotation.set(BOT_GUN_ROT.x, BOT_GUN_ROT.y, BOT_GUN_ROT.z);
+    gun.quaternion.copy(BOT_GUN_QUAT);
     hand.add(gun);
   }
 
@@ -777,6 +799,40 @@ async function main(): Promise<void> {
   // Map each bot's collider back to its Enemy so a player hitscan can find it.
   const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.brain.bot.collider.handle, e]));
 
+  // --- Local player third-person body (Phase 12). Single-player is first-person,
+  // so the only time you see your own avatar is the death cam: on death this CT
+  // clone gets a ragdoll (same path as the bots) and the free-fly spectator watches
+  // the corpse tumble. While alive it stays hidden — the FP camera sits inside it.
+  const playerBodyClone = cloneSkeleton(ctTemplateScene);
+  playerBodyClone.visible = true; // template is hidden; the clone must be visible
+  flattenMaterials(playerBodyClone);
+  attachBotWeapon(playerBodyClone, 'rifle');
+  applyWeaponPose(playerBodyClone, 'rifle'); // static hold; no mixer drives this body
+  const playerBody = new Group();
+  playerBody.add(playerBodyClone);
+  playerBody.visible = false;
+  renderCtx.scene.add(playerBody);
+  let playerRagdoll: RagdollBody | null = null;
+  // CT keeps the baked colour; T gets the same tan tint as the bots. Applied at
+  // death from the live playerTeam (you can switch sides between lives).
+  const CT_BASE = new Color();
+  playerBodyClone.traverse((o) => {
+    if (o instanceof SkinnedMesh) {
+      const m = o.material;
+      CT_BASE.copy(((Array.isArray(m) ? m[0] : m) as MeshBasicMaterial).color);
+    }
+  });
+  function tintPlayerBody(ct: boolean): void {
+    const col = ct ? CT_BASE : T_TINT;
+    playerBodyClone.traverse((o) => {
+      if (o instanceof SkinnedMesh) {
+        const m = o.material;
+        if (Array.isArray(m)) m.forEach((mm) => (mm as MeshBasicMaterial).color.copy(col));
+        else (m as MeshBasicMaterial).color.copy(col);
+      }
+    });
+  }
+
   // --- Remote entities (Phase 6.4): networked players rendered from snapshot
   // interpolation. Each remote gets its own character mesh clone, created lazily
   // when a new slot appears and hidden when gone.
@@ -796,6 +852,7 @@ async function main(): Promise<void> {
           }
         });
       }
+      attachBotWeapon(clone, 'rifle');
       root = new Group();
       root.add(clone);
       root.visible = true;
@@ -867,6 +924,9 @@ async function main(): Promise<void> {
     // Only the human revives — spectators stay out.
     if (gameMode === 'playing') {
       playerAlive = true;
+      // Phase 12: discard any lingering player corpse from the previous life.
+      if (playerRagdoll) { despawnRagdollBody(playerRagdoll); playerRagdoll = null; }
+      playerBody.visible = false;
       health = 100;
       armor = 100;
       damageFlash = 0;
@@ -891,6 +951,12 @@ async function main(): Promise<void> {
       e.hp = BOT_MAX_HP;
       e.fireCooldown = 0;
       e.root.visible = true;
+      // Phase 12.3: discard any lingering ragdoll body from the previous death.
+      const oldRagdoll = ragdolls.get(e);
+      if (oldRagdoll) {
+        despawnRagdollBody(oldRagdoll);
+        ragdolls.delete(e);
+      }
       const b = e.brain.bot;
       b.collider.setEnabled(true);
       b.position.copy(e.spawn);
@@ -919,6 +985,9 @@ async function main(): Promise<void> {
     // Flush the query BVH so the very next raycast (human fire or bot
     // perception) sees every capsule at its fresh spawn position.
     world.updateSceneQueries();
+    // Phase 12.3: clear pending fire events on round reset so stale EV_FIRE
+    // from the previous round don't linger.
+    pendingFireSlots.clear();
   }
 
   // Both weapons, welded to the eye on layer 1 (viewmodel pass, renderer.ts).
@@ -1019,6 +1088,7 @@ async function main(): Promise<void> {
       if (gameMode === 'menu') return;
 
       localTick++;
+      simTime += fixedDt;
 
       // updateSceneQueries is called AFTER the human sync (so bots can see
       // the player at the current position) and AGAIN after the bot sync (so
@@ -1140,8 +1210,15 @@ async function main(): Promise<void> {
           b.body.setTranslation(bodyCenterScratch, true);
           const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
           driveBotAnim(e.anim, botSpeed, b.onGround, e.brain.mode, fixedDt);
+          applyWeaponPose(e.root, 'rifle');
           if (fire && e.fireCooldown === 0 && target !== null && targetAlive) {
             e.fireCooldown = BOT_WEAPON.fireInterval;
+            // Third-person muzzle flash + tracer from the bot's weapon (Phase 12.2).
+            const wm = getWeaponMuzzle(e.root);
+            if (wm) {
+              vfx.muzzleFlash(wm.pos, wm.dir);
+              vfx.tracer(wm.pos, wm.dir.clone().multiplyScalar(100).add(wm.pos));
+            }
             botEye.set(b.position.x, b.position.y + EYE_HEIGHT_STANDING, b.position.z);
             const teye = target === 'human' ? player.eyeHeight : EYE_HEIGHT_STANDING;
             botToPlayer.set(targetFeet.x, targetFeet.y + teye, targetFeet.z).sub(botEye);
@@ -1163,14 +1240,22 @@ async function main(): Promise<void> {
                   playerAlive = false;
                   // Bug 3: enter free-fly spectator from the death eye position.
                   specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
+                  // Phase 12: ragdoll the player body so the spectator cam sees the corpse.
+                  tintPlayerBody(playerTeam === 'CT');
+                  playerRagdoll = spawnRagdollBody(ragdollWorld, player.position, player.velocity, simTime);
                 }
               } else {
                 target.hp -= computeDamage(BOT_WEAPON, dist, 'chest', 0).health;
                 if (target.hp <= 0) {
                   target.alive = false;
-                  target.root.visible = false;
                   target.brain.bot.collider.setEnabled(false);
                   killBot(target.brain);
+                  // Phase 12.3: spawn a cosmetic ragdoll body at the death position
+                  // with the death-frame velocity (the body carries momentum).
+                  const bp = target.brain.bot.position;
+                  const bv = target.brain.bot.velocity;
+                  const rbody = spawnRagdollBody(ragdollWorld, bp, bv, simTime);
+                  ragdolls.set(target, rbody);
                 }
               }
             }
@@ -1262,9 +1347,12 @@ async function main(): Promise<void> {
                 playImpact('flesh');
                 if (enemy.hp <= 0) {
                   enemy.alive = false;
-                  enemy.root.visible = false;
-                  enemy.brain.bot.collider.setEnabled(false); // corpse is a ghost
+                  enemy.brain.bot.collider.setEnabled(false);
                   killBot(enemy.brain);
+                  const bp = enemy.brain.bot.position;
+                  const bv = enemy.brain.bot.velocity;
+                  const rbody = spawnRagdollBody(ragdollWorld, bp, bv, simTime);
+                  ragdolls.set(enemy, rbody);
                 }
               } else {
                 // Not a bot: maybe a breakable prop. Damage it; break cascades to
@@ -1363,10 +1451,48 @@ async function main(): Promise<void> {
       // Bot world-models: position + yaw the wrapper group; the Bone
       // hierarchy sits inside it and AnimationMixer drives the poses.
       for (const e of enemies) {
-        if (!e.alive) continue;
-        const p = e.brain.bot.position;
-        e.root.position.set(p.x, p.y, p.z);
-        e.root.rotation.y = e.brain.aim.yaw;
+        if (e.alive) {
+          const p = e.brain.bot.position;
+          e.root.position.set(p.x, p.y, p.z);
+          // Full reset, not just .y: a prior death drives e.root.quaternion from
+          // the ragdoll (tumbled), leaving nonzero X/Z Euler. Setting only .y on
+          // respawn keeps that tilt — the bot stands upright only if we clear it.
+          e.root.rotation.set(0, e.brain.aim.yaw, 0);
+        } else {
+          // Phase 12.3: dead bots may have a ragdoll body. Drive the model
+          // from the ragdoll transform; despawn when the timer expires.
+          const r = ragdolls.get(e);
+          if (r) {
+            if (ragdollExpired(r, simTime)) {
+              despawnRagdollBody(r);
+              ragdolls.delete(e);
+              e.root.visible = false;
+              continue;
+            }
+            e.root.visible = true;
+            const t = r.body.translation();
+            e.root.position.set(t.x, t.y - PLAYER_RADIUS * 0.5, t.z);
+            const q = r.body.rotation();
+            e.root.quaternion.set(q.x, q.y, q.z, q.w);
+          }
+        }
+      }
+
+      // Local player body: driven by the ragdoll while dead, hidden while alive.
+      if (playerRagdoll) {
+        if (ragdollExpired(playerRagdoll, simTime)) {
+          despawnRagdollBody(playerRagdoll);
+          playerRagdoll = null;
+          playerBody.visible = false;
+        } else {
+          playerBody.visible = true;
+          const t = playerRagdoll.body.translation();
+          playerBody.position.set(t.x, t.y - PLAYER_RADIUS * 0.5, t.z);
+          const q = playerRagdoll.body.rotation();
+          playerBody.quaternion.set(q.x, q.y, q.z, q.w);
+        }
+      } else {
+        playerBody.visible = false;
       }
 
       // Remote entities (Phase 6.4): interpolated networked players driven
@@ -1380,6 +1506,16 @@ async function main(): Promise<void> {
             root.visible = true;
             root.position.set(r.pos[0], r.pos[1], r.pos[2]);
             root.rotation.y = r.yaw;
+            // Phase 12.1: apply weapon-hold pose to remote models.
+            applyWeaponPose(root, 'rifle');
+            // Phase 12.2: spawn muzzle FX from pending EV_FIRE events.
+            if (pendingFireSlots.delete(r.slot)) {
+              const wm = getWeaponMuzzle(root);
+              if (wm) {
+                vfx.muzzleFlash(wm.pos, wm.dir);
+                vfx.tracer(wm.pos, wm.dir.clone().multiplyScalar(100).add(wm.pos));
+              }
+            }
           } else {
             root.visible = false;
           }
@@ -1390,6 +1526,13 @@ async function main(): Promise<void> {
           if (!activeSlots.has(slot)) root.visible = false;
         }
       }
+      // Clear any fire events we couldn't deliver (e.g. slot not in this snapshot
+      // yet, or stale event from a disconnected player). Don't let them pile up.
+      pendingFireSlots.clear();
+
+      // Phase 12.3: step the ragdoll world each render frame so dynamic bodies
+      // respond to gravity and collide with the static map geometry.
+      ragdollWorld.step();
 
       renderCtx.render();
       hud.update(
