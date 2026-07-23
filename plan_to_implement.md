@@ -777,14 +777,13 @@ DB holds:
 **New container.** Adds a fourth compose service, `db`, and it is the one the other two wait on
 — stand it up before the Phase 17 `auth` container.
 
-- [ ] `db` service added to `docker-compose.yml` — Postgres image, **named volume** (a bind mount
-      or anonymous volume loses Keycloak's realm and every user row on `down -v`), health check,
-      `expose:` only, credentials from env.
-- [ ] `server` and `auth` gain `depends_on: db: condition: service_healthy` — Keycloak crash-loops
-      against a Postgres that is listening but not yet ready.
-- [ ] DB provisioned behind the proxy; Server and Auth both connect.
-- [ ] Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
-- [ ] Users row created/updated on first authenticated login.
+- [x] **18.1** `db` service added to `docker-compose.yml` — Postgres 16 image, **named volume**
+      (`pgdata`), `pg_isready` health check, `expose:` only, credentials from `.env`. `server`
+      depends on `db: service_healthy`. `DATABASE_URL` env var. Migrations (`server/migrations/`)
+      applied on server start via `sqlx::migrate!`. When unset, server runs without persistence
+      (bare `cargo run` still works).
+- [ ] **18.2** Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
+- [ ] **18.3** Users row created/updated on first authenticated login.
 
 **Exit test:** Restart the stack — server config survives, a returning user is recognised from
 their stored record, Keycloak state persists.

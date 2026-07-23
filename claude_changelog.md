@@ -2765,6 +2765,44 @@ the fixed 180 s match clock with `roundsToWin` is intended and its reset path is
 
 **All tests green:** 231 TS tests, 39 sim tests, 19 server tests. Typecheck + build clean.
 
+## 2026-07-23 — Phase 18.1: Postgres + migrations
+
+**`.env.example`**
+- Template env file: `POSTGRES_USER/PASSWORD/DB`, `DATABASE_URL`, and Keycloak
+  bootstrap admin creds (Phase 17 prep). `.env` is gitignored.
+
+**`.gitignore`**
+- Added `.env` and `data/` (Docker volume mounts) to ignored paths.
+
+**`docker-compose.yml`**
+- New `db` service: Postgres 16, named volume `pgdata`, `pg_isready` health check
+  (2 s interval, 10 retries, 3 s start period), `expose:` only (no host port).
+- `server` now `depends_on: db: { condition: service_healthy }` and receives
+  `DATABASE_URL` from the env file.
+- Compose command updated: `docker compose --env-file .env up --build`.
+
+**`server/Cargo.toml`**
+- Added `sqlx` v0.8 with features: `runtime-tokio`, `postgres`, `migrate`.
+
+**`server/migrations/001_initial.sql`**
+- Creates `app` schema if absent.
+- `app.users` table: `sub` (PK Keycloak subject), `display_name`, `email`,
+  `first_seen`, `last_seen`.
+- `app.server_config` table: single-row guard (`check (id = 1)`), columns
+  `bot_count`, `map`, `rounds_to_win`, `updated_at`, `updated_by`.
+
+**`server/src/main.rs`**
+- `main()` now checks `DATABASE_URL`: if set, creates a `PgPool` (max 2 connections),
+  runs `sqlx::migrate!("./migrations")`, logs the result. If unset or connection
+  fails, the server continues with env-only config — bare `cargo run` stays functional.
+
+**`docs/deploy.md`**
+- Title → "Phase 18". Quick-start updated for `.env` + `--env-file`. Architecture
+  table now lists Postgres. New Database section documents volumes, migration startup,
+  `DATABASE_URL` behaviour, and `docker compose down -v` to reset.
+
+**All tests green:** 19 server + 231 TS. Typecheck + build clean.
+
 ---
 
 ## Phase 16 review fixes

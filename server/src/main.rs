@@ -858,6 +858,29 @@ async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::Unbo
 #[tokio::main]
 async fn main() {
     let config = build_config();
+
+    // Phase 18.1: run DB migrations when DATABASE_URL is set.
+    // When unset (bare `cargo run`) the server starts without a database —
+    // config comes purely from env vars. Non-negotiable per the cross-cutting
+    // decision in docs/plan-post-1.0-config-auth.md.
+    if let Ok(db_url) = std::env::var("DATABASE_URL") {
+        match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&db_url)
+            .await
+        {
+            Ok(pool) => {
+                match sqlx::migrate!("./migrations").run(&pool).await {
+                    Ok(_) => println!("DB migrations applied"),
+                    Err(e) => eprintln!("DB migration error: {e}"),
+                }
+            }
+            Err(e) => eprintln!("DB connection failed (server continues without persistence): {e}"),
+        }
+    } else {
+        println!("DATABASE_URL not set — running without persistence");
+    }
+
     let (events_tx, events_rx) = mpsc::unbounded_channel::<Ev>();
     tokio::spawn(game_loop(events_rx, config.clone()));
 

@@ -39,3 +39,9 @@ sim/pkg/
 server/target/
 sim/target/
 target/
+
+# Environment variables (contains secrets)
+.env
+
+# Docker volume mounts
+data/

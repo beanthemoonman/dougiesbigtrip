@@ -1,6 +1,6 @@
-# Containerized Deploy (Phase 8)
+# Containerized Deploy (Phase 18)
 
-The Counter Douglas stack ships as two Docker images wired together
+The Counter Douglas stack ships as three Docker images wired together
 with `docker compose`. One command builds everything and starts the
 service.
 
@@ -10,6 +10,7 @@ service.
 |---|---|---|
 | `dougys-server` | Rust deathmatch server (64 Hz authoritative sim, bot AI, round FSM) | 9876 |
 | `dougys-client` | nginx serving the TypeScript/Vite SPA (includes the WASM sim client-side) | 8080→80 |
+| Postgres 16 | Database (named volume `pgdata`) — migrations run on server start | internal |
 
 The SPA connects to the server via WebSocket (`ws://localhost:9876` by
 default — type this in the Connect overlay).
@@ -17,7 +18,11 @@ default — type this in the Connect overlay).
 ## Quick start
 
 ```bash
-docker compose up --build
+# First run: copy the env template and edit it.
+cp .env.example .env
+# Edit POSTGRES_PASSWORD and KC_BOOTSTRAP_ADMIN_PASSWORD in .env
+
+docker compose --env-file .env up --build
 ```
 
 Open `http://localhost:8080`. The Connect overlay appears. Enter the
@@ -64,23 +69,30 @@ docker build -f Dockerfile.client -t dougys-client .
 
 ## Server configuration
 
-The server binds on `SERVER_BIND` (default `0.0.0.0:9876`). Override it:
+The server binds on `SERVER_BIND` (default `0.0.0.0:9876`). Other knobs:
 
 ```bash
-docker run -e SERVER_BIND=0.0.0.0:12345 -p 12345:12345 dougys-server
+docker compose --env-file .env up --build
+# Override env vars in the .env file or pass them inline:
+DATABASE_URL=... BOT_COUNT=4 ROUNDS_TO_WIN=8 docker compose --env-file .env up
 ```
 
 The map (`de_douglas.json`) is compiled into the server binary via
 `include_str!` — no separate data volume is needed.
 
-## Client configuration
+## Database
 
-The client's default connect URL is `ws://127.0.0.1:9876`
-(`src/ui/connect.ts:9`). You can also start the client with a
-`?connect=ws://host:port` query parameter to skip the overlay:
+Postgres 16 runs as the `db` service, internal only (no host port). Data lives
+on a named volume (`pgdata`) so it survives `docker compose down`. Credentials
+are in `.env` (copy from `.env.example`).
 
-```
-http://localhost:8080/?connect=ws://my-server:9876
+The server applies migrations from `server/migrations/` at startup. When
+`DATABASE_URL` is unset, the server starts without persistence (config from env
+vars only) — this keeps `cargo run` working for local dev without Postgres.
+
+```bash
+# Reset everything (data + containers):
+docker compose down -v
 ```
 
 ## Budgets (production build)
