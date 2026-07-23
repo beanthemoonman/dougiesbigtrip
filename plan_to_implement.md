@@ -746,6 +746,13 @@ point the MP client at a server started with a non-default config and observe th
 Google login, brokered through **Keycloak** (its own service). App code never sees Google
 directly — it trusts Keycloak tokens.
 
+**New container.** `docker-compose.yml` currently runs two services (`server`, `client`); this
+phase adds a third, `auth`. It does not start without the Phase 18 `db` container, so bring that
+up first.
+
+- [ ] `auth` service added to `docker-compose.yml` — official Keycloak image, `expose:` only (no
+      host port), `depends_on: db` with a health condition, realm-export JSON mounted in, Google
+      client id/secret from env.
 - [ ] Reverse proxy terminates HTTPS/WSS and routes to Client / Server / Auth (per the diagram).
 - [ ] Keycloak configured as an OAuth 2.0 broker to Google.
 - [ ] Admin capability gated by the Keycloak role **`role_admin`** (claim checked server-side, not
@@ -767,6 +774,14 @@ DB holds:
 - **Keycloak schema** (its own tables)
 - **Server configuration** (the Phase 16 knobs, made durable and admin-editable)
 
+**New container.** Adds a fourth compose service, `db`, and it is the one the other two wait on
+— stand it up before the Phase 17 `auth` container.
+
+- [ ] `db` service added to `docker-compose.yml` — Postgres image, **named volume** (a bind mount
+      or anonymous volume loses Keycloak's realm and every user row on `down -v`), health check,
+      `expose:` only, credentials from env.
+- [ ] `server` and `auth` gain `depends_on: db: condition: service_healthy` — Keycloak crash-loops
+      against a Postgres that is listening but not yet ready.
 - [ ] DB provisioned behind the proxy; Server and Auth both connect.
 - [ ] Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
 - [ ] Users row created/updated on first authenticated login.

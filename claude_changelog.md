@@ -2813,3 +2813,17 @@ in both the initial `connect` closure and the re-bind inside `setConnected()`. H
 `connectFromInputs` ref set once when the server section is built; `setConnected()` now just calls it.
 
 **Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean.
+
+## Phases 17–18: container setup made explicit
+
+Both plans named `auth` and `db` as services but never said they are **new containers to write** —
+easy to read as "configure something that already exists." The compose stack today is two services
+(`server`, `client`).
+
+- `plan_to_implement.md` — Phase 17 and 18 each gained a "New container" note plus checklist items
+  for the compose service, the named Postgres volume, and the `depends_on: service_healthy` gate.
+- `docs/plan-post-1.0-config-auth.md` — a "Compose delta" paragraph under Phase 17 (two services →
+  four); 17.2 and 18.1 now spell out the image, `expose:`-only ports, health check, mounted realm
+  export, Keycloak `start-dev` vs `start --optimized`, and why the volume must be named.
+
+Docs only, no code.

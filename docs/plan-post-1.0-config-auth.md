@@ -147,6 +147,12 @@ observes 4 bots and a match ending at 3.
 Google login brokered through Keycloak. **Ships as a pair with Phase 18** — Keycloak cannot start
 without its database, so do 18.1 (Postgres up) before 17.2.
 
+**Compose delta.** The stack today is two services, `server` and `client` (plus the nginx image
+inside `client`). Phases 17–18 take it to four: `+ auth` (Keycloak, here) and `+ db` (Postgres,
+18.1). Both are new containers to write, not existing ones to configure, and the host-port
+surface shrinks to the proxy alone. Every task below that says "service in compose" means an
+edit to `docker-compose.yml` in this repo.
+
 ### 17.1 — Reverse proxy + TLS
 
 - [ ] Promote nginx from "serves the SPA" to the single ingress: `/` → client, `/ws` → server
@@ -165,7 +171,11 @@ proxy and that :9876 is not reachable from the host.
 
 ### 17.2 — Keycloak service + Google broker
 
-- [ ] `auth` service in compose (official Keycloak image), Postgres-backed, behind `/auth/`.
+- [ ] **New `auth` container** in `docker-compose.yml`: official Keycloak image, `expose:` only,
+      `depends_on: db: {condition: service_healthy}`, `KC_DB=postgres` pointed at the 18.1 `db`
+      service, realm-export JSON mounted read-only, behind `/auth/`. Start-up mode matters —
+      `start-dev` locally, `start --optimized` in the prod override; the dev mode disables
+      hostname/HTTPS checks that prod must keep.
 - [ ] Realm `counter-douglas` provisioned from a **committed realm-export JSON** imported at
       startup — not hand-clicked in the admin console. Contains: the public client for the SPA,
       the `role_admin` realm role, and the Google identity-provider stub.
@@ -211,7 +221,13 @@ server-side and a non-admin is not — asserted from server logs/API, not from U
 
 ### 18.1 — Postgres + migrations *(do this before 17.2)*
 
-- [ ] `db` service in compose, named volume, health check, not host-published.
+- [ ] **New `db` container** in `docker-compose.yml`: Postgres image, `expose:` only (not
+      host-published), credentials from env/`.env`, and a `pg_isready` health check — `auth` and
+      `server` both gate their start on it, and Keycloak crash-loops against a Postgres that is
+      accepting connections but not yet ready.
+- [ ] **Named volume** for `/var/lib/postgresql/data`. Anonymous or bind-mounted and the realm,
+      every user row, and the persisted server config die with the container. This volume is the
+      only stateful thing in the stack; `docs/deploy.md` gets a line on backing it up.
 - [ ] Two schemas: `keycloak` (owned by Keycloak) and `app` (ours). Separate DB users; the app
       user has no rights on the Keycloak schema.
 - [ ] `server/migrations/*.sql`, applied on server start via `sqlx::migrate!`. Forward-only.
