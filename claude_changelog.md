@@ -2876,6 +2876,10 @@ the fixed 180 s match clock with `roundsToWin` is intended and its reset path is
 
 **All tests green:** 231 TS + typecheck.
 
+**Follow-up fix (f86dd2a):** Reconcile 17.2 nginx.conf with the include pattern
+from the 17.1 review fix (23c064f). `/auth/` is uncommented in
+`nginx-locations.conf`, not inlined.
+
 ---
 
 ## Phase 16 review fixes
@@ -2973,3 +2977,40 @@ verbatim, so URL-meaningful characters need encoding.
 
 **Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean, `cargo check` clean, `nginx -t` parses
 the split config (fails only on upstream DNS for `server`, expected outside compose).
+
+## 2026-07-23 — Phase 17.2: Keycloak auth container + Google broker
+
+**`auth/counter-douglas-realm.json`** — committed realm-export JSON:
+- Realm `counter-douglas` with `sslRequired=external`, brute-force protection.
+- Public OIDC client `counter-douglas-spa`: PKCE/S256, standard flow, redirect URIs for
+  `localhost:8080`, `:5173` (Vite dev), `:8443` (Docker HTTPS). Client scopes: `roles`
+  (realm-roles → `realm_access.roles` claim), `profile`, `email`, `web-origins`.
+- Realm role `role_admin` (admin-only config changes, Phase 20).
+- Google IDP: `clientId` + `clientSecret` from `${env.GOOGLE_CLIENT_ID}` /
+  `${env.GOOGLE_CLIENT_SECRET}` — never committed. Attribute mappers for email/username import.
+
+**`docker-compose.yml`**
+- New `auth` service: `keycloak/keycloak:26`, `start-dev --import-realm`, `expose: 8080`,
+  `depends_on: db {condition: service_healthy}`. `KC_DB_SCHEMA=keycloak` so Keycloak owns its
+  own schema. `KC_PROXY_HEADERS=xforwarded` for correct redirect URIs behind the proxy.
+  Health check on `/health/ready`. `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` env vars.
+- Realm JSON mounted read-only at `/opt/keycloak/data/import/`.
+
+**`nginx-locations.conf`**
+- `/auth/` proxy to `auth:8080` uncommented (was a placeholder). `nginx.conf` uses the
+  existing `include` pattern.
+
+**`.env.example`**
+- Added `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` fields with instructions on obtaining them
+  from Google Cloud Console. Warns about URL-meaningful chars in credentials.
+
+**`docs/deploy.md`**
+- `What's in the box` table now lists 4 services (Keycloak 26 + Postgres 16).
+- New "Auth (Keycloak + Google)" section: obtaining OAuth credentials, redirect URI format,
+  granting `role_admin` via admin console.
+
+**Follow-up reconciliation (f86dd2a):** 17.2's `nginx.conf` initially overwrote the
+`nginx-locations.conf` include pattern from the review fix (23c064f). Restored the include
+and uncommented `/auth/` in `nginx-locations.conf`.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean.
