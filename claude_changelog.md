@@ -3225,3 +3225,34 @@ Review of `0c26a08..2bd3b16` found two server-killers on the first
 - Rust: `cargo test -p sim` 40 passed. `cargo test -p server` 28 passed.
   `cargo check` zero warnings.
 - TS: `pnpm test` 245 passed. `pnpm typecheck` clean. `pnpm build` clean.
+
+## Review fixes for ded671a (Phase 18.2 + 18.3)
+
+Post-commit review of `ded671a` found three issues; all fixed in `server/src/main.rs`.
+
+- **P0 — DB I/O blocked the 64 Hz game loop.** The Phase 18.3 `db::upsert_user`
+  call was `.await`ed directly inside the `tokio::select!` arm of `game_loop`,
+  the same task that drives the fixed-timestep tick. With `max_connections(2)`
+  and sqlx's default 30 s acquire timeout, a slow or saturated DB would freeze
+  the sim for every connected player. Now detached via `tokio::spawn` with a
+  cloned `PgPool` (an `Arc`, so cheap); nothing downstream read the result.
+  The spawned task also logs upsert failures instead of swallowing them with
+  `let _ =` — a broken `app.users` table was previously invisible.
+- **P2 — silent integer truncation on DB config load.** `rounds_to_win as u8`
+  turned a DB value of `257` into a valid-looking `1`. Replaced both casts with
+  `u8::try_from(..).unwrap_or(u8::MAX)` / `usize::try_from(..).unwrap_or(usize::MAX)`
+  so out-of-range rows saturate into a validation *failure* (and the server
+  falls back to env config) rather than truncating into a plausible value.
+- **P3 — config is read-only.** Marked with a `ponytail:` comment: the row is
+  seeded once and never written back, so `updated_at`/`updated_by` stay at
+  their insert defaults until the admin config API lands.
+
+Also restored two load-bearing comments the commit deleted: the rationale for
+bailing on a migration failure against a *reachable* DB, and the note that
+`prefetch_jwks` is safe to call unconditionally.
+
+### Tests
+- Rust: `cargo test -p server` 28 passed. `cargo build` zero warnings.
+- No new tests: the truncation fix is a saturating conversion at a call site
+  whose validator is already covered by `config_tests`, and the upsert detach
+  needs a live Postgres to exercise.

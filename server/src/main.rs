@@ -613,9 +613,20 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                         }
                     }
                     // Phase 18.3: upsert authenticated user into the DB.
+                    // Detached: this is network I/O on the task that also drives the
+                    // 64 Hz tick. Awaiting it here stalls the sim for *everyone* on
+                    // the server for as long as the DB takes to answer (up to the
+                    // pool acquire timeout). Nothing downstream reads the result.
                     if let (Some(p), Some(user)) = (&pool, &validated) {
-                        let display_name = user.name.as_deref().unwrap_or("unknown");
-                        let _ = db::upsert_user(p, &user.sub, display_name, None).await;
+                        let p = p.clone(); // PgPool is an Arc — cheap.
+                        let sub = user.sub.clone();
+                        let display_name =
+                            user.name.clone().unwrap_or_else(|| "unknown".to_string());
+                        tokio::spawn(async move {
+                            if let Err(e) = db::upsert_user(&p, &sub, &display_name, None).await {
+                                eprintln!("user upsert failed for {sub}: {e}");
+                            }
+                        });
                     }
                     // Count active humans before the loop (avoids borrow conflict).
                     let player_count = slots.iter()
@@ -910,6 +921,9 @@ async fn main() {
             .await
         {
             Ok(pool) => {
+                // A migration failure on a *reachable* DB means a half-applied
+                // schema — unlike an unreachable DB, continuing would leave the
+                // server running against a database it cannot trust. Bail.
                 match sqlx::migrate!("./migrations").run(&pool).await {
                     Ok(_) => println!("DB migrations applied"),
                     Err(e) => {
@@ -919,12 +933,17 @@ async fn main() {
                 }
 
                 // Phase 18.2: override config from database row.
+                // ponytail: read-only — the row is seeded once and never written
+                // back, so `updated_at`/`updated_by` stay at their insert defaults.
+                // The write path lands with the admin config API (Phase 18.4).
                 match db::load_config(&pool).await {
                     Ok(Some((bot_count, map, rounds_to_win))) => {
                         match validate_config(
                             config.bind.clone(),
-                            bot_count as usize,
-                            rounds_to_win as u8,
+                            // Saturate rather than `as`-cast: a 257 in the DB
+                            // must fail validation, not truncate to a valid 1.
+                            usize::try_from(bot_count).unwrap_or(usize::MAX),
+                            u8::try_from(rounds_to_win).unwrap_or(u8::MAX),
                             map,
                             config.freezetime_ms,
                             config.round_time_ms,
@@ -973,6 +992,7 @@ async fn main() {
     };
 
     // Phase 17.4: prefetch JWKS so sync validation works in the game loop.
+    // Safe to call unconditionally — returns immediately when !required.
     auth::prefetch_jwks(&config.auth_config).await;
 
     let (events_tx, events_rx) = mpsc::unbounded_channel::<Ev>();
