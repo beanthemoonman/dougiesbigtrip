@@ -789,8 +789,8 @@ DB holds:
       depends on `db: service_healthy`. `DATABASE_URL` env var. Migrations (`server/migrations/`)
       applied on server start via `sqlx::migrate!`. When unset, server runs without persistence
       (bare `cargo run` still works).
-- [ ] **18.2** Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
-- [ ] **18.3** Users row created/updated on first authenticated login.
+- [x] **18.2** Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
+- [x] **18.3** Users row created/updated on first authenticated login.
 
 **Exit test:** Restart the stack — server config survives, a returning user is recognised from
 their stored record, Keycloak state persists.

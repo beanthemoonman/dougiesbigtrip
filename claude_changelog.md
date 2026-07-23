@@ -3189,3 +3189,39 @@ Review of `0c26a08..2bd3b16` found two server-killers on the first
 ### Tests run
 - Rust: `cargo test` — 40 sim + 28 server passed. TS: `pnpm test` 245 passed,
   `pnpm typecheck` clean.
+
+## 2026-07-23 — Phase 18.2 + 18.3: Config persistence + user upsert
+
+### Phase 18.2 — Config load/save from database
+- `server/src/db.rs` — thin async DB accessor: `load_config(pool)`,
+  `insert_config(pool)`, `upsert_user(pool)`. Uses raw `sqlx::query()` (no
+  compile-time macros) so no build-time `DATABASE_URL` requirement.
+- `main()` now keeps the `PgPool` as `Option<PgPool>` (not consumed inside
+  the migration block). After migrations:
+  - `load_config` → if a row exists, re-validates it through the **same**
+    `validate_config()` from Phase 16.3. Passes → DB config replaces env.
+    Fails → logs each error, keeps env config.
+  - No row → `insert_config` seeds the DB with env values (id=1, default
+    bot_count/map/rounds_to_win).
+  - Load/seed error → warns, keeps env config.
+- `DATABASE_URL` unset → pool is `None`, entire DB path skipped, bare
+  `cargo run` unchanged.
+- `PgPool` passed to `game_loop` for user upsert (Phase 18.3).
+
+### Phase 18.3 — Users upsert on authenticated connect
+- In `Ev::JoinTeam` handler, after successful token validation, calls
+  `db::upsert_user(pool, sub, display_name, email=None)` — a single
+  `INSERT … ON CONFLICT (sub) DO UPDATE SET display_name, email, last_seen`.
+  No read-then-write race.
+- `display_name` from `ValidatedUser.name`, falls back to `"unknown"` when
+  the JWT doesn't carry a `name` claim (always non-null per the migration
+  constraint).
+- Normal flow: first-time login inserts the row; subsequent logins update
+  `last_seen` (via the `DO UPDATE` clause). Mismatch between two
+  simultaneous first-time logins with the same `sub` is impossible since the
+  game loop is single-threaded.
+
+### Tests
+- Rust: `cargo test -p sim` 40 passed. `cargo test -p server` 28 passed.
+  `cargo check` zero warnings.
+- TS: `pnpm test` 245 passed. `pnpm typecheck` clean. `pnpm build` clean.

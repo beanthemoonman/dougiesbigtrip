@@ -31,10 +31,12 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 
 mod ai;
 mod auth;
+mod db;
 mod game;
 mod nav_graph;
 
 use auth::{AuthConfig, ValidatedUser};
+use sqlx::PgPool;
 
 // Bot patrol waypoints (de_douglas map) — replaced by nav_graph in Phase 11.
 // Each bot is assigned a start node from the navnode graph.
@@ -214,7 +216,7 @@ struct Slot {
     validated_user: Option<ValidatedUser>,
 }
 
-async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig) {
+async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig, pool: Option<PgPool>) {
     let mut world = SimWorld::new();
     let spawn = map::load(&mut world, MAP_JSON);
     world.ensure_broad_phase_ready();
@@ -610,6 +612,11 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                             Ok(user) => validated = Some(user),
                         }
                     }
+                    // Phase 18.3: upsert authenticated user into the DB.
+                    if let (Some(p), Some(user)) = (&pool, &validated) {
+                        let display_name = user.name.as_deref().unwrap_or("unknown");
+                        let _ = db::upsert_user(p, &user.sub, display_name, None).await;
+                    }
                     // Count active humans before the loop (avoids borrow conflict).
                     let player_count = slots.iter()
                         .filter(|s| s.is_human).count() as u8;
@@ -890,22 +897,19 @@ async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::Unbo
 
 #[tokio::main]
 async fn main() {
-    let config = build_config();
+    let mut config = build_config();
 
     // Phase 18.1: run DB migrations when DATABASE_URL is set.
+    // Phase 18.2: load config from DB; seed with env values if absent.
     // When unset (bare `cargo run`) the server starts without a database —
-    // config comes purely from env vars. Non-negotiable per the cross-cutting
-    // decision in docs/plan-post-1.0-config-auth.md.
-    if let Ok(db_url) = std::env::var("DATABASE_URL") {
+    // config comes purely from env vars.
+    let pool: Option<PgPool> = if let Ok(db_url) = std::env::var("DATABASE_URL") {
         match sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
             .connect(&db_url)
             .await
         {
             Ok(pool) => {
-                // A migration failure on a *reachable* DB means a half-applied
-                // schema — unlike an unreachable DB, continuing would leave the
-                // server running against a database it cannot trust. Bail.
                 match sqlx::migrate!("./migrations").run(&pool).await {
                     Ok(_) => println!("DB migrations applied"),
                     Err(e) => {
@@ -913,19 +917,66 @@ async fn main() {
                         std::process::exit(1);
                     }
                 }
+
+                // Phase 18.2: override config from database row.
+                match db::load_config(&pool).await {
+                    Ok(Some((bot_count, map, rounds_to_win))) => {
+                        match validate_config(
+                            config.bind.clone(),
+                            bot_count as usize,
+                            rounds_to_win as u8,
+                            map,
+                            config.freezetime_ms,
+                            config.round_time_ms,
+                            config.end_delay_ms,
+                            config.auth_config.clone(),
+                        ) {
+                            Ok(db_config) => {
+                                println!("Using config from database");
+                                config = db_config;
+                            }
+                            Err(errors) => {
+                                eprintln!("DB config invalid, using env config:");
+                                for e in &errors { eprintln!("  {e}"); }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        if let Err(e) = db::insert_config(
+                            &pool,
+                            config.bot_count as i32,
+                            config.map,
+                            config.rounds_to_win as i32,
+                        )
+                        .await
+                        {
+                            eprintln!("Failed to seed config into database: {e}");
+                        } else {
+                            println!("Initial config seeded to database");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("DB config load failed, using env config: {e}");
+                    }
+                }
+
+                Some(pool)
             }
-            Err(e) => eprintln!("DB connection failed (server continues without persistence): {e}"),
+            Err(e) => {
+                eprintln!("DB connection failed (server continues without persistence): {e}");
+                None
+            }
         }
     } else {
         println!("DATABASE_URL not set — running without persistence");
-    }
+        None
+    };
 
     // Phase 17.4: prefetch JWKS so sync validation works in the game loop.
-    // Safe to call unconditionally — returns immediately when !required.
     auth::prefetch_jwks(&config.auth_config).await;
 
     let (events_tx, events_rx) = mpsc::unbounded_channel::<Ev>();
-    tokio::spawn(game_loop(events_rx, config.clone()));
+    tokio::spawn(game_loop(events_rx, config.clone(), pool));
 
     let listener = TcpListener::bind(&config.bind).await.expect("bind");
     println!("deathmatch server listening on ws://{}", config.bind);
