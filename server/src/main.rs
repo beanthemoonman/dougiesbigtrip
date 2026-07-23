@@ -870,9 +870,15 @@ async fn main() {
             .await
         {
             Ok(pool) => {
+                // A migration failure on a *reachable* DB means a half-applied
+                // schema — unlike an unreachable DB, continuing would leave the
+                // server running against a database it cannot trust. Bail.
                 match sqlx::migrate!("./migrations").run(&pool).await {
                     Ok(_) => println!("DB migrations applied"),
-                    Err(e) => eprintln!("DB migration error: {e}"),
+                    Err(e) => {
+                        eprintln!("DB migration failed: {e}");
+                        std::process::exit(1);
+                    }
                 }
             }
             Err(e) => eprintln!("DB connection failed (server continues without persistence): {e}"),

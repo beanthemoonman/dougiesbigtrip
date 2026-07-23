@@ -2902,3 +2902,38 @@ easy to read as "configure something that already exists." The compose stack tod
   export, Keycloak `start-dev` vs `start --optimized`, and why the volume must be named.
 
 Docs only, no code.
+
+## Review fixes: Phase 17.1 / 18.1 (nginx ingress + Postgres)
+
+Review of `777214e..570c9ea` found the new proxy defaults didn't actually work from either
+documented entry point. Fixed, plus three smaller items.
+
+**Connect default was broken on both HTTP and HTTPS.** `docs/deploy.md` promises "no manual server
+URL needed," and 17.1 stopped publishing the server's 9876 port (`ports:` → `expose:`) — but
+`connect.ts` still defaulted to `ws://127.0.0.1:9876` on plain HTTP (a port nothing publishes any
+more), and on HTTPS built the URL from `location.hostname`, dropping the `:8443` from the compose
+port mapping → `wss://localhost/ws`, connecting to nothing. `main.ts` had a third, correct copy of
+this logic using `location.host`.
+
+Collapsed all three into one `DEFAULT_WS_URL` in `src/core/settings.ts`: same-origin `<host>/ws`
+with the scheme following the page, except under `import.meta.env.DEV` (the vite dev server proxies
+nothing) where it stays `ws://127.0.0.1:9876`. `connect.ts` imports it; `main.ts` seeds the panel
+from `DEFAULT_SERVER_ADDRESS` instead of recomputing.
+
+**Migration failure now exits.** `main.rs` logged `DB migration error` and carried on. Continuing
+past an *unreachable* database is the documented design; continuing past a failed migration on a
+*reachable* one leaves the server running against a half-applied schema — harmless today, not once
+Phase 20's `/api/` reads `app.server_config`. `std::process::exit(1)`.
+
+**nginx location blocks deduped.** The `:80` and `:443` servers had ~40 identical lines each,
+including the commented-out Keycloak block that would have needed uncommenting twice. Extracted to
+`nginx-locations.conf`, `include`d by both; `Dockerfile.client` copies it.
+
+**Minor:** stale "connect directly to ws://host:9876" comment removed from `nginx.conf` (the port
+isn't published); `ponytail:` note on the baked-in self-signed cert naming the key-in-layer ceiling
+and the mount path, with a commented `volumes:` stub in `docker-compose.yml` and a TLS section in
+`docs/deploy.md`; `.env.example` warns that `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`
+verbatim, so URL-meaningful characters need encoding.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean, `cargo check` clean, `nginx -t` parses
+the split config (fails only on upstream DNS for `server`, expected outside compose).

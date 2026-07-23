@@ -23,7 +23,7 @@ import { applyWeaponPose, getWeaponMuzzle } from './ai/thirdperson';
 import { createRagdollWorld, despawnRagdollBody, ragdollExpired, spawnRagdollBody, type RagdollBody } from './ai/ragdoll';
 import { playFootstep, playGunshot, playHurt, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
 import { Buttons, createInputManager } from './core/input';
-import { createSettingsPanel, DEFAULT_SETTINGS, type GameActions } from './core/settings';
+import { createSettingsPanel, DEFAULT_SERVER_ADDRESS, DEFAULT_SETTINGS, type GameActions } from './core/settings';
 import { createTeamMenu, type TeamChoice } from './ui/teammenu';
 import { createTraceRecorder } from './core/trace_recorder';
 import { startLoop, TICK_RATE } from './core/loop';
@@ -606,12 +606,9 @@ async function main(): Promise<void> {
   // Seed the address/port inputs from the URL we actually booted with, so the
   // panel shows the real server (e.g. counterdouggo.yikersis.land) not 127.0.0.1.
   const bootUrl = new URLSearchParams(location.search).get('connect');
-  // No ?connect= yet: default the address to the host the page was served from
-  // (localhost when you open it at localhost) rather than a hardcoded 127.0.0.1.
-  // Over https, default to the TLS reverse-proxy path endpoint (wss://host/ws)
-  // — the nginx /ws block proxies to the Rust server; there's no open game port.
-  let defaultAddress: string | undefined =
-    location.protocol === 'https:' ? `${location.host}/ws` : location.hostname || undefined;
+  // No ?connect= yet: fall back to the shared default (same-origin `<host>/ws`
+  // behind nginx, 127.0.0.1:9876 under the vite dev server).
+  let defaultAddress: string | undefined = DEFAULT_SERVER_ADDRESS;
   let defaultPort: string | undefined;
   // Phase 16.4: only ws:// and wss:// URLs are valid targets. Null here means
   // "no usable ?connect=" — it gates both the panel seed *and* the auto-connect

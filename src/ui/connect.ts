@@ -9,12 +9,7 @@
  * source of truth across the connect overlay and the in-game settings panel.
  */
 
-import { DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PORT } from '../core/settings';
-
-const _isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
-const DEFAULT_WS_URL = _isHttps
-  ? `wss://${location.hostname}/ws`
-  : `ws://${DEFAULT_SERVER_ADDRESS}:${DEFAULT_SERVER_PORT}`;
+import { DEFAULT_WS_URL } from '../core/settings';
 
 export interface ConnectOverlay {
   readonly el: HTMLElement;

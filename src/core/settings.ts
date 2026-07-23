@@ -24,12 +24,21 @@ export const DEFAULT_SETTINGS: Settings = {
   volume: 1,
 };
 
-// Phase 17.1: when the page is served over HTTPS, default to the same-origin
-// proxy endpoint (wss://<host>/ws). On plain HTTP (local dev, bare cargo run),
-// keep the direct-connect default that points at the server's game port.
-const _isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
-export const DEFAULT_SERVER_ADDRESS = _isHttps ? `${location.hostname}/ws` : '127.0.0.1';
-export const DEFAULT_SERVER_PORT = _isHttps ? '443' : '9876';
+// Phase 17.1: nginx is the single ingress — the server's game port is not
+// published by docker compose, so anything served from the built image must
+// dial the same-origin proxy endpoint (`<host>/ws`, port implicit in the
+// origin). The vite dev server proxies nothing, so dev dials 9876 directly.
+// `location.host` (not `.hostname`) keeps a non-default port like :8443.
+const _host = typeof location !== 'undefined' ? location.host : '';
+const _wsScheme = typeof location !== 'undefined' && location.protocol === 'https:' ? 'wss' : 'ws';
+const _direct = import.meta.env.DEV || _host === '';
+
+export const DEFAULT_SERVER_ADDRESS = _direct ? '127.0.0.1' : `${_host}/ws`;
+export const DEFAULT_SERVER_PORT = '9876';
+/** Fully-formed default WebSocket URL — the single source of truth. */
+export const DEFAULT_WS_URL = _direct
+  ? `ws://${DEFAULT_SERVER_ADDRESS}:${DEFAULT_SERVER_PORT}`
+  : `${_wsScheme}://${_host}/ws`;
 
 export type ConnectState = 'disconnected' | 'connecting' | 'connected' | 'error';
 

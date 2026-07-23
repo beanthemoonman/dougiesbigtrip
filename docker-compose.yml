@@ -52,6 +52,9 @@ services:
     depends_on:
       - server
     restart: unless-stopped
+    # Prod: mount real certs over the baked-in self-signed pair.
+    # volumes:
+    #   - ./certs:/etc/nginx/certs:ro
 
 volumes:
   pgdata:

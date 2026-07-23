@@ -37,10 +37,28 @@ docker compose --env-file .env up --build
 Open `https://localhost:8443` (accept the self-signed cert warning) or
 `http://localhost:8080` for plain HTTP. The client auto-detects ws:// vs.
 wss:// from the page protocol. The Connect overlay defaults to the proxy
-endpoint — no manual server URL needed.
+endpoint on the origin you loaded the page from (`wss://localhost:8443/ws`,
+`ws://localhost:8080/ws`) — no manual server URL needed. Under `pnpm dev` the
+default stays `ws://127.0.0.1:9876`, since the vite dev server proxies nothing.
 
 Hit **Connect**. You have a slot as soon as the server acknowledges.
 Up to 6 slots (the 7th connection spectates).
+
+## TLS certificates
+
+`Dockerfile.client` bakes a self-signed `/CN=localhost` cert into the image so
+the stack has working TLS with no setup. **The private key is inside the image
+layer — dev only.** For a real deployment, mount your certs over the same paths
+(uncomment the `volumes` block on the `client` service in `docker-compose.yml`):
+
+```
+./certs/server.crt → /etc/nginx/certs/server.crt
+./certs/server.key → /etc/nginx/certs/server.key
+```
+
+The nginx location blocks are shared between the `:80` and `:443` servers via
+`nginx-locations.conf`, included by both — edit routes there, not in
+`nginx.conf`.
 
 ## Building images individually
 
