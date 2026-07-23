@@ -82,25 +82,55 @@ impl Welcome {
 }
 
 // ---------------------------------------------------------------
-// Join — client → server team choice. Phase 9.
+// Join — client → server team choice. Phase 9 / Phase 17.4.
 // team: 0 = T, 1 = CT, 2 = spectator.
+// token: optional access-token string (JWT), sent when AUTH_REQUIRED.
+//
+// Wire format (backwards-compatible):
+//   [TAG_JOIN, PROTOCOL_VERSION, team, token_len_lo, token_len_hi, …bytes]
+// Old 3-byte format still decodes as token=None.
 // ---------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Join {
     pub team: u8,
+    pub token: Option<String>,
 }
 
 impl Join {
     pub fn encode(&self) -> Vec<u8> {
-        vec![TAG_JOIN, PROTOCOL_VERSION, self.team]
+        if let Some(ref token) = self.token {
+            let bytes = token.as_bytes();
+            let len = 5 + bytes.len();
+            let mut buf = Vec::with_capacity(len);
+            buf.push(TAG_JOIN);
+            buf.push(PROTOCOL_VERSION);
+            buf.push(self.team);
+            buf.push((bytes.len() & 0xFF) as u8);
+            buf.push(((bytes.len() >> 8) & 0xFF) as u8);
+            buf.extend_from_slice(bytes);
+            buf
+        } else {
+            vec![TAG_JOIN, PROTOCOL_VERSION, self.team, 0, 0]
+        }
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
         if data.len() < 3 || data[0] != TAG_JOIN || data[1] != PROTOCOL_VERSION {
             return None;
         }
-        Some(Join { team: data[2] })
+        let team = data[2];
+        let token = if data.len() >= 5 {
+            let token_len = u16::from_le_bytes([data[3], data[4]]) as usize;
+            if token_len > 0 && data.len() >= 5 + token_len {
+                String::from_utf8(data[5..5 + token_len].to_vec()).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Some(Join { team, token })
     }
 }
 
@@ -470,10 +500,18 @@ mod tests {
     #[test]
     fn join_round_trip() {
         for team in [0u8, 1, 2] {
-            let j = Join { team };
+            let j = Join { team, token: None };
             let decoded = Join::decode(&j.encode()).expect("join decode failed");
             assert_eq!(decoded, j);
         }
+    }
+
+    #[test]
+    fn join_with_token_round_trip() {
+        let token = Some("eyJhbGciOiJSUzI1NiJ9.test".to_string());
+        let j = Join { team: 1, token: token.clone() };
+        let decoded = Join::decode(&j.encode()).expect("join decode failed");
+        assert_eq!(decoded, j);
     }
 
     #[test]

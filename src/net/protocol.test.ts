@@ -110,6 +110,23 @@ describe('protocol (TS)', () => {
     }
   });
 
+  it('round-trips Join with a token (Phase 17.4)', () => {
+    const j = decodeJoin(encodeJoin({ team: 1, token: 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.signature' }));
+    expect(j).not.toBeNull();
+    expect(j!.team).toBe(1);
+    expect(j!.token).toBe('eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.signature');
+  });
+
+  it('decodes old 3-byte Join format (backwards compat)', () => {
+    const buf = new Uint8Array([TAG_JOIN, PROTOCOL_VERSION, 1]);
+    expect(decodeJoin(buf)).toEqual({ team: 1 });
+  });
+
+  it('decodes new 5-byte Join with no token', () => {
+    const buf = new Uint8Array([TAG_JOIN, PROTOCOL_VERSION, 0, 0, 0]);
+    expect(decodeJoin(buf)).toEqual({ team: 0 });
+  });
+
   it('rejects Join with wrong tag', () => {
     const buf = new Uint8Array([99, PROTOCOL_VERSION, 0]);
     expect(decodeJoin(buf)).toBeNull();

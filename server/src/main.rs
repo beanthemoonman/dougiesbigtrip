@@ -18,7 +18,7 @@ use sim::constants::FIXED_DT;
 use sim::map;
 use sim::movement::{tick_movement, PlayerState};
 use sim::protocol::{
-    CommandFrame, EntityState, GameEvent, Join, RoundState, Shot, Snapshot, Welcome, EV_FIRE,
+    Bye, CommandFrame, EntityState, GameEvent, Join, RoundState, Shot, Snapshot, Welcome, EV_FIRE,
     EV_KILL, F_ALIVE, F_DUCKED, F_TEAM_CT, SPECTATOR,
 };
 use sim::world::SimWorld;
@@ -30,8 +30,11 @@ use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 
 mod ai;
+mod auth;
 mod game;
 mod nav_graph;
+
+use auth::{AuthConfig, ValidatedUser};
 
 // Bot patrol waypoints (de_douglas map) — replaced by nav_graph in Phase 11.
 // Each bot is assigned a start node from the navnode graph.
@@ -61,6 +64,7 @@ struct ServerConfig {
     freezetime_ms: u32,
     round_time_ms: u32,
     end_delay_ms: u32,
+    auth_config: AuthConfig,
 }
 
 fn build_config() -> ServerConfig {
@@ -88,7 +92,9 @@ fn build_config() -> ServerConfig {
         .and_then(|v| v.parse().ok())
         .unwrap_or(game::DEFAULT_END_MS);
 
-    validate_config(bind, bot_count, rounds_to_win, map_name, freezetime_ms, round_time_ms, end_delay_ms)
+    let auth_config = AuthConfig::from_env();
+
+    validate_config(bind, bot_count, rounds_to_win, map_name, freezetime_ms, round_time_ms, end_delay_ms, auth_config)
         .unwrap_or_else(|errors| {
             for e in &errors { eprintln!("{e}"); }
             std::process::exit(1);
@@ -105,6 +111,7 @@ fn validate_config(
     freezetime_ms: u32,
     round_time_ms: u32,
     end_delay_ms: u32,
+    auth_config: AuthConfig,
 ) -> Result<ServerConfig, Vec<String>> {
     let mut errors = Vec::new();
 
@@ -138,6 +145,7 @@ fn validate_config(
         freezetime_ms,
         round_time_ms,
         end_delay_ms,
+        auth_config,
     })
 }
 
@@ -156,10 +164,11 @@ enum Ev {
         slot_tx: oneshot::Sender<u8>, // assigned slot after JoinTeam, or SPECTATOR
         reply: oneshot::Sender<Option<u32>>, // Some(conn_id), or None if refused (full)
     },
-    /// Client sent a Join message with their team choice.
+    /// Client sent a Join message with their team choice and optional auth token.
     JoinTeam {
         conn_id: u32,
         team: u8, // 0=T, 1=CT, 2=SPEC
+        token: Option<String>,
     },
     /// Per-tick command from an assigned player.
     Cmd {
@@ -201,6 +210,8 @@ struct Slot {
     armor: u8,
     weapon: u8,
     ammo: u8,
+    /// Phase 17.4: authenticated user info from the validated JWT.
+    validated_user: Option<ValidatedUser>,
 }
 
 async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig) {
@@ -250,6 +261,7 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                 armor: 0,
                 weapon: 1,
                 ammo: 30,
+                validated_user: None,
             }
         })
         .collect();
@@ -575,9 +587,32 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                     println!("conn {conn_id} connected (pending)");
                     }
                 }
-                Ev::JoinTeam { conn_id, team } => {
+                Ev::JoinTeam { conn_id, team, token } => {
                     // Stale or invalid conn_id → no entry → ignored.
                     if let Some((out, slot_tx)) = pending_conns.remove(&conn_id) {
+                    // Phase 17.4: validate auth token when AUTH_REQUIRED.
+                    let mut validated: Option<ValidatedUser> = None;
+                    if config.auth_config.required {
+                        match token {
+                            None => {
+                                let bye = Bye { reason: "auth required".into() }.encode();
+                                let _ = out.send(bye);
+                                println!("conn {conn_id} refused — no token");
+                                return;
+                            }
+                            Some(ref t) => match auth::validate_token_sync(t, &config.auth_config) {
+                                Err(reason) => {
+                                    let bye = Bye { reason: format!("invalid token: {reason}") }.encode();
+                                    let _ = out.send(bye);
+                                    println!("conn {conn_id} refused — {reason}");
+                                    return;
+                                }
+                                Ok(user) => {
+                                    validated = Some(user);
+                                }
+                            }
+                        }
+                    }
                     // Count active humans before the loop (avoids borrow conflict).
                     let player_count = slots.iter()
                         .filter(|s| s.is_human).count() as u8;
@@ -610,6 +645,7 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                                     sp[0], sp[1], sp[2], false,
                                 );
                                 s.bot = None;
+                                s.validated_user = validated;
                                 break;
                             }
                             if let Some(assigned_slot) = found_slot {
@@ -810,11 +846,11 @@ async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::Unbo
             Some(Ok(Message::Binary(data))) => {
                 // First message must be Join.
                 if let Some(join) = Join::decode(&data) {
-                    let _ = events.send(Ev::JoinTeam { conn_id, team: join.team });
+                    let _ = events.send(Ev::JoinTeam { conn_id, team: join.team, token: join.token });
                     break;
                 }
                 // Backwards compat: old client sends Cmd first; treat as T auto-join.
-                let _ = events.send(Ev::JoinTeam { conn_id, team: 0 });
+                let _ = events.send(Ev::JoinTeam { conn_id, team: 0, token: None });
                 break;
             }
             Some(Ok(Message::Close(_))) | None => {
@@ -887,6 +923,10 @@ async fn main() {
         println!("DATABASE_URL not set — running without persistence");
     }
 
+    // Phase 17.4: prefetch JWKS so sync validation works in the game loop.
+    // Safe to call unconditionally — returns immediately when !required.
+    auth::prefetch_jwks(&config.auth_config).await;
+
     let (events_tx, events_rx) = mpsc::unbounded_channel::<Ev>();
     tokio::spawn(game_loop(events_rx, config.clone()));
 
@@ -902,7 +942,16 @@ async fn main() {
 mod config_tests {
     use super::*;
 
-    fn default_values() -> (String, usize, u8, String, u32, u32, u32) {
+    fn auth_not_required() -> AuthConfig {
+        AuthConfig {
+            required: false,
+            issuer: String::new(),
+            audience: String::new(),
+            jwks_url: String::new(),
+        }
+    }
+
+    fn default_values() -> (String, usize, u8, String, u32, u32, u32, AuthConfig) {
         (
             "127.0.0.1:9876".into(), // bind
             6,   // bot_count
@@ -911,13 +960,14 @@ mod config_tests {
             3_000,   // freezetime_ms
             115_000, // round_time_ms
             5_000,   // end_delay_ms
+            auth_not_required(),
         )
     }
 
     #[test]
     fn default_config_passes() {
-        let (b, bc, r, m, f, rt, e) = default_values();
-        let cfg = validate_config(b, bc, r, m, f, rt, e).expect("default should be valid");
+        let (b, bc, r, m, f, rt, e, a) = default_values();
+        let cfg = validate_config(b, bc, r, m, f, rt, e, a).expect("default should be valid");
         assert_eq!(cfg.bot_count, 6);
         assert_eq!(cfg.rounds_to_win, 16);
         assert_eq!(cfg.map, "de_douglas");
@@ -925,57 +975,57 @@ mod config_tests {
 
     #[test]
     fn rejects_bot_count_too_low() {
-        let (b, _, r, m, f, rt, e) = default_values();
-        let err = validate_config(b, 0, r, m, f, rt, e).unwrap_err();
+        let (b, _, r, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, 0, r, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("bot_count")));
     }
 
     #[test]
     fn rejects_bot_count_above_capacity() {
-        let (b, _, r, m, f, rt, e) = default_values();
-        let err = validate_config(b, 7, r, m, f, rt, e).unwrap_err();
+        let (b, _, r, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, 7, r, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("bot_count")));
     }
 
     #[test]
     fn rejects_rounds_to_win_zero() {
-        let (b, bc, _, m, f, rt, e) = default_values();
-        let err = validate_config(b, bc, 0, m, f, rt, e).unwrap_err();
+        let (b, bc, _, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, bc, 0, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("rounds_to_win")));
     }
 
     #[test]
     fn rejects_rounds_to_win_too_high() {
-        let (b, bc, _, m, f, rt, e) = default_values();
-        let err = validate_config(b, bc, 31, m, f, rt, e).unwrap_err();
+        let (b, bc, _, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, bc, 31, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("rounds_to_win")));
     }
 
     #[test]
     fn rejects_unknown_map() {
-        let (b, bc, r, _, f, rt, e) = default_values();
-        let err = validate_config(b, bc, r, "cs_office".into(), f, rt, e).unwrap_err();
+        let (b, bc, r, _, f, rt, e, a) = default_values();
+        let err = validate_config(b, bc, r, "cs_office".into(), f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("unknown map")));
     }
 
     #[test]
     fn accepts_minimal_bot_count() {
-        let (b, _, r, m, f, rt, e) = default_values();
-        let cfg = validate_config(b, 2, r, m, f, rt, e).expect("bot_count=2 should be valid");
+        let (b, _, r, m, f, rt, e, a) = default_values();
+        let cfg = validate_config(b, 2, r, m, f, rt, e, a).expect("bot_count=2 should be valid");
         assert_eq!(cfg.bot_count, 2);
     }
 
     #[test]
     fn accepts_max_slots_bot_count() {
-        let (b, _, r, m, f, rt, e) = default_values();
-        let cfg = validate_config(b, MAX_SLOTS, r, m, f, rt, e).expect("bot_count=MAX_SLOTS valid");
+        let (b, _, r, m, f, rt, e, a) = default_values();
+        let cfg = validate_config(b, MAX_SLOTS, r, m, f, rt, e, a).expect("bot_count=MAX_SLOTS valid");
         assert_eq!(cfg.bot_count, MAX_SLOTS);
     }
 
     #[test]
     fn reports_all_errors_together() {
-        let (b, _, _, _, f, rt, e) = default_values();
-        let err = validate_config(b, 0, 0, "unknown".into(), f, rt, e).unwrap_err();
+        let (b, _, _, _, f, rt, e, a) = default_values();
+        let err = validate_config(b, 0, 0, "unknown".into(), f, rt, e, a).unwrap_err();
         assert!(err.len() >= 3);
     }
 }

@@ -3089,3 +3089,53 @@ URL-meaningful password characters.
   input, undefined realm_access.
 
 **Results:** `pnpm test` 242 passed (+11), `pnpm typecheck` clean, `pnpm build` clean.
+
+## 2026-07-23 — Phase 17.4: Server-side JWT validation
+
+### Protocol: Join extended with token (sim + TS)
+- `sim/src/protocol.rs`: `Join` gains `token: Option<String>`. Wire format is
+  `[TAG_JOIN, PROTOCOL_VERSION, team, token_len_lo, token_len_hi, …bytes]`.
+  Old 3-byte format still decodes as `token=None` (backwards-compatible).
+- `src/net/protocol.ts`: `encodeJoin`/`decodeJoin` mirror the new format.
+  `Join` interface gains `token?: string`.
+- `src/main.ts`: `sendJoinRef` includes `auth?.token()` in the Join frame.
+- 4 new T0 TS tests: token round-trip, old 3-byte decode, new 5-byte decode.
+- 1 new Rust test: `join_with_token_round_trip`. 40 sim tests green.
+
+### `server/src/auth.rs` — JWT validation module
+- `AuthConfig { required, issuer, audience, jwks_url }` — built from env vars.
+  `AUTH_REQUIRED` (default `false`), `AUTH_ISSUER`, `AUTH_JWKS_URL`,
+  `AUTH_AUDIENCE`.
+- `prefetch_jwks()` — fetches realm `openid-connect/certs` at startup and
+  caches `kid → DecodingKey`. Keys cached for 15 minutes.
+- `validate_token_sync(tok, &config)` — synchronous validation (uses
+  `blocking_read` on cached JWKS): decode header → lookup `kid` → verify
+  signature → check `exp`/`iss`/`aud` (leeway 30 s) → extract
+  `sub`/`name`/`is_admin` from `realm_access.roles`.
+- 7 Rust unit tests with fixture HS256 tokens: valid-with-role,
+  valid-without-role, wrong issuer, wrong audience, expired, bad signature,
+  auth-not-required default.
+- Dependencies: `jsonwebtoken` 9, `reqwest` 0.12 (rustls-tls).
+
+### Server wiring (`server/src/main.rs`)
+- `Ev::JoinTeam` gains `token: Option<String>`. Server's connect handler
+  passes `join.token` through from decoded Join frame.
+- `Slot` gains `validated_user: Option<ValidatedUser>` — populated from a
+  successful JWT validation, stored on the slot.
+- `JoinTeam` handler: when `AUTH_REQUIRED=true`, validates the token before
+  assigning a slot. Missing/invalid token → `Bye { reason }` + close before
+  the slot is allocated. Never reaches Team assignment.
+- `prefetch_jwks()` called at startup in `main()` (no-op when !required).
+- `ServerConfig` + `validate_config` gain `auth_config` field.
+
+### Build + local-dev invariant
+- Bare `cargo run` (no DATABASE_URL, no AUTH_REQUIRED) still works — the
+  prefetch is a no-op, JoinTeam skips validation, every connection is an
+  anonymous non-admin.
+- `AUTH_REQUIRED=true` in compose `.env` gates the entire flow; never a
+  self-signed JWT or mocked validation path.
+
+### Tests
+- TS: `pnpm test` 245 passed (+3). `pnpm typecheck` clean. `pnpm build` clean.
+- Rust: `cargo test -p sim` 40 passed (+1). `cargo test -p server` 26 passed (+7).
+  `cargo check` zero warnings.

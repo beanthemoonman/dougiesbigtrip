@@ -760,7 +760,7 @@ up first.
       `/health/ready`.
 - [x] **17.3** Client-side login flow — Authorization Code + PKCE via `keycloak-js`, token in memory
       only, expose `auth.name`/`sub`/`isAdmin`/`token()`.
-- [ ] **17.4** Server-side token validation — verify JWT signature against realm JWKS, check
+- [x] **17.4** Server-side token validation — verify JWT signature against realm JWKS, check
       `exp`/`iss`/`aud`, reject unauthenticated when `AUTH_REQUIRED=true`, `role_admin` checked
       server-side only. `AUTH_REQUIRED=false` (default) skips validation.
 

@@ -511,7 +511,7 @@ async function main(): Promise<void> {
         settingsPanel.setGameMode('none');
         // Wire sendJoinRef so the team-menu callback can ship the Join frame.
         sendJoinRef.fn = (team: number) => {
-          conn.send(encodeJoin({ team }));
+          conn.send(encodeJoin({ team, token: auth?.token() }));
           teamMenu.el.style.display = 'none';
         };
         return;

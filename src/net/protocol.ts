@@ -87,21 +87,43 @@ export function decodeWelcome(data: Uint8Array): Welcome | null {
 }
 
 // ---------------------------------------------------------------
-// Join — client → server team choice. Phase 9.
+// Join — client → server team choice. Phase 9 / Phase 17.4.
 // team: 0 = T, 1 = CT, 2 = spectator.
+// token: optional access-token (JWT) sent when AUTH_REQUIRED.
+//
+// Wire format: [TAG_JOIN, PROTOCOL_VERSION, team, token_len_lo, token_len_hi, …bytes]
+// token_len 0 = no token (backwards-compatible with old 3-byte Join).
 // ---------------------------------------------------------------
 
 export interface Join {
   team: number;
+  token?: string;
 }
 
 export function encodeJoin(j: Join): Uint8Array {
-  return new Uint8Array([TAG_JOIN, PROTOCOL_VERSION, j.team]);
+  const tokenBytes = j.token ? new TextEncoder().encode(j.token) : null;
+  const tokenLen = tokenBytes?.length ?? 0;
+  const buf = new Uint8Array(5 + tokenLen);
+  buf[0] = TAG_JOIN;
+  buf[1] = PROTOCOL_VERSION;
+  buf[2] = j.team;
+  buf[3] = tokenLen & 0xFF;
+  buf[4] = (tokenLen >> 8) & 0xFF;
+  if (tokenBytes) buf.set(tokenBytes, 5);
+  return buf;
 }
 
 export function decodeJoin(data: Uint8Array): Join | null {
   if (data.length < 3 || data[0] !== TAG_JOIN || data[1] !== PROTOCOL_VERSION) return null;
-  return { team: data[2]! };
+  const team = data[2]!;
+  let token: string | undefined;
+  if (data.length >= 5) {
+    const tokenLen = data[3]! | (data[4]! << 8);
+    if (tokenLen > 0 && data.length >= 5 + tokenLen) {
+      token = new TextDecoder().decode(data.slice(5, 5 + tokenLen));
+    }
+  }
+  return { team, token };
 }
 
 // ---------------------------------------------------------------
