@@ -29,6 +29,41 @@ services:
       retries: 10
       start_period: 3s
 
+  auth:
+    image: quay.io/keycloak/keycloak:26
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-dougys}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_DB_SCHEMA: keycloak
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: localhost
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8080
+    expose:
+      - "8080"
+    volumes:
+      - ./auth/counter-douglas-realm.json:/opt/keycloak/data/import/counter-douglas-realm.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080; echo -e 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q 200"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
   server:
     build:
       context: .

@@ -753,9 +753,11 @@ up first.
 - [x] **17.1** Promote nginx to single ingress — terminates TLS (self-signed for dev), proxies
       `/`→client, `/ws`→server WebSocket, `/status`+`/api/`→server HTTP, `/auth/`→Keycloak (placeholder).
       Server stops publishing host ports (`expose:` only). Client defaults to `wss://<host>/ws` over HTTPS.
-- [ ] **17.2** `auth` service added to `docker-compose.yml` — official Keycloak image, `expose:` only,
-      `depends_on: db` with a health condition, realm-export JSON mounted in, Google client id/secret
-      from env.
+- [x] **17.2** `auth` service added to `docker-compose.yml` — official Keycloak 26 image, `expose:` only,
+      `depends_on: db: {condition: service_healthy}`, realm-export JSON mounted in, Google OAuth
+      client id/secret from env (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET placeholders).
+      `start-dev --import-realm` for local; `KC_DB_SCHEMA=keycloak`. Health check on
+      `/health/ready`.
 - [ ] **17.3** Client-side login flow — Authorization Code + PKCE via `keycloak-js`, token in memory
       only, expose `auth.name`/`sub`/`isAdmin`/`token()`.
 - [ ] **17.4** Server-side token validation — verify JWT signature against realm JWKS, check

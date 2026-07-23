@@ -8,9 +8,10 @@ service.
 
 | Image | What | Port |
 |---|---|---|
-| `dougys-server` | Rust deathmatch server (64 Hz authoritative sim, bot AI, round FSM) | 9876 |
-| `dougys-client` | nginx serving the TypeScript/Vite SPA (includes the WASM sim client-side) | 8080→80 |
-| Postgres 16 | Database (named volume `pgdata`) — migrations run on server start | internal |
+| `dougys-server` | Rust deathmatch server (64 Hz authoritative sim, bot AI, round FSM) | internal |
+| `dougys-client` | nginx serving the TypeScript/Vite SPA + reverse proxy (TLS) | 8080→80, 8443→443 |
+| Keycloak 26 | Auth (Google OAuth broker, JWT issuer) — `KC_DB_SCHEMA=keycloak` | internal |
+| Postgres 16 | Database (named volume `pgdata`) — two schemas, `app` + `keycloak` | internal |
 
 Only the nginx proxy publishes host ports. The server and database are
 internal — the browser talks to the server through the proxy at `/ws`:
@@ -97,6 +98,36 @@ vars only) — this keeps `cargo run` working for local dev without Postgres.
 # Reset everything (data + containers):
 docker compose down -v
 ```
+
+## Auth (Keycloak + Google)
+
+Keycloak 26 runs as the `auth` service, reached at `/auth/` through the proxy.
+On first start it imports the committed realm
+(`auth/counter-douglas-realm.json`) and creates its schema in the `db` container.
+
+The realm defines a public OIDC client (`counter-douglas-spa`) and a Google
+identity provider. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are read from
+the environment (set them in `.env`).
+
+**Obtaining Google OAuth credentials:**
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com).
+2. Create a project (or use an existing one).
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID.**
+4. Application type: **Web application**.
+5. Authorised redirect URI:
+   ```
+   https://<your-host>/auth/realms/counter-douglas/broker/google/endpoint
+   ```
+   (For local dev with the self-signed cert it's
+   `https://localhost:8443/auth/realms/counter-douglas/broker/google/endpoint`.)
+6. Copy the **Client ID** and **Client Secret** into your `.env` file.
+
+**Granting admin (`role_admin`):**
+
+No self-service admin grant. After the first login, an existing admin assigns
+the `role_admin` realm role in the Keycloak admin console at
+`/auth/admin/counter-douglas/console/`.
 
 ## Budgets (production build)
 
