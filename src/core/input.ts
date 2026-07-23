@@ -62,12 +62,18 @@ const DEFAULT_BINDINGS: Record<string, number> = {
 /** Mutable key→action map (code → button bitmask). */
 const _codeToAction = new Map<string, number>(Object.entries(DEFAULT_BINDINGS));
 
-/** Clear all bindings for an action and set a single new code. */
-export function rebindAction(action: ActionId, code: string): void {
+/**
+ * Clear all bindings for an action and set a single new code. Binding a key
+ * that another action holds takes it away from that action — returns the
+ * action that lost the key (or 0) so the settings screen can say so.
+ */
+export function rebindAction(action: ActionId, code: string): ActionId {
+  const stolenFrom = _codeToAction.get(code) ?? 0;
   for (const [c, a] of _codeToAction) {
     if (a === action) _codeToAction.delete(c);
   }
   _codeToAction.set(code, action);
+  return stolenFrom === action ? 0 : stolenFrom;
 }
 
 /** Return all key codes bound to an action, sorted. */

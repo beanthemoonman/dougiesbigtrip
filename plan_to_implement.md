@@ -823,6 +823,14 @@ Server-admin surface for the Phase 16/18 knobs. Visible **only to `role_admin`**
 
 - [x] Admin screen exposes server bot count, map, rounds-to-win; writes persist (Phase 18).
 - [x] Entirely hidden and server-refused for non-admins (gate on the token role, both sides).
+      *Review fixes (ae0a806):* nginx proxied `/api/` to the game port, so the admin API was
+      unreachable — now `server:9877`, with a matching vite dev proxy (same-origin, no CORS).
+      DB persist errors no longer swallowed (500 instead of a false "Saved"). Config read guard
+      no longer held across the JWKS fetch. Admin edits now apply at the next round reset
+      (`rounds_to_win` + bot budget) instead of only appearing in `Welcome`. The
+      `AUTH_REQUIRED=false` bypass is restricted to a loopback-bound API; `API_BIND` defaults to
+      `127.0.0.1:9877` and compose opts in to `0.0.0.0` explicitly.
+      `pnpm test` 248 / `cargo test -p server` 31 green.
 
 **Exit test:** A `role_admin` user changes the server's bot count / map / rounds-to-win, the
 change persists and takes effect; a non-admin cannot see or reach the screen.

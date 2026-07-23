@@ -26,7 +26,13 @@ export interface AdminConfigData {
 }
 
 export function createAdminScreen(opts: {
-  /** Base URL of the server's HTTP API (e.g. http://localhost:9877). */
+  /**
+   * Base URL the `/api/config` calls go to. Same-origin in both stacks:
+   * nginx proxies `/api/` to the server's API port in compose, the vite dev
+   * server proxies it to 127.0.0.1:9877. ponytail: this means you administer
+   * the server behind your own origin — there is no "pick a remote server to
+   * admin" flow, and it doesn't need one until there is more than one server.
+   */
   apiBase: string;
   /** JWT to include in the Authorization header. */
   token(): string | undefined;
@@ -151,6 +157,7 @@ export function createAdminScreen(opts: {
         : f.val.value;
     }
     const token = opts.token();
+    saveBtn.disabled = true;
     try {
       const res = await fetch(`${opts.apiBase}/api/config`, {
         method: 'PUT',
@@ -164,14 +171,15 @@ export function createAdminScreen(opts: {
         const text = await res.text();
         status.textContent = `Error ${res.status}: ${text}`;
         status.style.color = '#c44';
-        saveBtn.disabled = false;
         return;
       }
-      status.textContent = 'Saved \u2014 takes effect next match';
+      status.textContent = 'Saved \u2014 takes effect next round';
       status.style.color = '#6a9';
     } catch (err) {
       status.textContent = `Failed: ${String(err)}`;
       status.style.color = '#c44';
+    } finally {
+      saveBtn.disabled = false;
     }
   }
 

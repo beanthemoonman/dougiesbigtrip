@@ -80,8 +80,17 @@ services:
       dockerfile: Dockerfile.server
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      # Admin API must be reachable from the nginx container, so it binds all
+      # interfaces (compose-internal only — `expose`, not `ports`). Bound
+      # off-loopback, the admin gate requires a real admin JWT.
+      API_BIND: 0.0.0.0:9877
+      # Passed through from .env (previously never reached the container, so the
+      # documented AUTH_REQUIRED=true gate was silently off). Unset ⇒ auth off
+      # ⇒ the admin API refuses every write rather than running open.
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-}
     expose:
       - "9876"
+      - "9877"
     depends_on:
       db:
         condition: service_healthy

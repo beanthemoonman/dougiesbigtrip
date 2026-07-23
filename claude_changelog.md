@@ -3317,3 +3317,78 @@ bailing on a migration failure against a *reachable* DB, and the note that
 - TS: `pnpm test` 245 passed. `pnpm typecheck` clean. `pnpm build` clean.
 - Rust: `cargo test -p server` 28 passed. `cargo test -p sim` 40 passed.
   `cargo clippy` zero new warnings.
+
+## Review fixes for ae0a806 (Phase 19 + 20)
+
+Twelve findings from a review of the Phase 19/20 commit. The admin screen could
+not have worked as shipped — the two P0s are wiring, not logic.
+
+**P0 — admin API was unreachable from the browser**
+- `nginx-locations.conf`: `/api/` proxied to `server:9876` (the *game* port,
+  which has no `/api` handler). Now proxies to `server:9877`, the axum
+  `API_BIND` port. `/status` stays on 9876 — the game port's peek handler
+  answers it and an e2e Gate 1 test depends on that.
+- `docker-compose.yml`: `server` now sets `API_BIND=0.0.0.0:9877` and exposes
+  9877 on the compose network (`expose`, not `ports` — still not published to
+  the host) so nginx can reach it.
+- `vite.config.ts`: dev server proxies `/api` → `127.0.0.1:9877`, so
+  `apiBase: location.origin` in `src/main.ts` is correct in dev too.
+- Consequence: every call is same-origin, so **no CORS layer is needed** — the
+  `tower-http` dependency added mid-fix was removed again.
+
+**P1**
+- `http.rs`: `db::update_config()` errors were swallowed with `let _ =`; the
+  admin saw "Saved" while the write failed and a restart reverted it. Now
+  persists *before* mutating shared state and returns 500 on failure.
+- `http.rs`: the config read guard was held across `auth::validate_token().await`
+  (a JWKS network fetch). Tokio's `RwLock` is write-preferring, so a slow IdP
+  would have stalled the game loop's own `config.read()` on the player-join
+  path. `auth_config` is now cloned out and the guard dropped first.
+- `main.rs`: config split-brain — `game_loop` held a by-value `ServerConfig` and
+  only read `shared_config` in the two `Welcome` builders, so an admin edit made
+  new joiners see a `roundsToWin` the round FSM was not using, and `bot_count`
+  never changed at all. The loop now re-reads the shared config at each
+  `RoundEvent::Reset`, applying `rounds_to_win` to the live `game::State` and
+  re-sizing the bot budget (human-held slots are never vacated). Applied before
+  the respawn pass so newly-occupied slots get their bot backfilled in the same
+  pass. Admin screen wording changed to "takes effect next round".
+- `main.rs`: `handle_conn` took a startup clone of the config for its `/status`
+  response, so that endpoint reported pre-edit values forever. Now takes the
+  shared lock.
+
+**P2 — the dev-mode admin bypass**
+- `PUT /api/config` skipped the admin gate entirely when `AUTH_REQUIRED=false`,
+  and compose never passed `AUTH_REQUIRED` to the server container at all — so
+  wiring nginx up would have exposed an unauthenticated config-write endpoint.
+  The bypass is now `ApiState::open_admin`, true only when auth is off **and**
+  the API is bound to loopback (a developer's own box). Off-loopback with auth
+  off returns 403 with a message naming the fix. Default `API_BIND` moved from
+  `0.0.0.0:9877` to `127.0.0.1:9877`; compose opts in explicitly.
+- `AUTH_REQUIRED` is now passed through in `docker-compose.yml` and documented
+  in `.env.example`.
+- `GET /api/config` was ungated while `PUT` was admin-only; both now go through
+  the same `require_admin()`.
+
+**P3 — cuts and nits**
+- Deleted `ServerCounters` (a struct wrapping two `&'static AtomicU8` in an
+  `Arc`): `http.rs` reads `crate::ACTIVE_HUMANS` / `SPECTATOR_COUNT` directly.
+- `http::serve()` no longer panics a detached task on bind/serve failure — it
+  logs and returns, and the game server stays up.
+- `http.rs` module doc claimed it "replaces the hand-rolled /status peek". It
+  doesn't; both exist for different ports. Doc corrected to say so.
+- `admin.ts`: `saveBtn.disabled = false` was set on the error path but never
+  set true. Now disabled for the duration of the request via `finally`.
+- `input.ts`: `rebindAction()` silently stole a key from whichever action held
+  it. It now returns that action (or 0), and the bindings tab says
+  "KeyR taken from Reload — it is now unbound."
+
+**Tests**
+- New `server/src/http.rs::gate_tests` (3): auth-off-off-loopback refuses,
+  auth-off-on-loopback allows, auth-on-without-header is 401.
+- New `src/core/input.test.ts` (3): rebind replaces all codes for an action,
+  reports the action a stolen key came from, reports 0 when the key was free.
+- `pnpm test` 248 passed, `pnpm typecheck` clean. `cargo test -p server` 31
+  passed, `cargo test -p sim` 40 passed. No new clippy warnings.
+- Not covered by a test: the bot-budget resize at round reset lives inside the
+  game loop's tick arm and would need the slot table extracted to reach. The
+  rule is one line ("humans keep their slot, otherwise `i < bot_count`").

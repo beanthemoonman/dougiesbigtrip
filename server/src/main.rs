@@ -73,7 +73,9 @@ pub struct ServerConfig {
 
 fn build_config() -> ServerConfig {
     let bind = std::env::var("SERVER_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
-    let api_bind = std::env::var("API_BIND").unwrap_or_else(|_| "0.0.0.0:9877".to_string());
+    // Loopback by default: with AUTH_REQUIRED=false the admin gate is open, so
+    // the API must not be reachable off-box unless someone opts in via API_BIND.
+    let api_bind = std::env::var("API_BIND").unwrap_or_else(|_| "127.0.0.1:9877".to_string());
 
     let bot_count: usize = std::env::var("BOT_COUNT")
         .ok()
@@ -233,6 +235,10 @@ async fn game_loop(
     let nav_graph = nav_graph::NavGraph::from_json(NAVNODES_JSON);
     let mut search_state = ai::SearchState::new(nav_graph.node_count());
 
+    // Live bot budget: seeded from startup config, re-read from the shared config
+    // at each round reset so an admin edit takes effect without a restart.
+    let mut bot_count = config.bot_count;
+
     let mut slots: Vec<Slot> = (0..MAX_SLOTS)
         .map(|i| {
             let team_ct = i % 2 == 1;
@@ -248,7 +254,7 @@ async fn game_loop(
             world.sync_player_body(body_handle, collider_handle, s[0], s[1], s[2], false);
 
             // Only fill the first bot_count slots; remainder stay vacant for future humans.
-            let occupied = i < config.bot_count;
+            let occupied = i < bot_count;
             let start_node = if team_ct { 7 } else { 0 };
             let bot = if occupied { Some(ai::Bot::new(start_node, i as u32 * 17)) } else { None };
 
@@ -314,6 +320,30 @@ async fn game_loop(
                 let is_live = round.phase == game::Phase::Live;
 
                 if round_ev == game::RoundEvent::Reset {
+                    // Phase 20.1: apply any admin config edit at the round boundary —
+                    // the only point where changing bot count / rounds-to-win is safe.
+                    // Done before the respawn pass below so vacated slots stay dead and
+                    // newly-occupied ones get their bot backfilled in the same pass.
+                    {
+                        let sc = shared_config.read().await;
+                        if sc.rounds_to_win != round.rounds_to_win {
+                            println!("config: rounds_to_win {} -> {}", round.rounds_to_win, sc.rounds_to_win);
+                            round.rounds_to_win = sc.rounds_to_win;
+                        }
+                        if sc.bot_count != bot_count {
+                            println!("config: bot_count {} -> {}", bot_count, sc.bot_count);
+                            bot_count = sc.bot_count;
+                            for (i, s) in slots.iter_mut().enumerate() {
+                                // Humans hold their slot regardless of the bot budget.
+                                if s.is_human { continue; }
+                                s.occupied = i < bot_count;
+                                if !s.occupied {
+                                    s.bot = None;
+                                    s.alive = false;
+                                }
+                            }
+                        }
+                    }
                     for (i, s) in slots.iter_mut().enumerate() {
                         if !s.occupied { continue; }
                         // Phase 9: a slot a human left is vacant (no bot, dead) until now —
@@ -801,7 +831,12 @@ async fn peek_is_status(stream: &TcpStream) -> Option<bool> {
     Some(buf[..n].starts_with(b"GET /status"))
 }
 
-async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::UnboundedSender<Ev>, config: ServerConfig) {
+async fn handle_conn(
+    mut stream: TcpStream,
+    addr: SocketAddr,
+    events: mpsc::UnboundedSender<Ev>,
+    shared_config: std::sync::Arc<tokio::sync::RwLock<ServerConfig>>,
+) {
     // Gate 1: a plain `GET /status` HTTP request (not a WebSocket upgrade) gets a
     // well-formed HTTP/1.1 response with Content-Length and the socket closed. We
     // peek the request line off the raw TCP stream before handing it to the WS
@@ -811,10 +846,13 @@ async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::Unbo
     if let Some(true) = peek_is_status(&stream).await {
         let players = ACTIVE_HUMANS.load(Ordering::Relaxed);
         let spectators = SPECTATOR_COUNT.load(Ordering::Relaxed);
+        // Read the shared config, not a startup clone — admin edits must show here too.
+        let config = shared_config.read().await;
         let json = format!(
             "{{\"players\":{},\"maxPlayers\":{},\"spectators\":{},\"specCap\":{},\"botCount\":{},\"roundsToWin\":{},\"map\":\"{}\"}}",
             players, MAX_SLOTS, spectators, MAX_SPECTATORS, config.bot_count, config.rounds_to_win, config.map,
         );
+        drop(config);
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             json.len(), json,
@@ -1016,19 +1054,19 @@ async fn main() {
 
     // Phase 20.1: spawn the axum HTTP API server for /api/config, /status.
     let api_addr: std::net::SocketAddr = config.api_bind.parse().expect("invalid API_BIND");
-    let counters = http::ServerCounters::new(&ACTIVE_HUMANS, &SPECTATOR_COUNT);
-    let api_state = http::ApiState {
-        config: shared,
-        pool,
-        counters: std::sync::Arc::new(counters),
-    };
+    // Open admin only for a loopback-bound API with auth off — see ApiState::open_admin.
+    let open_admin = !config.auth_config.required && api_addr.ip().is_loopback();
+    if open_admin {
+        println!("admin API unauthenticated (loopback bind, AUTH_REQUIRED=false)");
+    }
+    let api_state = http::ApiState { config: shared.clone(), pool, open_admin };
     tokio::spawn(http::serve(api_addr, api_state));
 
     let listener = TcpListener::bind(&config.bind).await.expect("bind");
     println!("deathmatch server listening on ws://{}", config.bind);
 
     while let Ok((stream, addr)) = listener.accept().await {
-        tokio::spawn(handle_conn(stream, addr, events_tx.clone(), config.clone()));
+        tokio::spawn(handle_conn(stream, addr, events_tx.clone(), shared.clone()));
     }
 }
 
@@ -1048,7 +1086,7 @@ mod config_tests {
     fn default_values() -> (String, String, usize, u8, String, u32, u32, u32, AuthConfig) {
         (
             "127.0.0.1:9876".into(), // bind
-            "0.0.0.0:9877".into(), // api_bind
+            "127.0.0.1:9877".into(), // api_bind
             6,   // bot_count
             16,  // rounds_to_win
             "de_douglas".into(), // map_name

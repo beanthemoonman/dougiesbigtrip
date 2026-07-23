@@ -151,13 +151,14 @@ export function createSettingsScreen(opts: {
   bindingsPane.style.display = 'none';
   {
     let rebindingAction: number | null = null;
+    let rebindNote = '';
 
     function renderBindings(): void {
       bindingsPane.innerHTML = '';
 
       const hint = document.createElement('div');
-      hint.textContent = 'Click an action to rebind, then press the new key.';
-      hint.style.cssText = `margin-bottom:16px;font-size:12px;opacity:0.6;color:${MUTED};`;
+      hint.textContent = rebindNote || 'Click an action to rebind, then press the new key.';
+      hint.style.cssText = `margin-bottom:16px;font-size:12px;opacity:0.6;color:${rebindNote ? '#c96' : MUTED};`;
       bindingsPane.appendChild(hint);
 
       for (const actionId of ACTION_ORDER) {
@@ -185,6 +186,7 @@ export function createSettingsScreen(opts: {
 
         row.onclick = (): void => {
           rebindingAction = actionId;
+          rebindNote = '';
           renderBindings();
         };
         row.style.cursor = 'pointer';
@@ -211,7 +213,10 @@ export function createSettingsScreen(opts: {
       if (rebindingAction === null || el.style.display === 'none') return;
       e.preventDefault();
       e.stopPropagation();
-      rebindAction(rebindingAction as ActionId, e.code);
+      const stolenFrom = rebindAction(rebindingAction as ActionId, e.code);
+      rebindNote = stolenFrom
+        ? `${e.code} taken from ${ACTION_NAMES[stolenFrom] ?? 'another action'} — it is now unbound.`
+        : '';
       rebindingAction = null;
       renderBindings();
     }
