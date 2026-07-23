@@ -2755,6 +2755,14 @@ the fixed 180 s match clock with `roundsToWin` is intended and its reset path is
 - `?connect=` URL param validated: only `ws:` and `wss:` protocols accepted;
   non-ws schemes produce a console warning and fall back to page-host defaults.
 
+**Cross-cutting adjustments from 16.3 testing**
+- `LIMITS.botCount` ceiling lowered from 10 → 6 (matches server `MAX_SLOTS = 6`).
+- `isMatchOver(scoreT, scoreCt, roundsToWin)` exported — networked client checks match-over
+  from Welcome.roundsToWin + snapshot scores (server snapshots carry scores, not a match-over flag).
+- Server match-over reset emits `Reset` instead of duplicate `MatchOver` — the game loop
+  already respawns everyone on Reset; emitting a second MatchOver was noise.
+- `docs/plan-post-1.0-config-auth.md` updated: botCount ceiling documented.
+
 **All tests green:** 231 TS tests, 39 sim tests, 19 server tests. Typecheck + build clean.
 
 ---
@@ -2791,3 +2799,17 @@ never over.
 counts are lopsided by one on both sides; that is inherent to odd counts, not a divergence.
 
 **Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean, `cargo test -p server` 19 passed.
+
+## Review of cf3f14f — two fixes
+
+**`?connect=` scheme validation was cosmetic.** The ws:/wss: check added in 16.4 only gated how
+the param seeded the settings-panel address/port inputs; the auto-connect at the bottom of
+`main()` re-read the raw param and dialled it regardless, so `?connect=http://host` still reached
+`new WebSocket()` (caught, but the documented validation didn't hold). The validated URL is now
+kept in `validatedBootUrl` and is the only thing `handleConnect` is given.
+
+**Deduplicated the invalid-URL branch in `settings.ts`.** The build-and-validate block was pasted
+in both the initial `connect` closure and the re-bind inside `setConnected()`. Hoisted to a
+`connectFromInputs` ref set once when the server section is built; `setConnected()` now just calls it.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean.

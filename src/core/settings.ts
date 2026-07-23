@@ -172,6 +172,8 @@ export function createSettingsPanel(
   let connBtn: HTMLButtonElement | null = null;
   let connStatus: HTMLDivElement | null = null;
   let addrReadonly: HTMLDivElement | null = null;
+  /** Set when the server section is built; re-bound by setConnected(). */
+  let connectFromInputs: (() => void) | null = null;
 
   if (serverOpts) {
     serverSection = document.createElement('div');
@@ -223,6 +225,7 @@ export function createSettingsPanel(
       }
       serverOpts.onConnect(url);
     };
+    connectFromInputs = connect;
 
     connBtn.onclick = connect;
     addrInput.onkeydown = (e: KeyboardEvent): void => {
@@ -352,17 +355,7 @@ export function createSettingsPanel(
         } else {
           connBtn.textContent = 'Connect';
           connBtn.style.background = '#2a5a2a';
-          connBtn.onclick = (): void => {
-            const addr = addrInput!.value.trim();
-            const port = portInput!.value.trim();
-            if (!addr || (needsPort(addr) && !port)) return;
-            const url = buildWsUrl(addr, port);
-            if (!url) {
-              if (connStatus) { connStatus.textContent = 'invalid URL'; connStatus.style.color = '#c44'; connStatus.style.display = ''; }
-              return;
-            }
-            serverOpts?.onConnect(url);
-          };
+          connBtn.onclick = (): void => { connectFromInputs?.(); };
         }
       }
       if (connStatus) {

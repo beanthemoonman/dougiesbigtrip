@@ -613,13 +613,17 @@ async function main(): Promise<void> {
   let defaultAddress: string | undefined =
     location.protocol === 'https:' ? `${location.host}/ws` : location.hostname || undefined;
   let defaultPort: string | undefined;
+  // Phase 16.4: only ws:// and wss:// URLs are valid targets. Null here means
+  // "no usable ?connect=" — it gates both the panel seed *and* the auto-connect
+  // at the bottom of main(), so a rejected scheme is never dialled.
+  let validatedBootUrl: string | null = null;
   if (bootUrl) {
     try {
       const u = new URL(bootUrl);
-      // Phase 16.4: only ws:// and wss:// URLs are valid targets.
       if (u.protocol !== 'ws:' && u.protocol !== 'wss:') {
         console.warn(`ignoring ?connect= with non-ws scheme: ${u.protocol}`);
       } else {
+        validatedBootUrl = bootUrl;
         // Preserve a path endpoint (wss://host/ws) so the field round-trips; a
         // bare host splits into host + port as before.
         if (u.pathname && u.pathname !== '/') {
@@ -1284,9 +1288,8 @@ async function main(): Promise<void> {
   }
 
   // --- Auto-connect from ?connect=ws://host:port URL parameter.
-  const connectUrl = new URLSearchParams(location.search).get('connect');
-  if (connectUrl) {
-    handleConnect(connectUrl);
+  if (validatedBootUrl) {
+    handleConnect(validatedBootUrl);
   }
 
   loading.done();
