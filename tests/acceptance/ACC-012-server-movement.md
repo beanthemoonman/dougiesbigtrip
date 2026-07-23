@@ -16,7 +16,7 @@ still client-side (they go server-side in 6.5/6.6) — ignore them for this scri
      and use that port in the URL below.*
   2. Start the client: `pnpm dev`, then open the printed URL with `?connect=ws://127.0.0.1:9876`
      appended (e.g. `http://localhost:5173/?connect=ws://127.0.0.1:9876`).
-- **Tester:** _____________  **Date:** __________  **Commit:** __________  **Result:** ⬜
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-22  **Commit:** cacd251  **Result:** ✅ PASS
 
 ## Steps
 

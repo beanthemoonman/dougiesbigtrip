@@ -15,7 +15,7 @@ tests) — launch, pick a side, play.
    creep in any direction. The view stops immediately.
 4. Repeat but strafe (A/D) and release. Same expectation.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -27,7 +27,7 @@ tests) — launch, pick a side, play.
    sticky-keys prompt. The browser's address bar does not jump focus.
 7. Hold Shift and walk sideways (A/D). **Expect:** speed remains reduced.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -38,7 +38,7 @@ tests) — launch, pick a side, play.
    any other Ctrl shortcut while pointer-locked.
 9. Release Ctrl and continue walking. **Expect:** speed returns to full.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -53,7 +53,7 @@ tests) — launch, pick a side, play.
 14. Walk back through the spot. **Expect:** No ghost collider snags you.
 15. Find a barrel. Shoot it until it breaks. Same expectations.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -67,7 +67,7 @@ tests) — launch, pick a side, play.
 20. **Expect:** The crate breaks, your player falls to the floor. You land and can walk
     normally. No floating above where the crate was.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -77,10 +77,10 @@ tests) — launch, pick a side, play.
 22. **Expect:** You move at the combined reduced speed — even slower than either alone.
     Neither key triggers a browser action.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
-**Overall: PASS / FAIL**
+**Overall: PASS**
 
 (All items must PASS for the phase to exit.)

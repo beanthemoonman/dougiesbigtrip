@@ -6,7 +6,7 @@ mouse + WASD until respawn.
 Written **before** tuning, per the Definition of Done. Run in a **real windowed browser**.
 
 - **Build:** `pnpm dev`, open the printed URL.
-- **Tester:** _____  **Date:** _____  **Commit:** _____  **Result:** ⏳ PENDING
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-22  **Commit:** cacd251  **Result:** ✅ PASS
 
 ## Steps
 

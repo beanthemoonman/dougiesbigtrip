@@ -215,6 +215,32 @@ mod wasm_bindings {
         }
     }
 
+    /// Add a prop (breakable or scenery) static collider keyed by TS placement
+    /// index. On round-reset this re-enables a previously-disabled body rather
+    /// than leaking a new one. Called once per prop at init and again per prop
+    /// on round-reset restore.
+    #[wasm_bindgen]
+    pub fn sim_add_prop_box(
+        index: u32,
+        cx: f64, cy: f64, cz: f64,
+        hx: f64, hy: f64, hz: f64,
+        ry: f64,
+    ) {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((world, _)) = sim.as_mut() {
+            world.add_prop_body(index as usize, cx, cy, cz, hx, hy, hz, ry);
+        }
+    }
+
+    /// Disable a prop's body so it no longer blocks movement (destroyed / broken).
+    #[wasm_bindgen]
+    pub fn sim_disable_prop_box(index: u32) {
+        let mut sim = SIM.lock().unwrap();
+        if let Some((world, _)) = sim.as_mut() {
+            world.disable_prop_body(index as usize);
+        }
+    }
+
     /// Add a ramp collider. start/end are the top-surface endpoints.
     #[wasm_bindgen]
     pub fn sim_add_ramp(

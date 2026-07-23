@@ -28,7 +28,7 @@ Prerequisite: `pnpm dev` running, Rust server on `ws://127.0.0.1:9876` (`cargo r
 9. **Expect:** Spawned **immediately** at T spawn (replacing a T bot). Player body back. HUD
    back. The T side still totals three (you + two bots).
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -66,12 +66,12 @@ connected.
     message. The `GET /status` HTTP endpoint also returns this as JSON
     (`curl http://127.0.0.1:9876/status` → `{"players":6,"maxPlayers":6,"spectators":4,"specCap":4}`).
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
 ## Sign-off
 
 | Run | Date | Commit | Tester | Result |
-|---|---|---|---|---|
-| 1   |      |        |        |        |
+|---|---|---|---|---|---|
+| 1   | 2026-07-23 | 8070065 | dev | PASS |

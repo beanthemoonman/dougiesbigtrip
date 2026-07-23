@@ -6,7 +6,7 @@ a final banner instead of looping into another round.
 Written **before** tuning, per the Definition of Done. Run in a **real windowed browser**.
 
 - **Build:** `pnpm dev`, open the printed URL.
-- **Tester:** _____  **Date:** _____  **Commit:** _____  **Result:** ⏳ PENDING
+- **Tester:** Alexander Bean Apmann  **Date:** 2026-07-22  **Commit:** cacd251  **Result:** ✅ PASS
 
 > Tip: to avoid waiting 3 minutes each run, temporarily lower `MATCH_TIME` in `src/main.ts`, then
 > restore it before committing the run.

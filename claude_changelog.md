@@ -2600,4 +2600,38 @@ Verified: `pnpm typecheck` clean, `pnpm test` 210/210 green.
   so local bot simulation and rendering are suppressed in networked mode, where the server
   is authoritative for all entity positions.
 
+## 2026-07-23
+
+- **Breakable props now collide with player and bots.** Root cause: prop colliders were only
+  added to the TS Rapier world (for bullet raycasts), but player/bot movement shapecasts run
+  in the separate WASM `SimWorld`. Props were ghost objects you walked through. Fix:
+  1. Added `prop_body_handles` sparse vec + `add_prop_body`/`disable_prop_body` methods to
+     `sim/src/world.rs`
+  2. Exported `sim_add_prop_box`/`sim_disable_prop_box` WASM bindings in `sim/src/lib.rs`
+  3. In `main.ts`: after `placeProps()`, register every prop in the sim world via
+     `sim_add_prop_box`; when a breakable is destroyed, disable its sim collider via
+     `sim_disable_prop_box`; in `restoreBreakables()`, re-enable via `sim_add_prop_box`
+     (which reuses the existing body handle rather than leaking a new one)
+
+- **Ammo resets at round start.** Root cause: client-side `respawn()` reset health, armor,
+  position, etc. but never touched weapon state, so ammo persisted across rounds. Fix:
+  loop over all `weapons` entries in `respawn()` and call `createWeaponState()` to give
+  each weapon a fresh full magazine.
+
+- **ACC-017 through ACC-021 recorded PASS** (commit 8070065):
+  - ACC-017 (Phase 9 game-flow: team select, spectator, join gating) — SP team menu +
+    spectate, MP join flow + full-team gate, capacity gates 1+2 all pass.
+  - ACC-018 (Phase 10 movement tuning: dead stop, walk/crouch speed, breakable collision,
+    crouch-jump onto crates, walk+crouch combined) — no residual creep, modifiers work,
+    props collide/break/respawn correctly.
+  - ACC-019 (Phase 11 bot search & engage: fan-out, caution pauses, engage on sight,
+    break-LOS reposition, stay-hidden resume, no wall-hacks) — SP and MP portions both pass.
+  - ACC-020 (Phase 12 third-person fidelity + ragdoll: rifle hold, per-weapon stance,
+    muzzle flash+tracer, ragdoll on death, MP fire feedback + ragdoll, budget check) —
+    all steps pass.
+  - ACC-021 (Phase 13 asset refinement: map textures, weapon viewmodel, de-floaty characters,
+    breakable respawn, map-life set-dressing, budget check) — all steps pass.
+  - Updated `plan_to_implement.md` exit tests to PASS and flipped Phase 9–13 status
+    from substantively-complete to complete.
+
 Bada Bing!

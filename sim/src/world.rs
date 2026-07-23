@@ -30,6 +30,10 @@ pub struct SimWorld {
     /// True after the first step() call, which initialises the broad phase
     /// so queries can see static colliders.
     broad_phase_ready: bool,
+    /// Rigid body handles for breakable/non-breakable prop colliders, sparse,
+    /// indexed by the TS-side prop placement index. None = not yet added
+    /// or already cleaned up.
+    prop_body_handles: Vec<Option<RigidBodyHandle>>,
 }
 
 fn create_kinematic_player_body(physics: &mut PhysicsWorld) -> (RigidBodyHandle, ColliderHandle) {
@@ -69,6 +73,7 @@ impl SimWorld {
             ducked_shape,
             body_handles: vec![(body0, coll0)],
             broad_phase_ready: false,
+            prop_body_handles: Vec::new(),
         }
     }
 
@@ -136,6 +141,59 @@ impl SimWorld {
             .position(pose)
             .build();
         self.physics.insert_collider(collider, Some(body_handle));
+    }
+
+    /// Add a prop (breakable or scenery) to the sim world so it blocks player/bot
+    /// movement via shapecasts. `index` matches the TS-side placement index.
+    /// If a body already exists at this index it is re-enabled (round-reset).
+    pub fn add_prop_body(
+        &mut self,
+        index: usize,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        half_x: f64,
+        half_y: f64,
+        half_z: f64,
+        rotation_yaw: f64,
+    ) {
+        if index >= self.prop_body_handles.len() {
+            self.prop_body_handles.resize(index + 1, None);
+        }
+        // Round-reset: re-enable an existing body rather than leaking a new one.
+        if let Some(Some(handle)) = self.prop_body_handles.get(index) {
+            if let Some(body) = self.physics.bodies.get_mut(*handle) {
+                body.set_enabled(true);
+                return;
+            }
+        }
+        let body = RigidBodyBuilder::fixed();
+        let body_handle = self.physics.insert_body(body);
+        let translation = Vector::new(center_x as f32, center_y as f32, center_z as f32);
+        let collider = if rotation_yaw.abs() < 1e-9 {
+            ColliderBuilder::cuboid(half_x as f32, half_y as f32, half_z as f32)
+                .translation(translation)
+                .build()
+        } else {
+            let rotation = Rotation::from_rotation_y(rotation_yaw as f32);
+            let pose = Pose::from_parts(translation, rotation);
+            ColliderBuilder::cuboid(half_x as f32, half_y as f32, half_z as f32)
+                .position(pose)
+                .build()
+        };
+        self.physics.insert_collider(collider, Some(body_handle));
+        self.prop_body_handles[index] = Some(body_handle);
+    }
+
+    /// Disable a prop's body so it stops blocking movement (e.g. crate destroyed).
+    /// The body + collider stay in the world (no Rapier removal API) but are
+    /// invisible to all queries until re-enabled.
+    pub fn disable_prop_body(&mut self, index: usize) {
+        if let Some(Some(handle)) = self.prop_body_handles.get(index) {
+            if let Some(body) = self.physics.bodies.get_mut(*handle) {
+                body.set_enabled(false);
+            }
+        }
     }
 
     /// Create an additional kinematic player body (for a new server slot).

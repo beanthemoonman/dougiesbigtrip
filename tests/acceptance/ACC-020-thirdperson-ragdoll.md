@@ -1,6 +1,6 @@
 # ACC-020 — Third-person fidelity & ragdoll (Phase 12)
 
-Tester: ___________   Date: ___________   Commit: ___________   Result: PASS / FAIL
+Tester: dev   Date: 2026-07-23   Commit: 8070065   Result: PASS
 
 ## Summary
 
@@ -22,18 +22,18 @@ single-player *and* a two-client MP session.
 
 Wait for a CT bot to be visible (they patrol the spine corridor and east curve).
 
-- [ ] Pass: The bot's hands are on the rifle — right hand on the grip, left hand
+- [x] Pass: The bot's hands are on the rifle — right hand on the grip, left hand
         near the foregrip. The muzzle points forward out of the bot's chest.
-- [ ] Pass: The weapon does not clip through the bot's wrist, chest, or face.
+- [x] Pass: The weapon does not clip through the bot's wrist, chest, or face.
 
 NOTES:
 
 
 ## Step 2 — Per-weapon stance (SP, 12.1)
 
-- [ ] Pass: Bots (all armed with rifles) hold the rifle with both hands, weapon up
+- [x] Pass: Bots (all armed with rifles) hold the rifle with both hands, weapon up
         at shoulder level, not dangling at arm's length.
-- [ ] Pass: During idle and walk animations, the weapon stays roughly in the same
+- [x] Pass: During idle and walk animations, the weapon stays roughly in the same
         hold position without drifting far from the hands.
 
 NOTES:
@@ -43,12 +43,12 @@ NOTES:
 
 Move into LOS of a bot (approach the spine corridor or east curve). Watch it fire.
 
-- [ ] Pass: When the bot fires, a brief muzzle flash appears at the end of its
+- [x] Pass: When the bot fires, a brief muzzle flash appears at the end of its
         rifle barrel.
-- [ ] Pass: A thin tracer streak runs from the muzzle toward the target (the
+- [x] Pass: A thin tracer streak runs from the muzzle toward the target (the
         player).
-- [ ] Pass: The flash and tracer are timed with the bot's shot audio.
-- [ ] Pass: The tracer does NOT originate from the bot's face/eye — it comes from
+- [x] Pass: The flash and tracer are timed with the bot's shot audio.
+- [x] Pass: The tracer does NOT originate from the bot's face/eye — it comes from
         the weapon.
 
 NOTES:
@@ -58,18 +58,18 @@ NOTES:
 
 Shoot a bot to death at close range, watching the body.
 
-- [ ] Pass: The bot drops under gravity — it does NOT freeze in place, levitate,
+- [x] Pass: The bot drops under gravity — it does NOT freeze in place, levitate,
         or instantly vanish.
-- [ ] Pass: The body tumbles (even a single-body roll is acceptable) and settles
+- [x] Pass: The body tumbles (even a single-body roll is acceptable) and settles
         on the ground within ~2 seconds.
-- [ ] Pass: The body does NOT clip or snag against the player when walked over —
+- [x] Pass: The body does NOT clip or snag against the player when walked over —
         you can walk straight through the corpse without being pushed or
         blocked.
-- [ ] Pass: The corpse is visible for at least 3 seconds, then disappears (despawn
+- [x] Pass: The corpse is visible for at least 3 seconds, then disappears (despawn
         timer).
-- [ ] Pass: Shoot a bot on a slope or near a wall — the body tumbles against the
+- [x] Pass: Shoot a bot on a slope or near a wall — the body tumbles against the
         geometry, not through it.
-- [ ] Pass: Kill all 3 CT bots. When the round resets, the old corpses are gone
+- [x] Pass: Kill all 3 CT bots. When the round resets, the old corpses are gone
         and the reborn bots hold their weapons correctly (no leftover body
         geometry).
 
@@ -80,9 +80,9 @@ NOTES:
 
 With both MP clients connected:
 
-- [ ] Pass: When the other player fires, a muzzle flash and tracer appear at their
+- [x] Pass: When the other player fires, a muzzle flash and tracer appear at their
         weapon muzzle.
-- [ ] Pass: The tracer direction matches where the other player's crosshair is
+- [x] Pass: The tracer direction matches where the other player's crosshair is
         aimed (roughly — it's their snapshot yaw/pitch).
 
 NOTES:
@@ -92,18 +92,18 @@ NOTES:
 
 In the MP session, have one player kill the other.
 
-- [ ] Pass: The dead player's model drops into a ragdoll (tumbles, does not
+- [x] Pass: The dead player's model drops into a ragdoll (tumbles, does not
         vanish instantly).
-- [ ] Pass: The living player can walk through the corpse without snagging.
-- [ ] Pass: The corpse despawns after a few seconds.
+- [x] Pass: The living player can walk through the corpse without snagging.
+- [x] Pass: The corpse despawns after a few seconds.
 
 NOTES:
 
 
 ## Step 7 — Budget check
 
-- [ ] Pass: Draw calls stay below 400 (check the Stats.js panel — top-left of
+- [x] Pass: Draw calls stay below 400 (check the Stats.js panel — top-left of
         the canvas, right column).
-- [ ] Pass: No new console errors after the boot sequence completes.
+- [x] Pass: No new console errors after the boot sequence completes.
 
 NOTES:

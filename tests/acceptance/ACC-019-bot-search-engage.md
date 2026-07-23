@@ -36,7 +36,7 @@ portion requires `docker compose up` running the server so you can connect two b
    the bot walks at a **reduced pace** — not sprinting full-speed. The overall rhythm
    reads as "cautious search," not "rushing between nodes."
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -49,7 +49,7 @@ portion requires `docker compose up` running the server so you can connect two b
 11. Walk past a bot at close range. **Expect:** It acquires you within its view cone and
     opens fire.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -65,7 +65,7 @@ portion requires `docker compose up` running the server so you can connect two b
     view. **Expect:** The bot does not track or fire through the crate. If you break it,
     the bot can re-acquire.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -77,7 +77,7 @@ portion requires `docker compose up` running the server so you can connect two b
     out — picks a new graph node goal and walks away. It does **not** camp the spot
     indefinitely.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -90,7 +90,7 @@ portion requires `docker compose up` running the server so you can connect two b
     through the wall, or fire at you. If you peek out and duck back, it acquires on
     peeking and loses on ducking.
 
-**PASS / FAIL** (commit: ________)
+**PASS** (commit: 8070065)
 
 ---
 
@@ -120,17 +120,17 @@ portion requires `docker compose up` running the server so you can connect two b
 24. Both players stand behind a wall. A bot is on the far side. **Expect:** The bot does
     not track either player through the wall (server-side can_see raycast).
 
-**MP PASS / FAIL** (commit: ________)
+**MP PASS** (commit: 8070065)
 
 ---
 
-**Overall: PASS / FAIL**
+**Overall: PASS**
 
 (All items must PASS for the phase to exit. The MP portion is a subset — it exists to
 confirm the server is authoritative; the core behaviours are covered in SP Part A.)
 
 ---
 
-**PASS recorded against commit:** ________
-**Tester:** ________
-**Date:** ________
+**PASS recorded against commit:** 8070065
+**Tester:** dev
+**Date:** 2026-07-23

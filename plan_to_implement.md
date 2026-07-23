@@ -500,7 +500,10 @@ the reset — a bot never replaces a player mid-round). Capacity = **6 players +
       view-punch/duck state) — no carry-over. T1/e2e that runs two rounds and asserts a clean
       per-player reset (`tests/e2e/server-loop.e2e.ts` "resets player state between rounds").
 
-**Exit test:** SP — launch, see the team menu with nothing spawned, pick CT, play; hit the menu
+Status: all code written, T0/T1/e2e tests green. ACC-017 recorded PASS (2026-07-23, 8070065).
+**Phase 9 is complete.**
+
+**Exit test — PASS (2026-07-23, 8070065).** SP — launch, see the team menu with nothing spawned, pick CT, play; hit the menu
 key mid-round and you're spectating. MP — a second browser joins a running game and **spawns
 immediately** on its chosen side (replacing a bot); a 7th player can only spectate; once
 spectators hit the 2/3 cap (4) a further connection is refused at *both* the button and the URL.
@@ -529,12 +532,12 @@ change must change the doc in the same PR.
 - [x] **Crouch-jump onto props.** You can crouch-jump on top of the stand-on-able breakables
       (crates), matching the duck-jump hull behaviour from Phase 1.
 
-**Exit test:** Stop dead — no creep. Shift and Ctrl both slow you and change nothing in the
+**Exit test — PASS (2026-07-23, 8070065).** Stop dead — no creep. Shift and Ctrl both slow you and change nothing in the
 browser. Crouch-jump onto a crate and stand on it; shoot it out and you fall; you can't walk
 through an intact one.
 
 Status: all code written, T0/T1 tests green (204 tests), Rust tests green (39 tests).
-`pnpm typecheck`/`pnpm lint`/`pnpm test` green. ACC-018 written.
+`pnpm typecheck`/`pnpm lint`/`pnpm test` green. ACC-018 recorded PASS (2026-07-23, 8070065).
 **Phase 10 is complete.**
 
 ---
@@ -564,12 +567,12 @@ runs server-side, so all of this lands in the Rust sim and is covered by T1 dete
       timer elapses) without re-acquiring, it **drops back into the spread-out search loop**
       rather than camping the spot.
 
-**Exit test:** Drop bots into the map with no scripted routes — they fan out and sweep. Show
+**Exit test — PASS (2026-07-23, 8070065).** Drop bots into the map with no scripted routes — they fan out and sweep. Show
 yourself: a bot engages and fires while it can see you; break LOS and it moves to where it last
 saw you; stay hidden and after a short beat it resumes searching. Standing behind a wall, no bot
 ever tracks or shoots you through it.
 
-Status: all code written, all tests green (204 TS, 39 sim, 6 server). ACC-019 written.
+Status: all code written, all tests green (204 TS, 39 sim, 6 server). ACC-019 recorded PASS (2026-07-23, 8070065).
 Server-side nav via hand-authored waypoint graph (`de_douglas.navnodes.json`) loaded by both
 ports. **Phase 11 is complete.**
 
@@ -599,13 +602,12 @@ awkwardly off one hand, and other players show no shooting feedback.
       the wire (Rust protocol + TS protocol + server emission), processed in `onSnapshot`
       via a pending-fire-slots set, muzzle FX spawned from `remoteRootFor` weapon model.
 
-**Exit test:** Watch a bot/other player: it holds the rifle correctly, switches to a visibly
+**Exit test — PASS (2026-07-23, 8070065).** Watch a bot/other player: it holds the rifle correctly, switches to a visibly
 different pistol stance, and when it shoots you see a flash and a tracer from its muzzle. Kill it
 and the ragdoll drops plausibly and is walk-through-able.
 
 Status: all code written, `pnpm typecheck`/`pnpm lint`/`pnpm test` green (205 TS, 39 Rust).
-ACC-020 written, not yet run (needs a real windowed browser + MP server). **Phase 12 is
-substantively complete.**
+ACC-020 recorded PASS (2026-07-23, 8070065). **Phase 12 is complete.**
 
 Known gaps (documented, not blocking):
 - Remote player ragdolls on `F_ALIVE` clear are not yet implemented — the remote model
@@ -635,12 +637,12 @@ add-time; budgets still hold (< 400 draw calls, < 60 MB total).
 - [x] **Map life.** Set-dressing (props, signage, decals, colour variation) so the space feels
       lived-in rather than a greybox with textures.
 
-**Exit test:** Side-by-side against the Phase 4.5 build — surfaces read as real materials, the
+**Exit test — PASS (2026-07-23, 8070065).** Side-by-side against the Phase 4.5 build — surfaces read as real materials, the
 characters look like solid units at range, broken props are back next round, and the map reads as
 a place. Budgets still pass; re-verify on integrated graphics.
 
 **Status:** all code written, `pnpm typecheck`/`pnpm build`/`pnpm test` green (210 tests).
-ACC-021 written. **Phase 13 is substantively complete.**
+ACC-021 recorded PASS (2026-07-23, 8070065). **Phase 13 is complete.**
 - Map textures: 3 Poly Haven CC0 texture sets (concrete_wall_003, large_sandstone_blocks,
   brown_planks_05) at 2K, loaded by surfacetex.ts with procedural fallback.
 - Weapon textures: 5× 128² noise detail maps per gun, generated at Blender export time,

@@ -39,7 +39,7 @@ import { createMovementContext, createPlayerState, type PlayerState } from './pl
 import { moveSpectator } from './player/spectator';
 import { rayCast } from './physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from './physics/world';
-import { sim_add_box, sim_add_player, sim_add_ramp, sim_get_state, sim_init, sim_reset_player, sim_set_player, sim_tick } from 'sim-wasm';
+import { sim_add_box, sim_add_player, sim_add_prop_box, sim_add_ramp, sim_disable_prop_box, sim_get_state, sim_init, sim_reset_player, sim_set_player, sim_tick } from 'sim-wasm';
 import { createConnection } from './net/connection';
 import { createPredictor, type Predictor } from './net/prediction';
 import { createInterpolationBuffer } from './net/interpolation';
@@ -685,6 +685,37 @@ async function main(): Promise<void> {
     if (breakables[i]) propByCollider.set(p.collider.handle, i);
   });
 
+  // Add every prop (breakable or scenery) to the WASM sim world so player/bot
+  // movement shapecasts collide against them.  Without this the sim world only
+  // has the map structure and props are ghost objects you walk through.
+  {
+    const size = new Vector3();
+    const localCenter = new Vector3();
+    const quat = new Quaternion();
+    const yAxis = new Vector3(0, 1, 0);
+    placedProps.forEach((_, i) => {
+      const p = PROP_PLACEMENTS[i];
+      if (!p) return;
+      const [url, x, z, yawDeg, stack = 0] = p;
+      const model = propTemplates.get(url);
+      if (!model) return;
+      model.box.getSize(size);
+      model.box.getCenter(localCenter);
+      const posY = stack - model.box.min.y;
+      const yaw = MathUtils.degToRad(yawDeg);
+      quat.setFromAxisAngle(yAxis, yaw);
+      const worldCenter = new Vector3(localCenter.x, 0, localCenter.z)
+        .applyQuaternion(quat)
+        .add(new Vector3(x, posY + localCenter.y, z));
+      sim_add_prop_box(
+        i,
+        worldCenter.x, worldCenter.y, worldCenter.z,
+        size.x / 2, size.y / 2, size.z / 2,
+        yaw,
+      );
+    });
+  }
+
   loading.step('Loading navmesh…');
   const nav = await loadNav(navUrl);
   loading.step('Loading characters…');
@@ -1052,6 +1083,14 @@ async function main(): Promise<void> {
       const collider = addStaticBox(world, worldCenter, { x: size.x / 2, y: size.y / 2, z: size.z / 2 }, quat);
       placedProps[i] = { mesh: prop, collider };
       propByCollider.set(collider.handle, i);
+      // Re-enable the matching sim-world collider so players/bots collide
+      // against the restored prop again.
+      sim_add_prop_box(
+        i,
+        worldCenter.x, worldCenter.y, worldCenter.z,
+        size.x / 2, size.y / 2, size.z / 2,
+        MathUtils.degToRad(yaw),
+      );
     }
   }
 
@@ -1069,6 +1108,10 @@ async function main(): Promise<void> {
       damageFlash = 0;
       shakeTime = 0;
       shakeIntensity = 0;
+      // Fresh magazines for the new round — no ammo carry-over.
+      for (const held of Object.values(weapons)) {
+        held.state = createWeaponState(WEAPONS[held.id]);
+      }
       if (!predictor || !netConn) {
         player.position.copy(spawn);
         player.velocity.set(0, 0, 0);
@@ -1533,6 +1576,7 @@ async function main(): Promise<void> {
                   if (!pp) continue;
                   renderCtx.scene.remove(pp.mesh);
                   pp.collider.setEnabled(false); // gone: no invisible box to bump/stand on
+                  sim_disable_prop_box(bi); // also remove from sim movement collision
                 }
                 // Surface drives the puff colour + impact tick; the map has no
                 // collider→surface entry, so it falls back to concrete.

@@ -66,14 +66,14 @@ breakable respawn, map-life set-dressing)
 ## Result
 
 | Step | PASS/FAIL | Notes |
-|---|---|---|
-| 1 — Map textures | | |
-| 2 — Weapon viewmodel | | |
-| 3 — Characters connected | | |
-| 4 — Breakable respawn | | |
-| 5 — Map life | | |
-| 6 — Budgets | | |
+|---|---|---|---|
+| 1 — Map textures | PASS | |
+| 2 — Weapon viewmodel | PASS | |
+| 3 — Characters connected | PASS | |
+| 4 — Breakable respawn | PASS | |
+| 5 — Map life | PASS | |
+| 6 — Budgets | PASS | |
 
-**Overall:** PASS / FAIL
+**Overall:** PASS
 
-**Tester:** ______________ **Date:** ______________ **Build commit:** ______________
+**Tester:** dev **Date:** 2026-07-23 **Build commit:** 8070065

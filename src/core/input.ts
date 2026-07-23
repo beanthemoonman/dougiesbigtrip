@@ -35,6 +35,13 @@ const KEY_TO_BUTTON: Record<string, number> = {
 
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
 
+const LOCKED_KEYS: string[] = [
+  'KeyW', 'ArrowUp', 'KeyS', 'ArrowDown', 'KeyA', 'ArrowLeft',
+  'KeyD', 'ArrowRight', 'Space', 'ControlLeft', 'ControlRight',
+  'KeyR', 'ShiftLeft', 'ShiftRight',
+  'Tab', 'Digit1', 'Digit2', 'KeyM', 'KeyE', 'Escape',
+];
+
 export interface InputState {
   /** Bitmask of currently held movement buttons, see `Buttons`. */
   buttons: number;
@@ -70,6 +77,29 @@ export function createInputManager(target: HTMLElement): InputManager {
     teamMenuToggle: 0,
   };
 
+  let keyboardLocked = false;
+
+  function lockKeyboard(): void {
+    if (keyboardLocked) return;
+    const kb = (navigator as unknown as Record<string, unknown>).keyboard as
+      { lock?: (keys: string[]) => Promise<void>; unlock?: () => void } | undefined;
+    if (!kb?.lock) return;
+    try {
+      void kb.lock(LOCKED_KEYS);
+      keyboardLocked = true;
+    } catch {
+      // User gesture required — will retry on first keydown
+    }
+  }
+
+  function unlockKeyboard(): void {
+    if (!keyboardLocked) return;
+    const kb = (navigator as unknown as Record<string, unknown>).keyboard as
+      { unlock?: () => void } | undefined;
+    try { kb?.unlock?.(); } catch { /* best effort */ }
+    keyboardLocked = false;
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     if (e.code === 'Tab') {
       e.preventDefault();
@@ -81,12 +111,8 @@ export function createInputManager(target: HTMLElement): InputManager {
     else if (e.code === 'KeyM' && document.pointerLockElement === target) state.teamMenuToggle = 1;
     const bit = KEY_TO_BUTTON[e.code];
     if (bit !== undefined) state.buttons |= bit;
-    // When pointer-locked the game owns the keyboard. Swallow every keydown so
-    // no browser shortcut fires — Ctrl+W (close tab), Ctrl+T (new tab),
-    // Ctrl+D (bookmark), Ctrl+N (new window), Ctrl+H (history), etc. The
-    // per-key check was too narrow; browsers handle many more shortcuts than
-    // we have game binds.
     if (document.pointerLockElement === target) {
+      lockKeyboard();
       e.preventDefault();
     }
   }
@@ -95,6 +121,9 @@ export function createInputManager(target: HTMLElement): InputManager {
     if (e.code === 'Tab') { state.scoreboard = false; return; }
     const bit = KEY_TO_BUTTON[e.code];
     if (bit !== undefined) state.buttons &= ~bit;
+    if (document.pointerLockElement === target) {
+      e.preventDefault();
+    }
   }
 
   function onMouseMove(e: MouseEvent): void {
@@ -108,7 +137,10 @@ export function createInputManager(target: HTMLElement): InputManager {
   function onPointerLockChange(): void {
     const locked = document.pointerLockElement === target;
     state.pointerLocked = locked;
-    if (!locked) {
+    if (locked) {
+      lockKeyboard();
+    } else {
+      unlockKeyboard();
       state.buttons = 0;
       state.scoreboard = false;
       state.teamMenuToggle = 0;
@@ -130,8 +162,8 @@ export function createInputManager(target: HTMLElement): InputManager {
     if (document.pointerLockElement !== target) target.requestPointerLock();
   }
 
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('keydown', onKeyDown, { capture: true });
+  window.addEventListener('keyup', onKeyUp, { capture: true });
   window.addEventListener('mousemove', onMouseMove);
   window.addEventListener('mousedown', onMouseDown);
   window.addEventListener('mouseup', onMouseUp);
