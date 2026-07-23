@@ -729,6 +729,8 @@ Configurable scope:
 - [x] Typed config object (extend `src/game/` round-config, not scattered constants) with
       validated bounds — reject over-max player counts at the boundary, SP and server both. (16.1)
 - [x] SP path reads config at match start (bot count / map / rounds-to-win). (16.2)
+- [x] Server-side config (`ServerConfig` from env vars, validated bounds, `GET /status` reports
+      effective config, Welcome includes `roundsToWin`). (16.3)
 - [ ] MP client can target a chosen server address; server applies its configured knobs on start. (16.4)
 
 **Exit test:** Start SP matches with different bot counts / rounds-to-win and see them honoured;

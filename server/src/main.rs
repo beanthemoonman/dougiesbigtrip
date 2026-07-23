@@ -44,11 +44,102 @@ struct BotSpawn {
 }
 
 const DEFAULT_BIND: &str = "127.0.0.1:9876";
-const MAX_SLOTS: usize = 6; // 3 T + 3 CT player slots (3v3 by default, all bot-filled)
-const MAX_SPECTATORS: usize = 4; // ceil(2/3 * MAX_SLOTS) = ceil(4.0) = 4 → 10 total capacity
+const MAX_SLOTS: usize = 6; // compile-time array capacity (3 T + 3 CT)
+const MAX_SPECTATORS: usize = 4;
 const SEED: u32 = 1;
 const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
 const NAVNODES_JSON: &str = include_str!("../../assets/maps/de_douglas.navnodes.json");
+
+/// Phase 16.3: runtime server configuration built from compiled defaults ← env vars.
+/// Validated against the same bounds as the TS `MatchConfig` validator (docs/plan-post-1.0-config-auth.md).
+#[derive(Debug, Clone)]
+struct ServerConfig {
+    bind: String,
+    bot_count: usize,
+    rounds_to_win: u8,
+    map: &'static str,
+    freezetime_ms: u32,
+    round_time_ms: u32,
+    end_delay_ms: u32,
+}
+
+fn build_config() -> ServerConfig {
+    let bind = std::env::var("SERVER_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
+
+    let bot_count: usize = std::env::var("BOT_COUNT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6);
+    let rounds_to_win: u8 = std::env::var("ROUNDS_TO_WIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(16);
+    let map_name = std::env::var("MAP").unwrap_or_else(|_| "de_douglas".into());
+    let freezetime_ms = std::env::var("SERVER_FREEZE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(game::DEFAULT_FREEZETIME_MS);
+    let round_time_ms = std::env::var("SERVER_ROUND_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(game::DEFAULT_ROUND_MS);
+    let end_delay_ms = std::env::var("SERVER_END_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(game::DEFAULT_END_MS);
+
+    validate_config(bind, bot_count, rounds_to_win, map_name, freezetime_ms, round_time_ms, end_delay_ms)
+        .unwrap_or_else(|errors| {
+            for e in &errors { eprintln!("{e}"); }
+            std::process::exit(1);
+        })
+}
+
+/// Pure validation of all config knobs. Rejects out-of-bounds values with
+/// one error per invalid field. Testable without touching env.
+fn validate_config(
+    bind: String,
+    bot_count: usize,
+    rounds_to_win: u8,
+    map_name: String,
+    freezetime_ms: u32,
+    round_time_ms: u32,
+    end_delay_ms: u32,
+) -> Result<ServerConfig, Vec<String>> {
+    let mut errors = Vec::new();
+
+    if bot_count < 2 || bot_count > MAX_SLOTS {
+        errors.push(format!(
+            "bot_count must be 2–{MAX_SLOTS} (capacity {MAX_SLOTS}), got {bot_count}",
+        ));
+    }
+
+    if rounds_to_win < 1 || rounds_to_win > 30 {
+        errors.push(format!("rounds_to_win must be 1–30, got {rounds_to_win}"));
+    }
+
+    let map: &'static str = match map_name.as_str() {
+        "de_douglas" => "de_douglas",
+        _ => {
+            errors.push(format!("unknown map '{map_name}' (only 'de_douglas' is supported)"));
+            ""
+        }
+    };
+
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
+    Ok(ServerConfig {
+        bind,
+        bot_count,
+        rounds_to_win,
+        map,
+        freezetime_ms,
+        round_time_ms,
+        end_delay_ms,
+    })
+}
 
 /// Phase 9 advisory capacity counters for the GET /status HTTP endpoint (Gate 1).
 /// Updated by the game loop; read by handle_conn before the WebSocket handshake.
@@ -112,7 +203,7 @@ struct Slot {
     ammo: u8,
 }
 
-async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
+async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig) {
     let mut world = SimWorld::new();
     let spawn = map::load(&mut world, MAP_JSON);
     world.ensure_broad_phase_ready();
@@ -133,11 +224,13 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
             };
             world.sync_player_body(body_handle, collider_handle, s[0], s[1], s[2], false);
 
-            let start_node = if team_ct { 7 } else { 0 }; // CT=node 7, T=node 0
-            let bot = Some(ai::Bot::new(start_node, i as u32 * 17));
+            // Only fill the first bot_count slots; remainder stay vacant for future humans.
+            let occupied = i < config.bot_count;
+            let start_node = if team_ct { 7 } else { 0 };
+            let bot = if occupied { Some(ai::Bot::new(start_node, i as u32 * 17)) } else { None };
 
             Slot {
-                occupied: true,
+                occupied,
                 is_human: false,
                 out: None,
                 body_handle,
@@ -152,7 +245,7 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                 last_shot: None,
                 ack_seq: 0,
                 team_ct,
-                alive: true,
+                alive: occupied, // vacant slots start dead
                 health: 100,
                 armor: 0,
                 weapon: 1,
@@ -172,7 +265,12 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
 
     let mut server_tick: u32 = 0;
     let mut interval = tokio::time::interval(std::time::Duration::from_secs_f64(FIXED_DT));
-    let mut round = game::State::new();
+    let mut round = game::State::new(
+        config.rounds_to_win,
+        config.freezetime_ms,
+        config.round_time_ms,
+        config.end_delay_ms,
+    );
 
     loop {
         tokio::select! {
@@ -462,13 +560,14 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                     next_conn_id += 1;
                     let w = Welcome {
                         your_slot: SPECTATOR,
-                        map: "de_douglas".into(),
+                        map: config.map.to_string(),
                         seed: SEED,
                         server_tick,
                         max_players: MAX_SLOTS as u8,
                         players: active_humans as u8,
                         spectators: spectators.len() as u8,
                         spec_cap: MAX_SPECTATORS as u8,
+                        rounds_to_win: config.rounds_to_win,
                     };
                     let _ = out.send(w.encode());
                     pending_conns.insert(conn_id, (out, slot_tx));
@@ -517,13 +616,14 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>) {
                                 let _ = slot_tx.send(assigned_slot);
                                 let w2 = Welcome {
                                     your_slot: assigned_slot,
-                                    map: "de_douglas".into(),
+                                    map: config.map.to_string(),
                                     seed: SEED,
                                     server_tick,
                                     max_players: MAX_SLOTS as u8,
                                     players: player_count,
                                     spectators: spectators.len() as u8,
                                     spec_cap: MAX_SPECTATORS as u8,
+                                    rounds_to_win: config.rounds_to_win,
                                 };
                                 let s = &slots[assigned_slot as usize];
                                 let _ = s.out.as_ref().unwrap().send(w2.encode());
@@ -636,7 +736,7 @@ async fn peek_is_status(stream: &TcpStream) -> Option<bool> {
     Some(buf[..n].starts_with(b"GET /status"))
 }
 
-async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::UnboundedSender<Ev>) {
+async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::UnboundedSender<Ev>, config: ServerConfig) {
     // Gate 1: a plain `GET /status` HTTP request (not a WebSocket upgrade) gets a
     // well-formed HTTP/1.1 response with Content-Length and the socket closed. We
     // peek the request line off the raw TCP stream before handing it to the WS
@@ -647,8 +747,8 @@ async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::Unbo
         let players = ACTIVE_HUMANS.load(Ordering::Relaxed);
         let spectators = SPECTATOR_COUNT.load(Ordering::Relaxed);
         let json = format!(
-            "{{\"players\":{},\"maxPlayers\":{},\"spectators\":{},\"specCap\":{}}}",
-            players, MAX_SLOTS, spectators, MAX_SPECTATORS,
+            "{{\"players\":{},\"maxPlayers\":{},\"spectators\":{},\"specCap\":{},\"botCount\":{},\"roundsToWin\":{},\"map\":\"{}\"}}",
+            players, MAX_SLOTS, spectators, MAX_SPECTATORS, config.bot_count, config.rounds_to_win, config.map,
         );
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -757,15 +857,96 @@ async fn handle_conn(mut stream: TcpStream, addr: SocketAddr, events: mpsc::Unbo
 
 #[tokio::main]
 async fn main() {
+    let config = build_config();
     let (events_tx, events_rx) = mpsc::unbounded_channel::<Ev>();
-    tokio::spawn(game_loop(events_rx));
+    tokio::spawn(game_loop(events_rx, config.clone()));
 
-    // SERVER_BIND overrides the default (tests use an isolated port).
-    let bind = std::env::var("SERVER_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
-    let listener = TcpListener::bind(&bind).await.expect("bind");
-    println!("deathmatch server listening on ws://{bind}");
+    let listener = TcpListener::bind(&config.bind).await.expect("bind");
+    println!("deathmatch server listening on ws://{}", config.bind);
 
     while let Ok((stream, addr)) = listener.accept().await {
-        tokio::spawn(handle_conn(stream, addr, events_tx.clone()));
+        tokio::spawn(handle_conn(stream, addr, events_tx.clone(), config.clone()));
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    fn default_values() -> (String, usize, u8, String, u32, u32, u32) {
+        (
+            "127.0.0.1:9876".into(), // bind
+            6,   // bot_count
+            16,  // rounds_to_win
+            "de_douglas".into(), // map_name
+            3_000,   // freezetime_ms
+            115_000, // round_time_ms
+            5_000,   // end_delay_ms
+        )
+    }
+
+    #[test]
+    fn default_config_passes() {
+        let (b, bc, r, m, f, rt, e) = default_values();
+        let cfg = validate_config(b, bc, r, m, f, rt, e).expect("default should be valid");
+        assert_eq!(cfg.bot_count, 6);
+        assert_eq!(cfg.rounds_to_win, 16);
+        assert_eq!(cfg.map, "de_douglas");
+    }
+
+    #[test]
+    fn rejects_bot_count_too_low() {
+        let (b, _, r, m, f, rt, e) = default_values();
+        let err = validate_config(b, 0, r, m, f, rt, e).unwrap_err();
+        assert!(err.iter().any(|e| e.contains("bot_count")));
+    }
+
+    #[test]
+    fn rejects_bot_count_above_capacity() {
+        let (b, _, r, m, f, rt, e) = default_values();
+        let err = validate_config(b, 7, r, m, f, rt, e).unwrap_err();
+        assert!(err.iter().any(|e| e.contains("bot_count")));
+    }
+
+    #[test]
+    fn rejects_rounds_to_win_zero() {
+        let (b, bc, _, m, f, rt, e) = default_values();
+        let err = validate_config(b, bc, 0, m, f, rt, e).unwrap_err();
+        assert!(err.iter().any(|e| e.contains("rounds_to_win")));
+    }
+
+    #[test]
+    fn rejects_rounds_to_win_too_high() {
+        let (b, bc, _, m, f, rt, e) = default_values();
+        let err = validate_config(b, bc, 31, m, f, rt, e).unwrap_err();
+        assert!(err.iter().any(|e| e.contains("rounds_to_win")));
+    }
+
+    #[test]
+    fn rejects_unknown_map() {
+        let (b, bc, r, _, f, rt, e) = default_values();
+        let err = validate_config(b, bc, r, "cs_office".into(), f, rt, e).unwrap_err();
+        assert!(err.iter().any(|e| e.contains("unknown map")));
+    }
+
+    #[test]
+    fn accepts_minimal_bot_count() {
+        let (b, _, r, m, f, rt, e) = default_values();
+        let cfg = validate_config(b, 2, r, m, f, rt, e).expect("bot_count=2 should be valid");
+        assert_eq!(cfg.bot_count, 2);
+    }
+
+    #[test]
+    fn accepts_max_slots_bot_count() {
+        let (b, _, r, m, f, rt, e) = default_values();
+        let cfg = validate_config(b, MAX_SLOTS, r, m, f, rt, e).expect("bot_count=MAX_SLOTS valid");
+        assert_eq!(cfg.bot_count, MAX_SLOTS);
+    }
+
+    #[test]
+    fn reports_all_errors_together() {
+        let (b, _, _, _, f, rt, e) = default_values();
+        let err = validate_config(b, 0, 0, "unknown".into(), f, rt, e).unwrap_err();
+        assert!(err.len() >= 3);
     }
 }

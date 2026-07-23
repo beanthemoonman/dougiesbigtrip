@@ -19,12 +19,14 @@ pub struct Welcome {
     pub players: u8,
     pub spectators: u8,
     pub spec_cap: u8,
+    /// Phase 16: rounds-to-win for match end (defaults to 0 for old-form Welcome).
+    pub rounds_to_win: u8,
 }
 
 impl Welcome {
     pub fn encode(&self) -> Vec<u8> {
         let map_bytes = self.map.as_bytes();
-        let len = 1 + 1 + 1 + 1 + map_bytes.len() + 4 + 4 + 4;
+        let len = 1 + 1 + 1 + 1 + map_bytes.len() + 4 + 4 + 5;
         let mut buf = Vec::with_capacity(len);
         buf.push(TAG_WELCOME);
         buf.push(PROTOCOL_VERSION);
@@ -37,6 +39,7 @@ impl Welcome {
         buf.push(self.players);
         buf.push(self.spectators);
         buf.push(self.spec_cap);
+        buf.push(self.rounds_to_win);
         buf
     }
 
@@ -62,6 +65,8 @@ impl Welcome {
         let players = data.get(off + 1).copied().unwrap_or(0);
         let spectators = data.get(off + 2).copied().unwrap_or(0);
         let spec_cap = data.get(off + 3).copied().unwrap_or(0);
+        // Phase 16 rounds-to-win; default to 0 for old-form Welcome.
+        let rounds_to_win = data.get(off + 4).copied().unwrap_or(0);
         Some(Welcome {
             your_slot,
             map,
@@ -71,6 +76,7 @@ impl Welcome {
             players,
             spectators,
             spec_cap,
+            rounds_to_win,
         })
     }
 }
@@ -397,6 +403,7 @@ mod tests {
             players: 5,
             spectators: 2,
             spec_cap: 7,
+            rounds_to_win: 16,
         };
         let encoded = original.encode();
         let decoded = Welcome::decode(&encoded).expect("decode failed");
@@ -409,9 +416,10 @@ mod tests {
         let mut buf = Welcome {
             your_slot: 1, map: "x".into(), seed: 0, server_tick: 0,
             max_players: 0, players: 0, spectators: 0, spec_cap: 0,
+            rounds_to_win: 0,
         }.encode();
-        // Snip off the 4 capacity bytes.
-        buf.truncate(buf.len() - 4);
+        // Snip off the 5 capacity + rounds-to-win bytes.
+        buf.truncate(buf.len() - 5);
         let w = Welcome::decode(&buf).expect("old welcome decode failed");
         assert_eq!(w.max_players, 0);
         assert_eq!(w.players, 0);
@@ -428,6 +436,7 @@ mod tests {
             players: 10,
             spectators: 3,
             spec_cap: 7,
+            rounds_to_win: 0,
         };
         let encoded = original.encode();
         let decoded = Welcome::decode(&encoded).expect("decode failed");
@@ -451,6 +460,7 @@ mod tests {
             players: 0,
             spectators: 0,
             spec_cap: 0,
+            rounds_to_win: 0,
         };
         let mut buf = welcome.encode();
         buf[1] = 99;

@@ -26,11 +26,13 @@ export interface Welcome {
   players: number;
   spectators: number;
   specCap: number;
+  /** Phase 16: configurable rounds-to-win from the server (defaults to 0 for old-form). */
+  roundsToWin: number;
 }
 
 export function encodeWelcome(w: Welcome): Uint8Array {
   const mapBytes = new TextEncoder().encode(w.map);
-  const buf = new ArrayBuffer(1 + 1 + 1 + 1 + mapBytes.length + 4 + 4 + 4);
+  const buf = new ArrayBuffer(1 + 1 + 1 + 1 + mapBytes.length + 4 + 4 + 5);
   const v = new DataView(buf);
   let off = 0;
   v.setUint8(off, TAG_WELCOME);
@@ -54,6 +56,8 @@ export function encodeWelcome(w: Welcome): Uint8Array {
   v.setUint8(off, w.spectators);
   off += 1;
   v.setUint8(off, w.specCap);
+  off += 1;
+  v.setUint8(off, w.roundsToWin);
   return new Uint8Array(buf);
 }
 
@@ -77,7 +81,9 @@ export function decodeWelcome(data: Uint8Array): Welcome | null {
   const players = data[off + 1] ?? 0;
   const spectators = data[off + 2] ?? 0;
   const specCap = data[off + 3] ?? 0;
-  return { yourSlot, map, seed, serverTick, maxPlayers, players, spectators, specCap };
+  // Phase 16 rounds-to-win; default to 0 for old-form Welcome.
+  const roundsToWin = data[off + 4] ?? 0;
+  return { yourSlot, map, seed, serverTick, maxPlayers, players, spectators, specCap, roundsToWin };
 }
 
 // ---------------------------------------------------------------

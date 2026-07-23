@@ -2693,3 +2693,49 @@ Verified as correct (no change needed): `spawnRing` reproduces the original six 
 exactly (both anchors are `[-15, 0.05, ±25]`, so the old shared `F = CT_SPAWN[1]` and the new
 per-team `anchor[1]` agree); bot benching still works against the generated roster; replacing
 the fixed 180 s match clock with `roundsToWin` is intended and its reset path is tested.
+
+## 2026-07-23 — Phase 16.3: server-side config
+
+**`sim/src/protocol.rs`**
+- `Welcome` gains `rounds_to_win: u8` field (appended at end of encoding for backward compat).
+- Old-format decode defaults to 0; old-format compat test updated to truncate 5 bytes.
+- `with_capacity` updated: `+ 4` → `+ 5`.
+
+**`server/src/game.rs`**
+- `State` gains `rounds_to_win: u8`, `match_over: bool`, `match_winner: Option<char>` plus
+  stored timing values (`freezetime_ms`, `round_time_ms`, `end_delay_ms`).
+- `new()` takes all four config values (no more env reads).
+- `RoundEvent` gains `MatchOver` variant.
+- `tick()`: Live→Over checks `match_over_this_round()`; if true → MatchOver with winner.
+  Over→Freezetime: if match_over, reset scores/round and emit MatchOver; else normal Reset.
+- `match_over_this_round(score)` helper: `score >= rounds_to_win`.
+- Removed `freezetime_ms()`, `round_time_ms()`, `end_delay_ms()` env-reading functions.
+- Constants made `pub` for use by `main.rs`.
+- 4 FSM unit tests: starts_in_freezetime, match_over_at_rounds_to_win,
+  normal_round_transition_does_not_match_over, match_over_is_emitted_only_on_winning_round.
+
+**`server/src/main.rs`**
+- `ServerConfig` struct with fields: `bind`, `bot_count`, `rounds_to_win`, `map`,
+  `freezetime_ms`, `round_time_ms`, `end_delay_ms`.
+- `build_config()` reads env vars and calls `validate_config()`.
+- `validate_config()` pure validation: bot_count 2..=MAX_SLOTS, rounds_to_win 1..=30,
+  map "de_douglas" only. Returns `Result<ServerConfig, Vec<String>>` with all errors.
+- `main()`: builds config, passes to `game_loop()` and `handle_conn()`.
+- Slots creation: only first `bot_count` slots occupied with bots; rest vacant (unoccupied, dead).
+- `game::State::new()` receives timing from config.
+- Both Welcome constructions include `rounds_to_win` from config.
+- `GET /status` reports `botCount`, `roundsToWin`, `map` in JSON response.
+- 9 config validation unit tests: default, rejects all out-of-bounds (bot, rounds, map),
+  accepts boundary values, reports multiple errors at once.
+
+**`src/net/protocol.ts` (client)**
+- `Welcome` interface gains `roundsToWin: number`.
+- `encodeWelcome`: buffer size +1 byte; writes `roundsToWin` after `specCap`.
+- `decodeWelcome`: reads `data[off + 4]` with `?? 0` default.
+
+**`src/net/protocol.test.ts`**
+- All Welcome test objects include `roundsToWin`.
+- Old-format compat test truncates 5 bytes (not 4) and asserts `roundsToWin: 0`.
+- Cross-compat buffer size increased from 17 to 18 bytes.
+
+**All tests green:** 228 TS tests, 39 sim tests, 19 server tests (including 4 new FSM tests + 9 config tests). Typecheck + build clean.
