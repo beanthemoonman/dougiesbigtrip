@@ -758,7 +758,7 @@ up first.
       client id/secret from env (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET placeholders).
       `start-dev --import-realm` for local; `KC_DB_SCHEMA=keycloak`. Health check on
       `/health/ready`.
-- [ ] **17.3** Client-side login flow — Authorization Code + PKCE via `keycloak-js`, token in memory
+- [x] **17.3** Client-side login flow — Authorization Code + PKCE via `keycloak-js`, token in memory
       only, expose `auth.name`/`sub`/`isAdmin`/`token()`.
 - [ ] **17.4** Server-side token validation — verify JWT signature against realm JWKS, check
       `exp`/`iss`/`aud`, reject unauthenticated when `AUTH_REQUIRED=true`, `role_admin` checked

@@ -1,4 +1,5 @@
--- Phase 18.1 — app schema (the keycloak schema is managed by Keycloak itself).
+-- Phase 18.1 — app schema. The `keycloak` schema is created by
+-- auth/init-schema.sql (Keycloak's own migrations do not create it).
 create schema if not exists app;
 
 create table if not exists app.users (

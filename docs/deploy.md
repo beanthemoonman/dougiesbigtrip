@@ -101,9 +101,30 @@ docker compose down -v
 
 ## Auth (Keycloak + Google)
 
-Keycloak 26 runs as the `auth` service, reached at `/auth/` through the proxy.
-On first start it imports the committed realm
-(`auth/counter-douglas-realm.json`) and creates its schema in the `db` container.
+Keycloak 26 runs as the `auth` service, reached at `/auth/` through the proxy
+(`KC_HTTP_RELATIVE_PATH=/auth` — Keycloak serves at `/` otherwise). On first
+start it imports the committed realm (`auth/counter-douglas-realm.json`) into
+the `keycloak` schema in the `db` container.
+
+Two first-boot-only things to know:
+
+- **The `keycloak` schema** is created by `auth/init-schema.sql`, mounted into
+  the postgres image's `docker-entrypoint-initdb.d`. Keycloak's own migrations
+  do *not* create it. That hook runs only on an empty `pgdata` volume — on an
+  existing one, create the schema by hand:
+  ```bash
+  docker compose exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -c 'create schema if not exists keycloak;'
+  ```
+- **`--import-realm` imports only if the realm is absent.** Later edits to
+  `auth/counter-douglas-realm.json` — including a changed Google client secret —
+  are silently ignored. Change them in the admin console, or `down -v` and
+  reimport.
+
+**`KC_HOSTNAME`** must be the full public URL including scheme, port and
+`/auth` (nginx forwards `Host` without the port, so a bare hostname yields
+redirect URLs missing `:8443`). Defaults to `https://localhost:8443/auth`; set
+it in `.env` for a real deployment.
 
 The realm defines a public OIDC client (`counter-douglas-spa`) and a Google
 identity provider. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are read from

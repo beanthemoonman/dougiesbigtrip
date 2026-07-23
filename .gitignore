@@ -45,3 +45,5 @@ target/
 
 # Docker volume mounts
 data/
+
+secrets/

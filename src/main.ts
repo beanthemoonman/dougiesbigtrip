@@ -22,6 +22,7 @@ import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from './
 import { applyWeaponPose, getWeaponMuzzle } from './ai/thirdperson';
 import { createRagdollWorld, despawnRagdollBody, ragdollExpired, spawnRagdollBody, type RagdollBody } from './ai/ragdoll';
 import { playFootstep, playGunshot, playHurt, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
+import { initAuth, type AuthState } from './core/auth';
 import { Buttons, createInputManager } from './core/input';
 import { createSettingsPanel, DEFAULT_SERVER_ADDRESS, DEFAULT_SETTINGS, type GameActions } from './core/settings';
 import { createTeamMenu, type TeamChoice } from './ui/teammenu';
@@ -303,6 +304,15 @@ async function main(): Promise<void> {
   // AudioContext starts suspended until a user gesture — the same click that
   // engages pointer lock unlocks audio (core/audio.ts).
   canvas.addEventListener('click', resumeAudio);
+
+  // Phase 17.3: fire-and-forget auth init — the rest of startup does not depend
+  // on it.  When it resolves, the auth button (created below) updates.
+  // ponytail: Phase 19 entry screen replaces this button.
+  let auth: AuthState | null = null;
+  void initAuth().then((a) => {
+    auth = a;
+    refreshAuthButton();
+  });
 
   // --- Settings loaded + applied ---
   // These are declared early so the team menu can reference them; assigned below.
@@ -660,6 +670,27 @@ async function main(): Promise<void> {
   });
   settingsPanel.hide(); // team menu is the active overlay on boot
   settingsPanel.setGameMode('none'); // game section hidden until a side is chosen
+
+  // Phase 17.3 — minimal auth login/logout button, anchored bottom-left.
+  // ponytail: replaced by the Phase 19 entry screen (Hello, {name} ▾).
+  const authBtn = document.createElement('button');
+  authBtn.style.cssText =
+    'position:fixed;bottom:12px;left:12px;padding:4px 10px;background:rgba(20,24,28,0.85);' +
+    'color:#ccc;border:1px solid #3a4450;font:12px monospace;cursor:pointer;z-index:20;display:none';
+  authBtn.onclick = (): void => {
+    if (!auth) return;
+    if (auth.authenticated) void auth.logout();
+    else void auth.login();
+  };
+  document.body.appendChild(authBtn);
+
+  function refreshAuthButton(): void {
+    if (!auth) { authBtn.style.display = 'none'; return; }
+    authBtn.style.display = '';
+    authBtn.textContent = auth.authenticated
+      ? `Hello, ${auth.name ?? auth.sub ?? '?'}`
+      : 'Log in';
+  }
 
   await initPhysics();
   const world = createWorld();

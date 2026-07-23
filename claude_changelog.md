@@ -3014,3 +3014,78 @@ the split config (fails only on upstream DNS for `server`, expected outside comp
 and uncommented `/auth/` in `nginx-locations.conf`.
 
 **Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean.
+
+---
+
+## Review fixes — Phase 17.2 (`61f7570..HEAD`)
+
+Four defects found reviewing the Keycloak commits. All config/docs; no source changes.
+
+**`auth/init-schema.sql`** (new)
+- `create schema if not exists keycloak;`, mounted into the `db` service's
+  `/docker-entrypoint-initdb.d/`. `KC_DB_SCHEMA=keycloak` pointed at a schema nothing created —
+  Keycloak's Liquibase does not create its own schema, so `auth` failed at boot. The comment in
+  `server/migrations/001_initial.sql` claiming Keycloak manages it was wrong and is corrected.
+  Hook is first-boot-only; an existing `pgdata` needs the manual `psql` in `docs/deploy.md`.
+
+**`docker-compose.yml`**
+- `KC_HTTP_RELATIVE_PATH: /auth` — nginx proxies to `http://auth:8080/auth/` and every
+  advertised redirect URI is `/auth/realms/...`, but Keycloak 26 serves at `/` by default.
+  Every auth request was 404ing.
+- Healthcheck moved from port 8080 to **9000**. Keycloak has served health on the management
+  port since 25, so the container could never become healthy.
+- `KC_HOSTNAME` is now `${KC_HOSTNAME:-https://localhost:8443/auth}`. nginx sends `Host`
+  without the port, so the bare `localhost` built redirect/issuer URLs missing `:8443` and
+  broke the OAuth round-trip.
+
+**`.env.example`** — added `KC_HOSTNAME` (blank = use the compose default).
+
+**`docs/deploy.md`** — documented the schema hook, the `KC_HOSTNAME` requirement, and that
+`--import-realm` is first-boot-only (later realm-JSON edits, including a rotated Google
+secret, are silently ignored).
+
+**Tests:** none — config only. Compose YAML re-parsed clean; not brought up end-to-end.
+
+## 2026-07-23 — Phase 17.3: Client login flow (keycloak-js + PKCE)
+
+### `pnpm add keycloak-js` (26.2.4)
+Official adapter — the plan explicitly calls for it over hand-rolled PKCE.
+
+### `src/core/auth.ts`
+- `initAuth()` → creates Keycloak instance with `check-sso` onLoad and PKCE `S256`, returns
+  `AuthState`. Silently stays unauthenticated when Keycloak is unreachable (dev without the
+  stack, `pnpm dev`).
+- `AuthState` interface: `authenticated`, `name`, `sub`, `isAdmin` (derived from
+  `realm_access.roles`), `token()`, `login()`, `logout()`.
+- Token held **in memory only** — `Keycloak` instance internal state, never written to
+  localStorage/sessionStorage (matches CLAUDE.md's "no web storage assumption" and happens
+  to be the safer choice anyway).
+- Reload-survival: `check-sso` re-checks the Keycloak SSO cookie via silent iframe redirect
+  — no stored token to steal, no refresh-token storage.
+- Pure helpers exported for testing: `displayNameFromToken()`, `isAdminFromToken()`.
+
+### `public/sso-silent.html`
+Standard Keycloak silent check-sso receiver — loaded in an iframe by the adapter, posts
+`location.href` back to the parent window via `postMessage`.
+
+### `src/ui` wiring (temporary — ponytail marker for Phase 19)
+- `main.ts`: calls `initAuth()` fire-and-forget at boot (non-blocking — rest of startup doesn't
+  depend on it). A small fixed-position button in the bottom-left shows "Log in" / "Hello,
+  {name}". Clicking logs in or out. `refreshAuthButton()` updates the label when auth
+  initializes.
+- `ponytail` marker: Phase 19 entry screen replaces this with the proper "Hello, {name} ▾"
+  dropdown.
+
+### `.env.example` fix
+`DATABASE_URL` previously used `${POSTGRES_USER}`, `${POSTGRES_PASSWORD}`, `${POSTGRES_DB}`
+variable references — Docker Compose `.env` files do NOT expand `${VAR}` references within
+the same file. Replaced with a concrete example URL and a warning about percent-encoding
+URL-meaningful password characters.
+
+### Tests — 11 new T0 tests in `src/core/auth.test.ts`
+- `displayNameFromToken`: name present, falls back to preferred_username, prefers name,
+  undefined for missing/empty.
+- `isAdminFromToken`: role_admin present/absent, missing realm_access, empty roles, undefined
+  input, undefined realm_access.
+
+**Results:** `pnpm test` 242 passed (+11), `pnpm typecheck` clean, `pnpm build` clean.

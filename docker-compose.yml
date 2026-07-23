@@ -21,6 +21,8 @@ services:
       - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Creates the `keycloak` schema. First boot only — see auth/init-schema.sql.
+      - ./auth/init-schema.sql:/docker-entrypoint-initdb.d/10-keycloak-schema.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -40,7 +42,13 @@ services:
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
       KC_DB_SCHEMA: keycloak
       KC_HEALTH_ENABLED: "true"
-      KC_HOSTNAME: localhost
+      # Full public URL: nginx sends Host without the port, so a bare hostname
+      # would build redirect/issuer URLs missing :8443 and break the OAuth
+      # round-trip. Override in .env for a real deployment.
+      KC_HOSTNAME: ${KC_HOSTNAME:-https://localhost:8443/auth}
+      # Keycloak serves at / by default; the proxy and all the advertised
+      # redirect URIs use /auth.
+      KC_HTTP_RELATIVE_PATH: /auth
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -58,7 +66,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080; echo -e 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q 200"]
+      # Health lives on the management port (9000) since Keycloak 25, at the
+      # management root — KC_HTTP_RELATIVE_PATH does not move it.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q 200"]
       interval: 5s
       timeout: 10s
       retries: 20

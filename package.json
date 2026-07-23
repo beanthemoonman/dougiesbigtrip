@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",
+    "keycloak-js": "^26.2.4",
     "recast-navigation": "^0.43.1",
     "sim-wasm": "file:./sim/pkg",
     "stats.js": "^0.17.0",
