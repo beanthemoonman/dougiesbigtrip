@@ -32,7 +32,7 @@ import { type Breakable, damageProp, resetBrokenBreakables } from './game/breaka
 import { computeDamage } from './game/damage';
 import { hitboxAt, hitboxRay } from './game/hitbox';
 import { buildMapColliders, CT_SPAWN, MAP_BOXES, MAP_RAMPS, T_SPAWN, mapCuboids } from './game/map_douglas';
-import { createRoundState, DEFAULT_MATCH, LIMITS, tickRound, validateMatchConfig, type MatchConfig } from './game/round';
+import { createRoundState, DEFAULT_MATCH, isMatchOver, LIMITS, tickRound, validateMatchConfig, type MatchConfig } from './game/round';
 import { spawnRing } from './game/spawning';
 import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
@@ -341,6 +341,7 @@ async function main(): Promise<void> {
   let serverRoundTimeSec = -1;
   let serverScore: { t: number; ct: number } | null = null;
   let serverPhase = -1; // 0=freezetime, 1=live, 2=over; -1 = not synced yet
+  let serverRoundsToWin = 0; // from Welcome; 0 = pre-Phase-16 server, no match end
   const interpBuf = createInterpolationBuffer();
 
   // --- Game mode: menu | playing | spectating ---
@@ -490,6 +491,7 @@ async function main(): Promise<void> {
     let welcomeSeen = false;
     conn.onWelcome = (w): void => {
       welcomeSeen = true;
+      serverRoundsToWin = w.roundsToWin;
       if (w.yourSlot === SPECTATOR) {
         // First Welcome: server says "connected, pick a team." Show the team
         // menu with capacity info.
@@ -553,6 +555,7 @@ async function main(): Promise<void> {
       serverRoundTimeSec = -1;
       serverScore = null;
       serverPhase = -1;
+      serverRoundsToWin = 0;
       sendJoinRef.fn = null;
     };
     conn.connect(url);
@@ -613,13 +616,18 @@ async function main(): Promise<void> {
   if (bootUrl) {
     try {
       const u = new URL(bootUrl);
-      // Preserve a path endpoint (wss://host/ws) so the field round-trips; a
-      // bare host splits into host + port as before.
-      if (u.pathname && u.pathname !== '/') {
-        defaultAddress = u.host + u.pathname;
+      // Phase 16.4: only ws:// and wss:// URLs are valid targets.
+      if (u.protocol !== 'ws:' && u.protocol !== 'wss:') {
+        console.warn(`ignoring ?connect= with non-ws scheme: ${u.protocol}`);
       } else {
-        defaultAddress = u.hostname;
-        defaultPort = u.port || (u.protocol === 'wss:' ? '443' : '80');
+        // Preserve a path endpoint (wss://host/ws) so the field round-trips; a
+        // bare host splits into host + port as before.
+        if (u.pathname && u.pathname !== '/') {
+          defaultAddress = u.host + u.pathname;
+        } else {
+          defaultAddress = u.hostname;
+          defaultPort = u.port || (u.protocol === 'wss:' ? '443' : '80');
+        }
       }
     } catch { /* malformed ?connect= — fall back to defaults */ }
   }
@@ -1255,6 +1263,10 @@ async function main(): Promise<void> {
     if (predictor) {
       if (serverPhase === 0) return `FREEZE  ${Math.ceil(serverRoundTimeSec)}`;
       if (serverPhase === 2) {
+        const sc = serverScore;
+        if (sc && isMatchOver(sc.t, sc.ct, serverRoundsToWin)) {
+          return `MATCH OVER   T ${sc.t} : ${sc.ct} CT   —   new game in ${Math.ceil(serverRoundTimeSec)}`;
+        }
         if (gameMode !== 'playing') return `ROUND OVER   ...`;
         return 'ROUND OVER';
       }

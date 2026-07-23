@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRoundState, DEFAULT_MATCH, tickRound, validateMatchConfig, type MatchConfig } from './round';
+import { createRoundState, DEFAULT_MATCH, isMatchOver, LIMITS, tickRound, validateMatchConfig, type MatchConfig } from './round';
 
 // T0/T1: the round state machine. Deterministic timers, no world.
 const CFG: MatchConfig = { freezetime: 3, roundTime: 10, endDelay: 2, map: 'de_douglas', botCount: 6, roundsToWin: 16 };
@@ -152,5 +152,25 @@ describe('validateMatchConfig', () => {
     const r = validateMatchConfig({ botCount: 3.5 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.some((e) => e.includes('botCount'))).toBe(true);
+  });
+
+  // The server's slot array is MAX_SLOTS = 6 (server/src/main.rs); a config the
+  // client accepts but the server exits(1) on is worse than a lower ceiling.
+  it('caps botCount at the server slot capacity', () => {
+    expect(LIMITS.botCount[1]).toBe(6);
+    expect(validateMatchConfig({ botCount: 7 }).ok).toBe(false);
+  });
+});
+
+describe('isMatchOver', () => {
+  it('is true once either score reaches roundsToWin', () => {
+    expect(isMatchOver(16, 3, 16)).toBe(true);
+    expect(isMatchOver(3, 16, 16)).toBe(true);
+    expect(isMatchOver(15, 15, 16)).toBe(false);
+  });
+
+  // Welcome.roundsToWin is 0 for a pre-Phase-16 server: never claim match-over.
+  it('is false when roundsToWin is unknown (0)', () => {
+    expect(isMatchOver(9, 9, 0)).toBe(false);
   });
 });

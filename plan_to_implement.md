@@ -731,7 +731,10 @@ Configurable scope:
 - [x] SP path reads config at match start (bot count / map / rounds-to-win). (16.2)
 - [x] Server-side config (`ServerConfig` from env vars, validated bounds, `GET /status` reports
       effective config, Welcome includes `roundsToWin`). (16.3)
-- [ ] MP client can target a chosen server address; server applies its configured knobs on start. (16.4)
+      *Review fixes:* match reset now emits `Reset` so the server respawns after a match ends;
+      `LIMITS.botCount` capped at 6 = server `MAX_SLOTS`; MP banner consumes
+      `Welcome.roundsToWin` via `isMatchOver()`. `pnpm test` 231 / `cargo test -p server` 19 green.
+- [x] MP client can target a chosen server address; server applies its configured knobs on start. (16.4)
 
 **Exit test:** Start SP matches with different bot counts / rounds-to-win and see them honoured;
 point the MP client at a server started with a non-default config and observe those values in play.

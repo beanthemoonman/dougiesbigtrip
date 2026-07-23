@@ -68,8 +68,13 @@ export interface MatchConfig extends RoundConfig {
   readonly botCount: number;    // total bots, split across teams
   readonly roundsToWin: number; // match ends when a team reaches this
 }
-export const LIMITS = { botCount: [2, 10], roundsToWin: [1, 30] } as const;
+export const LIMITS = { botCount: [2, 6], roundsToWin: [1, 30] } as const;
 ```
+
+`botCount` ceilings at **6**: that is `MAX_SLOTS`, the server's compile-time slot array
+(`server/src/main.rs`). A higher client-side ceiling only produces configs the server
+rejects at startup. Raising it means raising `MAX_SLOTS` (and `MAX_SPECTATORS`, and giving
+the server real per-slot spawn positions — it currently stacks every bot on one anchor).
 
 `botCount` floors at **2**, not 0: the count splits `floor(n/2)` CT / rest T, so at 0 or 1
 one team starts empty and `decideWinner` ends the round on its first tick — the match would

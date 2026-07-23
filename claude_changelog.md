@@ -2739,3 +2739,55 @@ the fixed 180 s match clock with `roundsToWin` is intended and its reset path is
 - Cross-compat buffer size increased from 17 to 18 bytes.
 
 **All tests green:** 228 TS tests, 39 sim tests, 19 server tests (including 4 new FSM tests + 9 config tests). Typecheck + build clean.
+
+## 2026-07-23 — Phase 16.4: MP client targets a chosen server
+
+**`src/ui/connect.ts`**
+- `DEFAULT_WS_URL` sourced from `settings.ts` constants (`DEFAULT_SERVER_ADDRESS` + `DEFAULT_SERVER_PORT`).
+  Single source of truth — removed duplicate hardcoded default.
+
+**`src/core/settings.ts`**
+- `buildWsUrl()` now validates explicit URL schemes: only `ws://` and `wss://` accepted;
+  non-ws schemes (like `http://`) return `null` and show "invalid URL" in the UI.
+- Both connect handlers (initial connect + re-connect after disconnect) handle the nullable return.
+
+**`src/main.ts`**
+- `?connect=` URL param validated: only `ws:` and `wss:` protocols accepted;
+  non-ws schemes produce a console warning and fall back to page-host defaults.
+
+**All tests green:** 231 TS tests, 39 sim tests, 19 server tests. Typecheck + build clean.
+
+---
+
+## Phase 16 review fixes
+
+Reviewed the Phase 16.1–16.3 diff (`main...post-1.0`) and fixed three defects. Each was
+reproduced with a failing test before the fix.
+
+**1. Match reset never respawned anyone — `server/src/game.rs`**
+The `Over → Freezetime` transition returned `RoundEvent::MatchOver` *instead of* `Reset` when
+a match had just ended. `game_loop` only respawns/backfills bots on `RoundEvent::Reset`
+(`main.rs:292`), so after a match ended every slot stayed dead permanently. The FSM unit test
+asserted the wrong event, so it went green over a broken server. Now returns `Reset` on that
+edge (`state.match_over` is the flag; the event is the cue to respawn), matching the TS FSM
+which already returned `'reset'` there.
+
+**2. Client and server config bounds disagreed — `src/game/round.ts`, doc**
+`LIMITS.botCount` was `[2, 10]` while `validate_config` rejects anything above `MAX_SLOTS`
+(6), so the "New Match" slider offered counts that make the server `exit(1)`. Lowered the
+client ceiling to 6 and updated `docs/plan-post-1.0-config-auth.md` (the spec) with why —
+raising it again means raising `MAX_SLOTS`, `MAX_SPECTATORS`, and giving the server real
+per-slot spawns instead of one anchor per team.
+
+**3. `Welcome.roundsToWin` was sent but never read — `src/main.ts`**
+Added to the wire format in 16.3 and consumed by nothing, so "MATCH OVER" only ever appeared
+in single-player. The client now stores it from Welcome (cleared on disconnect) and the
+multiplayer banner derives match-over from snapshot scores via a new pure
+`isMatchOver(scoreT, scoreCt, roundsToWin)` in `round.ts` — 0 means a pre-Phase-16 server, so
+never over.
+
+**Not a bug (review finding withdrawn):** the server's `team_ct = i % 2 == 1` over the first
+`bot_count` slots and the client's `floor(n/2)` CT / rest T produce the *same* split. Odd bot
+counts are lopsided by one on both sides; that is inherent to odd counts, not a divergence.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean, `cargo test -p server` 19 passed.

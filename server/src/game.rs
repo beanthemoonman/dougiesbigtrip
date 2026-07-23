@@ -124,7 +124,8 @@ pub fn tick(state: &mut State, t_alive: usize, ct_alive: usize) -> RoundEvent {
                     state.score_t = 0;
                     state.score_ct = 0;
                     state.round_number = 1;
-                    return RoundEvent::MatchOver;
+                    // Still a Reset: the game loop respawns everyone on this event.
+                    return RoundEvent::Reset;
                 }
                 state.round_number += 1;
                 return RoundEvent::Reset;
@@ -176,7 +177,7 @@ mod fsm_tests {
         assert_eq!(s.match_winner, Some('C'));
         assert_eq!(s.score_ct, 1);
         // Tick through Over phase (one tick drops 10ms below dt_ms → 0)
-        assert_eq!(tick(&mut s, 0, 1), RoundEvent::MatchOver); // reset + emit
+        assert_eq!(tick(&mut s, 0, 1), RoundEvent::Reset); // match reset still respawns
         assert!(!s.match_over);
         assert_eq!(s.score_ct, 0);
         assert_eq!(s.score_t, 0);

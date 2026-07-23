@@ -107,8 +107,11 @@ export function createSettingsPanel(
   //   - bare host              → "127.0.0.1" + "9876" → "ws://127.0.0.1:9876"
   // The path forms let clients reach a TLS reverse-proxy endpoint like
   // wss://counterdouggo.yikersis.land/ws where the port is 443 and implicit.
-  const buildWsUrl = (addr: string, port: string): string => {
+  // Returns null if an explicit URL uses a non-ws scheme (http:// etc.).
+  const buildWsUrl = (addr: string, port: string): string | null => {
     if (/^wss?:\/\//.test(addr)) return addr;
+    // Reject explicit non-ws schemes (http://, https://, etc.).
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(addr)) return null;
     if (addr.includes('/')) return `${wsScheme}//${addr}`;
     return `${wsScheme}//${addr}:${port}`;
   };
@@ -213,7 +216,12 @@ export function createSettingsPanel(
       const addr = addrInput!.value.trim();
       const port = portInput!.value.trim();
       if (!addr || (needsPort(addr) && !port)) return;
-      serverOpts.onConnect(buildWsUrl(addr, port));
+      const url = buildWsUrl(addr, port);
+      if (!url) {
+        if (connStatus) { connStatus.textContent = 'invalid URL'; connStatus.style.color = '#c44'; connStatus.style.display = ''; }
+        return;
+      }
+      serverOpts.onConnect(url);
     };
 
     connBtn.onclick = connect;
@@ -348,7 +356,12 @@ export function createSettingsPanel(
             const addr = addrInput!.value.trim();
             const port = portInput!.value.trim();
             if (!addr || (needsPort(addr) && !port)) return;
-            serverOpts?.onConnect(buildWsUrl(addr, port));
+            const url = buildWsUrl(addr, port);
+            if (!url) {
+              if (connStatus) { connStatus.textContent = 'invalid URL'; connStatus.style.color = '#c44'; connStatus.style.display = ''; }
+              return;
+            }
+            serverOpts?.onConnect(url);
           };
         }
       }
