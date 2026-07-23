@@ -168,6 +168,19 @@
         "phone",
         "offline_access",
         "microprofile-jwt"
+      ],
+      "protocolMappers": [
+        {
+          "name": "game-server audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "counter-douglas-spa",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
       ]
     }
   ],

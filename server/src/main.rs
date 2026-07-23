@@ -591,26 +591,23 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                     // Stale or invalid conn_id → no entry → ignored.
                     if let Some((out, slot_tx)) = pending_conns.remove(&conn_id) {
                     // Phase 17.4: validate auth token when AUTH_REQUIRED.
+                    // A refusal must `continue` the game loop, never `return` —
+                    // returning here would end game_loop and freeze the server
+                    // for everyone already playing.
                     let mut validated: Option<ValidatedUser> = None;
                     if config.auth_config.required {
-                        match token {
-                            None => {
-                                let bye = Bye { reason: "auth required".into() }.encode();
+                        let outcome = match token {
+                            None => Err("no token".to_string()),
+                            Some(ref t) => auth::validate_token(t, &config.auth_config).await,
+                        };
+                        match outcome {
+                            Err(reason) => {
+                                let bye = Bye { reason: format!("auth failed: {reason}") }.encode();
                                 let _ = out.send(bye);
-                                println!("conn {conn_id} refused — no token");
-                                return;
+                                println!("conn {conn_id} refused — {reason}");
+                                continue;
                             }
-                            Some(ref t) => match auth::validate_token_sync(t, &config.auth_config) {
-                                Err(reason) => {
-                                    let bye = Bye { reason: format!("invalid token: {reason}") }.encode();
-                                    let _ = out.send(bye);
-                                    println!("conn {conn_id} refused — {reason}");
-                                    return;
-                                }
-                                Ok(user) => {
-                                    validated = Some(user);
-                                }
-                            }
+                            Ok(user) => validated = Some(user),
                         }
                     }
                     // Count active humans before the loop (avoids borrow conflict).

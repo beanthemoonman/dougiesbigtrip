@@ -3139,3 +3139,53 @@ URL-meaningful password characters.
 - TS: `pnpm test` 245 passed (+3). `pnpm typecheck` clean. `pnpm build` clean.
 - Rust: `cargo test -p sim` 40 passed (+1). `cargo test -p server` 26 passed (+7).
   `cargo check` zero warnings.
+
+## Phase 17.4 review fixes — JWT validation hardening
+
+Review of `0c26a08..2bd3b16` found two server-killers on the first
+`AUTH_REQUIRED=true` join plus an audience hole. Fixed all six findings.
+
+### P0 — auth rejection killed the whole server
+- `Ev::JoinTeam`'s two refusal paths used `return`, which returns from
+  `game_loop` itself (the arm lives inside `tokio::select!` inside `loop`), not
+  from the handler. One unauthenticated connection froze the simulation for
+  every player already in the match. Now `continue`, with a comment saying why.
+
+### P0 — `blocking_read` inside the async runtime
+- `validate_token_sync` called `tokio::sync::RwLock::blocking_read()` from the
+  async game loop, which panics ("Cannot block the current thread from within a
+  runtime") and aborts the task. Validation is now `async fn validate_token`
+  using `JWKS.read().await`.
+
+### Security — `aud` accepted Keycloak's realm-wide `account`
+- `set_audience(&[&config.audience, "account"])` let any token minted for any
+  other client in the realm through. Now only the configured audience.
+- Added a `game-server audience` (`oidc-audience-mapper`) protocol mapper to the
+  `counter-douglas-spa` client in `auth/counter-douglas-realm.json`, so the
+  access token actually carries `counter-douglas-spa` in `aud`.
+
+### JWKS cache never refreshed
+- `expiry` was set and then `#[allow(dead_code)]`; a Keycloak key rotation broke
+  every login until an operator restarted the server. Replaced with
+  `key_for_kid`, which refetches on cold cache, TTL expiry (900 s), or unknown
+  `kid`, rate-limited to one fetch per 60 s so a bogus `kid` can't be used to
+  hammer Keycloak. `prefetch_jwks` is now an optimisation, not a precondition.
+- `ponytail:` note on the inline refetch — it stalls one tick during a rotation;
+  move to a background refresh task if that ever shows up in a tick histogram.
+
+### Tests
+- The old `auth.rs` suite built its own HS256 `Validation` and called
+  `jsonwebtoken::decode` directly — it tested the library, never
+  `validate_token_sync`, which is exactly why both P0s shipped green. Replaced
+  with tests of our own code: `user_from_claims` (admin role, role near-misses,
+  `name` → `preferred_username` fallback, missing `sub`) and `validation_for`
+  (RS256 pinned, issuer pinned, `validate_exp`, and a regression test asserting
+  `aud` is *only* the configured audience).
+- `auth_config_defaults_to_not_required` asserted a literal it had just
+  constructed. Replaced with `parse_required`, a pure helper `from_env` now
+  delegates to, tested over unset/""/false/true/1 (env mutation is `unsafe` in
+  edition 2024 and racy across parallel tests, so the helper is the seam).
+
+### Tests run
+- Rust: `cargo test` — 40 sim + 28 server passed. TS: `pnpm test` 245 passed,
+  `pnpm typecheck` clean.

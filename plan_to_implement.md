@@ -762,7 +762,9 @@ up first.
       only, expose `auth.name`/`sub`/`isAdmin`/`token()`.
 - [x] **17.4** Server-side token validation — verify JWT signature against realm JWKS, check
       `exp`/`iss`/`aud`, reject unauthenticated when `AUTH_REQUIRED=true`, `role_admin` checked
-      server-side only. `AUTH_REQUIRED=false` (default) skips validation.
+      server-side only. `AUTH_REQUIRED=false` (default) skips validation. JWKS is cached with a
+      900 s TTL and refetched on key rotation (rate-limited); `aud` accepts only the configured
+      client, backed by an audience mapper in the realm export.
 
 **Exit test:** A fresh user signs in with Google, lands authenticated; a user with `role_admin`
 is recognised as admin and one without is not — verified from the token server-side, not the UI.
