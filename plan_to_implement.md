@@ -802,12 +802,15 @@ their stored record, Keycloak state persists.
 The menu shell around the game. Plain DOM overlay (no React — see `CLAUDE.md`).
 
 **Entry screen:**
-- [ ] Title: **"Counter Douglas"**.
-- [ ] Top-right `Hello, {name} ▾` menu → **Settings**, **Logout** (name from the auth token).
-- [ ] Primary buttons: **Singleplayer**, **Multi-player** (wire to the Phase 16 config flows).
+- [x] Title: **"Counter Douglas"**.
+- [x] Top-right `Hello, {name} ▾` menu → **Settings**, **Logout** (name from the auth token).
+- [x] Primary buttons: **Singleplayer**, **Multi-player** (wire to the Phase 16 config flows).
 
 **Settings screen:**
-- [ ] Left-nav sections: **Graphics**, **Game**, **Bindings**.
+- [x] Left-nav sections: **Graphics**, **Game**, **Bindings**.
+
+**Exit test:** Signed-in user sees their name, opens Settings, moves between the three sections,
+and launches SP/MP from the entry buttons.
 
 **Exit test:** Signed-in user sees their name, opens Settings, moves between the three sections,
 and launches SP/MP from the entry buttons.
@@ -818,8 +821,8 @@ and launches SP/MP from the entry buttons.
 
 Server-admin surface for the Phase 16/18 knobs. Visible **only to `role_admin`**.
 
-- [ ] Admin screen exposes server bot count, map, rounds-to-win; writes persist (Phase 18).
-- [ ] Entirely hidden and server-refused for non-admins (gate on the token role, both sides).
+- [x] Admin screen exposes server bot count, map, rounds-to-win; writes persist (Phase 18).
+- [x] Entirely hidden and server-refused for non-admins (gate on the token role, both sides).
 
 **Exit test:** A `role_admin` user changes the server's bot count / map / rounds-to-win, the
 change persists and takes effect; a non-admin cannot see or reach the screen.

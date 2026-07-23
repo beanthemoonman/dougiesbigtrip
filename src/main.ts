@@ -24,7 +24,7 @@ import { createRagdollWorld, despawnRagdollBody, ragdollExpired, spawnRagdollBod
 import { playFootstep, playGunshot, playHurt, playImpact, playReload, resumeAudio, setMasterVolume } from './core/audio';
 import { initAuth, type AuthState } from './core/auth';
 import { Buttons, createInputManager } from './core/input';
-import { createSettingsPanel, DEFAULT_SERVER_ADDRESS, DEFAULT_SETTINGS, type GameActions } from './core/settings';
+import { createSettingsPanel, DEFAULT_SERVER_ADDRESS, DEFAULT_SETTINGS } from './core/settings';
 import { createTeamMenu, type TeamChoice } from './ui/teammenu';
 import { createTraceRecorder } from './core/trace_recorder';
 import { startLoop, TICK_RATE } from './core/loop';
@@ -56,6 +56,10 @@ import { applySurfaceTextures } from './render/surfacetex';
 import { createHud } from './ui/hud';
 import { createLoadingScreen } from './ui/loading';
 import { createScoreboard, type PlayerScore } from './ui/scoreboard';
+import { createScreenManager } from './ui/screens';
+import { createEntryScreen, type EntryScreen } from './ui/entry';
+import { createSettingsScreen, type SettingsScreen } from './ui/settings_screen';
+import { createAdminScreen, type AdminScreen } from './ui/admin';
 import { WEAPONS, type WeaponId } from './weapons/defs';
 import { createWeaponState, fireShot, startReload, tickWeapon, type WeaponState } from './weapons/hitscan';
 import { computeSpread, type Stance } from './weapons/spread';
@@ -306,12 +310,62 @@ async function main(): Promise<void> {
   canvas.addEventListener('click', resumeAudio);
 
   // Phase 17.3: fire-and-forget auth init — the rest of startup does not depend
-  // on it.  When it resolves, the auth button (created below) updates.
-  // ponytail: Phase 19 entry screen replaces this button.
+  // on it.  When it resolves, the entry screen's user menu updates.
   let auth: AuthState | null = null;
   void initAuth().then((a) => {
     auth = a;
-    refreshAuthButton();
+    entryScreen.setAuth(a);
+  });
+
+  // Settings (sensitivity / world FOV / volume). The config object is the source
+  // of truth; the panel mutates it and pushes each value live.
+  const settings = { ...DEFAULT_SETTINGS };
+  function applySettings(): void {
+    input.state.sensitivity = settings.sensitivity;
+    renderCtx.setWorldFov(settings.worldFovDeg);
+    setMasterVolume(settings.volume);
+  }
+
+  // Phase 19 screen state machine — governs entry/settings/admin/in-game.
+  const screens = createScreenManager(canvas!);
+
+  // Phase 19.2 entry screen (created early so auth can update it).
+  // connectViaReload is defined below; we pass it via a mutable ref.
+  const mpConnect: { fn: ((url: string) => void) | null } = { fn: null };
+  const entryScreen: EntryScreen = createEntryScreen({
+    onSettings: () => screens.show('settings'),
+    onAdmin: () => screens.show('admin'),
+    sp: {
+      botCountMin: LIMITS.botCount[0],
+      botCountMax: LIMITS.botCount[1],
+      roundsMin: LIMITS.roundsToWin[0],
+      roundsMax: LIMITS.roundsToWin[1],
+      onStart(bots, rounds): void {
+        const u = new URL(location.href);
+        u.searchParams.set('bots', String(bots));
+        u.searchParams.set('rounds', String(rounds));
+        u.searchParams.delete('connect');
+        location.href = u.toString();
+      },
+    },
+    mp: {
+      defaultAddress: DEFAULT_SERVER_ADDRESS,
+      defaultPort: '9876',
+      onConnect(url: string): void {
+        mpConnect.fn?.(url);
+      },
+    },
+  });
+
+  // Phase 19.3 settings screen (three tabs, replaces the old inline panel).
+  let settingsScreen: SettingsScreen;
+
+  settingsScreen = createSettingsScreen({
+    settings,
+    onChange: applySettings,
+    onBack(): void {
+      screens.show(screens.previous);
+    },
   });
 
   // --- Settings loaded + applied ---
@@ -319,13 +373,7 @@ async function main(): Promise<void> {
   let settingsPanel: ReturnType<typeof createSettingsPanel>; // eslint-disable-line prefer-const
   const sendJoinRef: { fn: ((team: number) => void) | null } = { fn: null };
 
-  // Settings (sensitivity / world FOV / volume). The config object is the source
-  // of truth; the panel mutates it and pushes each value live. Shown while out of
-  // pointer lock (the menu state), hidden during play.
-  const settings = { ...DEFAULT_SETTINGS };
-
   // Match config — mutable so the config panel can change it for the next start.
-  // ponytail: placeholder; Phase 19 entry screen replaces the config panel.
   let currentMatchConfig: MatchConfig = { ...DEFAULT_MATCH };
   {
     // `params.get` returns null for a missing key and Number(null) is 0, not NaN —
@@ -337,11 +385,6 @@ async function main(): Promise<void> {
     const validated = validateMatchConfig(partial);
     if (validated.ok) currentMatchConfig = validated.value;
     else console.warn('ignoring match config in URL:', validated.errors.join('; '));
-  }
-  function applySettings(): void {
-    input.state.sensitivity = settings.sensitivity;
-    renderCtx.setWorldFov(settings.worldFovDeg);
-    setMasterVolume(settings.volume);
   }
 
   // Netcode: declared early so the settings panel's connect/disconnect callbacks
@@ -364,20 +407,6 @@ async function main(): Promise<void> {
   // Overview position for the menu / spectator free-fly cam.
   const OVERVIEW_POS = new Vector3(0, 25, -30);
   const OVERVIEW_LOOK = new Vector3(0, 0, 0); // look at map center
-
-  // Game actions that appear below the settings panel sliders.
-  const gameActions: GameActions = {
-    onSpectate: () => {
-      if (sendJoinRef.fn) { sendJoinRef.fn(2); }
-      enterSpectator();
-    },
-    onJoinT: () => {
-      if (sendJoinRef.fn) { sendJoinRef.fn(0); } else { enterGame('T'); }
-    },
-    onJoinCt: () => {
-      if (sendJoinRef.fn) { sendJoinRef.fn(1); } else { enterGame('CT'); }
-    },
-  };
 
   // Phase 9 SP roster: there is exactly one human, so at most one bot is benched at a
   // time. `benchedBot` is the bot the human currently displaces; `rebotPending` is a bot
@@ -433,9 +462,7 @@ async function main(): Promise<void> {
     input.state.yaw = Math.atan2(spawnPt[0] - enemySpawnPt[0], spawnPt[2] - enemySpawnPt[2]);
     gameMode = 'playing';
     teamMenu.el.style.display = 'none';
-    settingsPanel.setGameMode('playing');
-    settingsPanel.hide();
-    canvas!.requestPointerLock();
+    screens.enterGame(canvas!);
   }
 
   function enterSpectator(): void {
@@ -444,7 +471,6 @@ async function main(): Promise<void> {
     gameMode = 'spectating';
     playerAlive = false;
     movementCtx.body.setEnabled(false);
-    settingsPanel.setGameMode('spectating');
     if (player.position.lengthSq() < 0.01) specPos.copy(OVERVIEW_POS);
     else {
       specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
@@ -459,24 +485,20 @@ async function main(): Promise<void> {
       if (choice === 'spec') {
         enterSpectator();
         teamMenu.el.style.display = 'none';
-        settingsPanel.hide();
-        canvas!.requestPointerLock();
+        screens.enterGame(canvas!);
       } else {
         playerTeam = choice;
         const spawnPt = choice === 'T' ? T_SPAWN : CT_SPAWN;
         spawn.set(spawnPt[0], spawnPt[1], spawnPt[2]);
         teamMenu.el.style.display = 'none';
-        settingsPanel.hide();
         gameMode = 'playing';
-        settingsPanel.setGameMode('playing');
-        canvas!.requestPointerLock();
+        screens.enterGame(canvas!);
       }
     } else {
       if (choice === 'spec') {
         enterSpectator();
         teamMenu.el.style.display = 'none';
-        settingsPanel.hide();
-        canvas!.requestPointerLock();
+        screens.enterGame(canvas!);
       } else {
         enterGame(choice);
       }
@@ -486,8 +508,8 @@ async function main(): Promise<void> {
   teamMenu.onEsc = (): void => {
     teamMenu.el.style.display = 'none';
     gameMode = preMenuGameMode;
-    settingsPanel.setGameMode(gameMode === 'menu' ? 'none' : gameMode);
-    if (gameMode !== 'menu') canvas!.requestPointerLock();
+    if (gameMode !== 'menu') screens.enterGame(canvas!);
+    else screens.show('entry');
   };
 
   function handleConnect(url: string): void {
@@ -495,29 +517,18 @@ async function main(): Promise<void> {
       netConn.close();
       predictor = null;
     }
-    const host = url.replace(/^wss?:\/\//, '');
-    settingsPanel.setConnected('connecting', host);
     const conn = createConnection();
-    let welcomeSeen = false;
     conn.onWelcome = (w): void => {
-      welcomeSeen = true;
       serverRoundsToWin = w.roundsToWin;
       if (w.yourSlot === SPECTATOR) {
-        // First Welcome: server says "connected, pick a team." Show the team
-        // menu with capacity info.
         teamMenu.setCounts(w.players, w.maxPlayers, w.spectators, w.specCap);
         teamMenu.el.style.display = 'flex';
-        settingsPanel.setConnected('connected', host);
-        settingsPanel.setGameMode('none');
-        // Wire sendJoinRef so the team-menu callback can ship the Join frame.
         sendJoinRef.fn = (team: number) => {
           conn.send(encodeJoin({ team, token: auth?.token() }));
           teamMenu.el.style.display = 'none';
         };
         return;
       }
-      // Second Welcome: server assigned us a real slot. Create the predictor
-      // and enter the game.
       predictor = createPredictor(
         {
           tick: (b, y) => { sim_tick(0, b, y); },
@@ -526,13 +537,10 @@ async function main(): Promise<void> {
         },
         w.yourSlot,
       );
-      settingsPanel.setConnected('connected', host);
       sendJoinRef.fn = null;
-      settingsPanel.setGameMode('playing');
       console.log(`[net] connected as slot ${w.yourSlot}`);
     };
     conn.onBye = (reason): void => {
-      settingsPanel.setConnected('error');
       console.warn(`[net] server said bye: ${reason}`);
       conn.close();
     };
@@ -559,7 +567,6 @@ async function main(): Promise<void> {
     };
     conn.onClose = (): void => {
       if (netConn !== conn) return;
-      settingsPanel.setConnected(predictor ? 'disconnected' : (welcomeSeen ? 'disconnected' : 'error'));
       predictor = null;
       netConn = null;
       serverRoundTimeSec = -1;
@@ -580,7 +587,6 @@ async function main(): Promise<void> {
   // so an unreachable server shows "connection failed" here instead of booting
   // into a broken networked session.
   function connectViaReload(url: string): void {
-    settingsPanel.setConnected('connecting', url.replace(/^wss?:\/\//, ''));
     let done = false;
     let probe: WebSocket;
     const finish = (ok: boolean): void => {
@@ -588,10 +594,7 @@ async function main(): Promise<void> {
       done = true;
       clearTimeout(timer);
       probe.close();
-      if (!ok) {
-        settingsPanel.setConnected('error');
-        return;
-      }
+      if (!ok) return;
       const params = new URLSearchParams(location.search);
       params.set('connect', url);
       location.search = params.toString();
@@ -599,7 +602,6 @@ async function main(): Promise<void> {
     try {
       probe = new WebSocket(url);
     } catch {
-      settingsPanel.setConnected('error');
       return;
     }
     const timer = setTimeout(() => finish(false), 4000);
@@ -607,6 +609,7 @@ async function main(): Promise<void> {
     probe.onerror = () => finish(false);
     probe.onclose = () => finish(false);
   }
+  mpConnect.fn = connectViaReload;
   function disconnectViaReload(): void {
     const params = new URLSearchParams(location.search);
     params.delete('connect');
@@ -648,49 +651,40 @@ async function main(): Promise<void> {
     defaultPort,
     onConnect: connectViaReload,
     onDisconnect: disconnectViaReload,
-  }, gameActions, {
-    botCount: currentMatchConfig.botCount,
-    roundsToWin: currentMatchConfig.roundsToWin,
-    botCountMin: LIMITS.botCount[0],
-    botCountMax: LIMITS.botCount[1],
-    roundsMin: LIMITS.roundsToWin[0],
-    roundsMax: LIMITS.roundsToWin[1],
-    onNewMatch(botCount, roundsToWin): void {
-      const u = new URL(location.href);
-      u.searchParams.set('bots', String(botCount));
-      u.searchParams.set('rounds', String(roundsToWin));
-      location.href = u.toString();
-    },
   });
   applySettings();
-  document.addEventListener('pointerlockchange', () => {
-    if (gameMode === 'menu') return; // don't toggle settings during team selection
-    if (document.pointerLockElement === canvas) settingsPanel.hide();
-    else settingsPanel.show();
+
+  // Phase 19: screens govern visibility — the settings panel is only used for
+  // the server-connect section when reloaded via ?connect=.
+  screens.onBeforeShow((id) => {
+    if (id !== 'in-game') entryScreen.hide();
   });
-  settingsPanel.hide(); // team menu is the active overlay on boot
-  settingsPanel.setGameMode('none'); // game section hidden until a side is chosen
+  screens.onBeforeHide((id) => {
+    if (id === 'settings') settingsScreen.hide();
+    if (id === 'admin') adminScreen.hide();
+  });
 
-  // Phase 17.3 — minimal auth login/logout button, anchored bottom-left.
-  // ponytail: replaced by the Phase 19 entry screen (Hello, {name} ▾).
-  const authBtn = document.createElement('button');
-  authBtn.style.cssText =
-    'position:fixed;bottom:12px;left:12px;padding:4px 10px;background:rgba(20,24,28,0.85);' +
-    'color:#ccc;border:1px solid #3a4450;font:12px monospace;cursor:pointer;z-index:20;display:none';
-  authBtn.onclick = (): void => {
-    if (!auth) return;
-    if (auth.authenticated) void auth.logout();
-    else void auth.login();
-  };
-  document.body.appendChild(authBtn);
+  // Esc toggles between in-game and settings screens.
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape' && screens.isActive('in-game') && gameMode !== 'menu') {
+      e.preventDefault();
+      screens.show('settings');
+    }
+  });
 
-  function refreshAuthButton(): void {
-    if (!auth) { authBtn.style.display = 'none'; return; }
-    authBtn.style.display = '';
-    authBtn.textContent = auth.authenticated
-      ? `Hello, ${auth.name ?? auth.sub ?? '?'}`
-      : 'Log in';
-  }
+  document.addEventListener('pointerlockchange', () => {
+    if (screens.isActive('in-game') && document.pointerLockElement !== canvas) {
+      document.exitPointerLock(); // just released — stay in-game
+    }
+  });
+  settingsPanel.hide(); // entry screen is the active overlay on boot
+
+  // Phase 20.2 admin screen (created early so auth can gate it).
+  const adminScreen: AdminScreen = createAdminScreen({
+    apiBase: location.origin,
+    token: () => auth?.token(),
+    onBack: () => screens.show('entry'),
+  });
 
   await initPhysics();
   const world = createWorld();
@@ -1321,6 +1315,14 @@ async function main(): Promise<void> {
   }
 
   loading.done();
+  // Phase 19: entry screen is the first thing the player sees on a fresh load.
+  // Reload paths (?connect=, ?bots=) skip it and go straight to the team menu.
+  const bootParams = new URLSearchParams(location.search);
+  const isFreshBoot = !validatedBootUrl && !bootParams.has('bots') && !bootParams.has('rounds');
+  if (isFreshBoot) {
+    screens.show('entry');
+    entryScreen.show();
+  }
   startLoop({
     tick(fixedDt): void {
       // M key: open the team menu mid-game to switch teams / spectate.

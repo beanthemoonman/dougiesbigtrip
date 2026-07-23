@@ -3256,3 +3256,64 @@ bailing on a migration failure against a *reachable* DB, and the note that
 - No new tests: the truncation fix is a saturating conversion at a call site
   whose validator is already covered by `config_tests`, and the upsert detach
   needs a live Postgres to exercise.
+
+## 2026-07-23 — Phases 19 + 20: Entry/Settings screens, Admin screen, Config API
+
+### Phase 19 — Entry & Settings screens
+- `src/ui/screens.ts` — tiny screen state machine over `entry | settings | admin |
+   in-game` (four states, no router, no history API). Tracks `previous` for back-
+   button routing. Pointer lock released on show, restored on enterGame.
+- `src/ui/entry.ts` — "Counter Douglas" title screen with user menu (Hello
+  {name} dropdown → Settings/Logout/Admin), Singleplayer button (→ match config
+  popup), Multi-player button (→ server connect popup). Auth state updates live
+  through `setAuth()`. SP/MP both use page reload with URL params.
+- `src/ui/settings_screen.ts` — three-tab left-nav layout (Graphics, Game,
+  Bindings). Sliders for FOV, sensitivity, volume. Bindings tab shows per-action
+  key bindings with click-to-rebind UI.
+- `src/core/input.ts` — replaced `const KEY_TO_BUTTON` with mutable `Map`.
+  Added `rebindAction(action, code)`, `getBinding(action)`, `ACTION_NAMES`,
+  `ACTION_ORDER` exports. Key handlers now read the map instead of the const.
+- `src/core/settings.ts` — `GameActions`, `MatchConfigFields`, config sliders,
+  game section, and team buttons still exist in the file but are no longer used
+  by main.ts (the settings panel now only serves the server-connect section).
+
+### main.ts integration
+- Removed `GameActions` import, `gameActions` object, auth button +
+  `refreshAuthButton()`, match-config section from settingsPanel creation.
+- Created `ScreenManager`, `EntryScreen`, `SettingsScreen`, `AdminScreen` early.
+- Boot flow: on fresh load (no `?connect=`/`?bots=`/`?rounds=`) shows entry
+  screen; reload paths skip entry and go straight to team menu/game.
+- Pointer lock: `screens.enterGame()` replaces raw `canvas.requestPointerLock()`.
+- Esc key shows settings screen; M key shows team menu (unchanged).
+- `applySettings()` moved before screen creation so `settingsScreen` can read it.
+
+### Phase 20 — Admin screen
+- `src/ui/admin.ts` — form over bot count, rounds-to-win, map. Loads via
+  `GET /api/config`, saves via `PUT /api/config`. Status line shows
+  load/save/error. Admin menu item is hidden when `!auth.isAdmin`; the server
+  enforces the gate (hidden button is not the control).
+
+### Phase 20.1 — Server config API (axum)
+- Added `axum` dependency with `json` feature to `server/Cargo.toml`.
+- `server/src/http.rs` — axum router with `GET/PUT /api/config` and
+  `GET /status`. `PUT` validates through the same `validate_config()` from
+  Phase 16.3, gates on `role_admin` via JWT Bearer token, persists to DB
+  via `db::update_config()`, and updates a shared `Arc<RwLock<ServerConfig>>`.
+  `GET` returns the current config; `GET /status` folds in the old hand-rolled
+  peek.
+- `server/Cargo.toml`: `axum` added with `json` feature.
+- `server/src/db.rs`: added `update_config()` — UPDATE on `app.server_config`
+  row id=1.
+- `ServerConfig.map` changed from `&'static str` to `String` for runtime
+  mutability.
+- `ServerConfig.api_bind` added (`API_BIND` env var, default `0.0.0.0:9877`).
+- `validate_config()` signature gained `api_bind` parameter.
+- `main()` creates `Arc<RwLock<ServerConfig>>`, passes it to both `game_loop()`
+  and the axum server. Game loop reads mutable fields (bot_count, map,
+  rounds_to_win) from the shared lock at Welcome time and match boundaries.
+- `game_loop()` signature updated to accept the shared lock.
+
+### Tests
+- TS: `pnpm test` 245 passed. `pnpm typecheck` clean. `pnpm build` clean.
+- Rust: `cargo test -p server` 28 passed. `cargo test -p sim` 40 passed.
+  `cargo clippy` zero new warnings.

@@ -33,6 +33,7 @@ mod ai;
 mod auth;
 mod db;
 mod game;
+mod http;
 mod nav_graph;
 
 use auth::{AuthConfig, ValidatedUser};
@@ -58,11 +59,12 @@ const NAVNODES_JSON: &str = include_str!("../../assets/maps/de_douglas.navnodes.
 /// Phase 16.3: runtime server configuration built from compiled defaults ← env vars.
 /// Validated against the same bounds as the TS `MatchConfig` validator (docs/plan-post-1.0-config-auth.md).
 #[derive(Debug, Clone)]
-struct ServerConfig {
+pub struct ServerConfig {
     bind: String,
+    api_bind: String,
     bot_count: usize,
     rounds_to_win: u8,
-    map: &'static str,
+    map: String,
     freezetime_ms: u32,
     round_time_ms: u32,
     end_delay_ms: u32,
@@ -71,6 +73,7 @@ struct ServerConfig {
 
 fn build_config() -> ServerConfig {
     let bind = std::env::var("SERVER_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
+    let api_bind = std::env::var("API_BIND").unwrap_or_else(|_| "0.0.0.0:9877".to_string());
 
     let bot_count: usize = std::env::var("BOT_COUNT")
         .ok()
@@ -96,7 +99,7 @@ fn build_config() -> ServerConfig {
 
     let auth_config = AuthConfig::from_env();
 
-    validate_config(bind, bot_count, rounds_to_win, map_name, freezetime_ms, round_time_ms, end_delay_ms, auth_config)
+    validate_config(bind, api_bind, bot_count, rounds_to_win, map_name, freezetime_ms, round_time_ms, end_delay_ms, auth_config)
         .unwrap_or_else(|errors| {
             for e in &errors { eprintln!("{e}"); }
             std::process::exit(1);
@@ -105,8 +108,9 @@ fn build_config() -> ServerConfig {
 
 /// Pure validation of all config knobs. Rejects out-of-bounds values with
 /// one error per invalid field. Testable without touching env.
-fn validate_config(
+pub fn validate_config(
     bind: String,
+    api_bind: String,
     bot_count: usize,
     rounds_to_win: u8,
     map_name: String,
@@ -127,11 +131,11 @@ fn validate_config(
         errors.push(format!("rounds_to_win must be 1–30, got {rounds_to_win}"));
     }
 
-    let map: &'static str = match map_name.as_str() {
-        "de_douglas" => "de_douglas",
+    let map: String = match map_name.as_str() {
+        "de_douglas" => "de_douglas".to_string(),
         _ => {
             errors.push(format!("unknown map '{map_name}' (only 'de_douglas' is supported)"));
-            ""
+            String::new()
         }
     };
 
@@ -141,6 +145,7 @@ fn validate_config(
 
     Ok(ServerConfig {
         bind,
+        api_bind,
         bot_count,
         rounds_to_win,
         map,
@@ -216,7 +221,12 @@ struct Slot {
     validated_user: Option<ValidatedUser>,
 }
 
-async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig, pool: Option<PgPool>) {
+async fn game_loop(
+    mut events: mpsc::UnboundedReceiver<Ev>,
+    config: ServerConfig,
+    shared_config: std::sync::Arc<tokio::sync::RwLock<ServerConfig>>,
+    pool: Option<PgPool>,
+) {
     let mut world = SimWorld::new();
     let spawn = map::load(&mut world, MAP_JSON);
     world.ensure_broad_phase_ready();
@@ -572,17 +582,19 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                     } else {
                     let conn_id = next_conn_id;
                     next_conn_id += 1;
+                    let sc = shared_config.read().await;
                     let w = Welcome {
                         your_slot: SPECTATOR,
-                        map: config.map.to_string(),
+                        map: sc.map.clone(),
                         seed: SEED,
                         server_tick,
                         max_players: MAX_SLOTS as u8,
                         players: active_humans as u8,
                         spectators: spectators.len() as u8,
                         spec_cap: MAX_SPECTATORS as u8,
-                        rounds_to_win: config.rounds_to_win,
+                        rounds_to_win: sc.rounds_to_win,
                     };
+                    drop(sc);
                     let _ = out.send(w.encode());
                     pending_conns.insert(conn_id, (out, slot_tx));
                     let _ = reply.send(Some(conn_id));
@@ -665,17 +677,19 @@ async fn game_loop(mut events: mpsc::UnboundedReceiver<Ev>, config: ServerConfig
                             }
                             if let Some(assigned_slot) = found_slot {
                                 let _ = slot_tx.send(assigned_slot);
+                                let sc = shared_config.read().await;
                                 let w2 = Welcome {
                                     your_slot: assigned_slot,
-                                    map: config.map.to_string(),
+                                    map: sc.map.clone(),
                                     seed: SEED,
                                     server_tick,
                                     max_players: MAX_SLOTS as u8,
                                     players: player_count,
                                     spectators: spectators.len() as u8,
                                     spec_cap: MAX_SPECTATORS as u8,
-                                    rounds_to_win: config.rounds_to_win,
+                                    rounds_to_win: sc.rounds_to_win,
                                 };
+                                drop(sc);
                                 let s = &slots[assigned_slot as usize];
                                 let _ = s.out.as_ref().unwrap().send(w2.encode());
                                 println!("conn {conn_id} assigned to slot {assigned_slot} (team {})",
@@ -940,6 +954,7 @@ async fn main() {
                     Ok(Some((bot_count, map, rounds_to_win))) => {
                         match validate_config(
                             config.bind.clone(),
+                            config.api_bind.clone(),
                             // Saturate rather than `as`-cast: a 257 in the DB
                             // must fail validation, not truncate to a valid 1.
                             usize::try_from(bot_count).unwrap_or(usize::MAX),
@@ -964,7 +979,7 @@ async fn main() {
                         if let Err(e) = db::insert_config(
                             &pool,
                             config.bot_count as i32,
-                            config.map,
+                            config.map.as_str(),
                             config.rounds_to_win as i32,
                         )
                         .await
@@ -995,8 +1010,19 @@ async fn main() {
     // Safe to call unconditionally — returns immediately when !required.
     auth::prefetch_jwks(&config.auth_config).await;
 
+    let shared = std::sync::Arc::new(tokio::sync::RwLock::new(config.clone()));
     let (events_tx, events_rx) = mpsc::unbounded_channel::<Ev>();
-    tokio::spawn(game_loop(events_rx, config.clone(), pool));
+    tokio::spawn(game_loop(events_rx, config.clone(), shared.clone(), pool.clone()));
+
+    // Phase 20.1: spawn the axum HTTP API server for /api/config, /status.
+    let api_addr: std::net::SocketAddr = config.api_bind.parse().expect("invalid API_BIND");
+    let counters = http::ServerCounters::new(&ACTIVE_HUMANS, &SPECTATOR_COUNT);
+    let api_state = http::ApiState {
+        config: shared,
+        pool,
+        counters: std::sync::Arc::new(counters),
+    };
+    tokio::spawn(http::serve(api_addr, api_state));
 
     let listener = TcpListener::bind(&config.bind).await.expect("bind");
     println!("deathmatch server listening on ws://{}", config.bind);
@@ -1019,9 +1045,10 @@ mod config_tests {
         }
     }
 
-    fn default_values() -> (String, usize, u8, String, u32, u32, u32, AuthConfig) {
+    fn default_values() -> (String, String, usize, u8, String, u32, u32, u32, AuthConfig) {
         (
             "127.0.0.1:9876".into(), // bind
+            "0.0.0.0:9877".into(), // api_bind
             6,   // bot_count
             16,  // rounds_to_win
             "de_douglas".into(), // map_name
@@ -1034,8 +1061,8 @@ mod config_tests {
 
     #[test]
     fn default_config_passes() {
-        let (b, bc, r, m, f, rt, e, a) = default_values();
-        let cfg = validate_config(b, bc, r, m, f, rt, e, a).expect("default should be valid");
+        let (b, ab, bc, r, m, f, rt, e, a) = default_values();
+        let cfg = validate_config(b, ab, bc, r, m, f, rt, e, a).expect("default should be valid");
         assert_eq!(cfg.bot_count, 6);
         assert_eq!(cfg.rounds_to_win, 16);
         assert_eq!(cfg.map, "de_douglas");
@@ -1043,57 +1070,57 @@ mod config_tests {
 
     #[test]
     fn rejects_bot_count_too_low() {
-        let (b, _, r, m, f, rt, e, a) = default_values();
-        let err = validate_config(b, 0, r, m, f, rt, e, a).unwrap_err();
+        let (b, ab, _, r, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, ab, 0, r, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("bot_count")));
     }
 
     #[test]
     fn rejects_bot_count_above_capacity() {
-        let (b, _, r, m, f, rt, e, a) = default_values();
-        let err = validate_config(b, 7, r, m, f, rt, e, a).unwrap_err();
+        let (b, ab, _, r, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, ab, 7, r, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("bot_count")));
     }
 
     #[test]
     fn rejects_rounds_to_win_zero() {
-        let (b, bc, _, m, f, rt, e, a) = default_values();
-        let err = validate_config(b, bc, 0, m, f, rt, e, a).unwrap_err();
+        let (b, ab, bc, _, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, ab, bc, 0, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("rounds_to_win")));
     }
 
     #[test]
     fn rejects_rounds_to_win_too_high() {
-        let (b, bc, _, m, f, rt, e, a) = default_values();
-        let err = validate_config(b, bc, 31, m, f, rt, e, a).unwrap_err();
+        let (b, ab, bc, _, m, f, rt, e, a) = default_values();
+        let err = validate_config(b, ab, bc, 31, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("rounds_to_win")));
     }
 
     #[test]
     fn rejects_unknown_map() {
-        let (b, bc, r, _, f, rt, e, a) = default_values();
-        let err = validate_config(b, bc, r, "cs_office".into(), f, rt, e, a).unwrap_err();
+        let (b, ab, bc, r, _, f, rt, e, a) = default_values();
+        let err = validate_config(b, ab, bc, r, "cs_office".into(), f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("unknown map")));
     }
 
     #[test]
     fn accepts_minimal_bot_count() {
-        let (b, _, r, m, f, rt, e, a) = default_values();
-        let cfg = validate_config(b, 2, r, m, f, rt, e, a).expect("bot_count=2 should be valid");
+        let (b, ab, _, r, m, f, rt, e, a) = default_values();
+        let cfg = validate_config(b, ab, 2, r, m, f, rt, e, a).expect("bot_count=2 should be valid");
         assert_eq!(cfg.bot_count, 2);
     }
 
     #[test]
     fn accepts_max_slots_bot_count() {
-        let (b, _, r, m, f, rt, e, a) = default_values();
-        let cfg = validate_config(b, MAX_SLOTS, r, m, f, rt, e, a).expect("bot_count=MAX_SLOTS valid");
+        let (b, ab, _, r, m, f, rt, e, a) = default_values();
+        let cfg = validate_config(b, ab, MAX_SLOTS, r, m, f, rt, e, a).expect("bot_count=MAX_SLOTS valid");
         assert_eq!(cfg.bot_count, MAX_SLOTS);
     }
 
     #[test]
     fn reports_all_errors_together() {
-        let (b, _, _, _, f, rt, e, a) = default_values();
-        let err = validate_config(b, 0, 0, "unknown".into(), f, rt, e, a).unwrap_err();
+        let (b, ab, _, _, _, f, rt, e, a) = default_values();
+        let err = validate_config(b, ab, 0, 0, "unknown".into(), f, rt, e, a).unwrap_err();
         assert!(err.len() >= 3);
     }
 }

@@ -48,3 +48,20 @@ pub async fn upsert_user(
     .await?;
     Ok(())
 }
+
+pub async fn update_config(
+    pool: &PgPool,
+    bot_count: i32,
+    map: &str,
+    rounds_to_win: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE app.server_config SET bot_count = $1, map = $2, rounds_to_win = $3, updated_at = now() WHERE id = 1",
+    )
+    .bind(bot_count)
+    .bind(map)
+    .bind(rounds_to_win)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
