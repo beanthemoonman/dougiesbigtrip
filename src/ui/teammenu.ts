@@ -65,6 +65,34 @@ export function createTeamMenu(
   row.appendChild(specBtn);
   el.appendChild(row);
 
+  // Keybind guide.
+  const guide = document.createElement('div');
+  guide.style.cssText =
+    'margin-top:28px;display:grid;grid-template-columns:auto auto;gap:4px 16px;' +
+    'font-size:12px;opacity:0.6;text-align:left;';
+  const binds: [string, string][] = [
+    ['Move', 'WASD'],
+    ['Jump', 'Space'],
+    ['Duck', 'Ctrl'],
+    ['Walk', 'Shift'],
+    ['Reload', 'R'],
+    ['Use', 'E'],
+    ['Weapons', '1 / 2'],
+    ['Scoreboard', 'Tab'],
+    ['Team menu', 'M'],
+    ['Pause', 'P'],
+  ];
+  for (const [action, key] of binds) {
+    const a = document.createElement('span');
+    a.textContent = action;
+    a.style.opacity = '0.7';
+    const k = document.createElement('span');
+    k.textContent = key;
+    k.style.cssText = 'text-align:right;color:#dfe6ee;';
+    guide.append(a, k);
+  }
+  el.appendChild(guide);
+
   const hint = document.createElement('div');
   hint.textContent = 'M / Esc to return';
   hint.style.cssText = 'margin-top:18px;opacity:0.4;font-size:12px';

@@ -6,7 +6,7 @@
  * Phase 19.1 — entry-point for the entry/settings/admin/in-game shell.
  */
 
-export type ScreenId = 'entry' | 'settings' | 'admin' | 'in-game';
+export type ScreenId = 'entry' | 'pause' | 'settings' | 'admin' | 'in-game';
 
 export interface ScreenManager {
   current: ScreenId;
@@ -20,8 +20,9 @@ export interface ScreenManager {
 }
 
 export function createScreenManager(): ScreenManager {
-  let _current: ScreenId = 'in-game';
-  let _previous: ScreenId = 'in-game';
+  // Boot in the menu, not the game — 'in-game' is something you enterGame() into.
+  let _current: ScreenId = 'entry';
+  let _previous: ScreenId = 'entry';
   const _onBeforeShow: ((id: ScreenId) => void)[] = [];
   const _onBeforeHide: ((id: ScreenId) => void)[] = [];
 

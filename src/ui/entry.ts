@@ -209,8 +209,16 @@ export function createEntryScreen(opts: {
   }
   el.appendChild(mpPopup);
 
-  container.appendChild(mkBtn('Singleplayer', '#4a6a3a', () => { spPopup.style.display = 'flex'; }));
-  container.appendChild(mkBtn('Multi-player', '#3a4a7a', () => { mpPopup.style.display = 'flex'; }));
+  const spBtn = mkBtn('Singleplayer', '#4a6a3a', () => { spPopup.style.display = 'flex'; });
+  const mpBtn = mkBtn('Multi-player', '#3a4a7a', () => { mpPopup.style.display = 'flex'; });
+  container.appendChild(spBtn);
+  container.appendChild(mpBtn);
+
+  // Login gate: you must be signed in to play (Phase 19.2 / auth-required).
+  const gateNote = document.createElement('div');
+  gateNote.textContent = 'Log in to play';
+  gateNote.style.cssText = `margin-top:20px;font-size:13px;color:${MUTED};letter-spacing:1px;`;
+  container.appendChild(gateNote);
 
   el.appendChild(container);
 
@@ -291,13 +299,21 @@ export function createEntryScreen(opts: {
 
   function refreshUserMenu(): void {
     const auth = _authRef;
-    if (auth?.authenticated) {
-      userBtn.textContent = `Hello, ${auth.name ?? auth.sub ?? '?'}`;
-      adminItem.style.display = auth.isAdmin ? '' : 'none';
+    const authed = !!auth?.authenticated;
+    if (authed) {
+      userBtn.textContent = `Hello, ${auth?.name ?? auth?.sub ?? '?'}`;
+      adminItem.style.display = auth?.isAdmin ? '' : 'none';
     } else {
       userBtn.textContent = 'Log in';
       adminItem.style.display = 'none';
     }
+    // Play is gated behind login.
+    for (const b of [spBtn, mpBtn]) {
+      b.disabled = !authed;
+      b.style.opacity = authed ? '1' : '0.4';
+      b.style.cursor = authed ? 'pointer' : 'not-allowed';
+    }
+    gateNote.style.display = authed ? 'none' : '';
   }
 
   logoutItem.onclick = (): void => {
@@ -314,6 +330,7 @@ export function createEntryScreen(opts: {
   };
 
   document.body.appendChild(el);
+  refreshUserMenu(); // start gated until auth resolves
 
   return {
     el,

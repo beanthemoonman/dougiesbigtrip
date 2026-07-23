@@ -3394,3 +3394,78 @@ not have worked as shipped — the two P0s are wiring, not logic.
   rule is one line ("humans keep their slot, otherwise `i < bot_count`").
 
 - Fixed 7 CI lint errors: `const` for settingsScreen/settingsPanel (main.ts), dropped unused `_canvas` param + `const` arrays in screens.ts, `if (nav)` over unused-expression in settings_screen.ts.
+
+## Login gate + Escape fix (post-1.0)
+
+- **Require login to play.** Entry screen now gates the Singleplayer/Multi-player
+  buttons behind auth: disabled + dimmed with a "Log in to play" note until the
+  Keycloak session resolves authenticated (`src/ui/entry.ts`). Starts gated at
+  construction so there's no unauthenticated flash before `initAuth` resolves.
+- **Escape re-broken → fixed.** The browser suppresses the Escape keydown that
+  releases pointer lock, so the keydown-based menu open never fired; the old
+  `pointerlockchange` handler actively re-exited lock to "stay in-game", so Esc
+  did nothing. Now `pointerlockchange` opens the settings screen when lock is lost
+  during a live game (`gameMode !== 'menu'` guards the team-menu path). Settings
+  "Back" re-enters the game via `enterGame` so the pointer re-locks.
+- **Entry re-show fix.** `onBeforeShow` was hiding the entry screen even when
+  showing `entry`, blanking the main menu when returning from settings/admin. Now
+  shows on `entry`, hides otherwise.
+
+## P pause key + team-screen keybind guide (post-1.0)
+
+- **P is now the pause key.** Escape can't be relied on — the browser consumes the
+  keydown that releases pointer lock, so it never reaches the page. Added a `KeyP`
+  keydown handler in `main.ts` that toggles the settings/pause menu (in-game →
+  settings, and back to game when previous was in-game). Kept the
+  `pointerlockchange` fallback so Esc/alt-tab losing lock still opens the menu.
+- **Keybind guide** on the team selection screen (`src/ui/teammenu.ts`): a
+  two-column grid listing Move/Jump/Duck/Walk/Reload/Use/Weapons/Scoreboard/
+  Team menu/Pause and their keys.
+
+## Fix: pause released mouse but showed no menu (post-1.0)
+
+- `screens.show('settings')` / `show('admin')` released pointer lock but never
+  called `settingsScreen.show()` / `adminScreen.show()` — the `onBeforeShow` hook
+  only handled `entry`. So P/Esc freed the mouse to a blank in-game view. Hook now
+  hides all three overlays and shows the one matching the screen id.
+
+## Pause screen (post-1.0)
+
+- P/Esc now opens a dedicated pause menu (`src/ui/pause.ts`) with Resume /
+  Settings / Exit to Menu, instead of jumping straight into the settings screen.
+  Added a `pause` ScreenId; Settings from the pause menu returns to the pause menu
+  on Back; Exit reloads to a clean URL (fresh boot → entry screen).
+
+## Esc backs out of settings (post-1.0)
+
+- Esc (or P) in the settings screen now backs out to wherever it was opened from
+  (pause menu → pause, entry → entry), mirroring the Back button.
+
+## Main menu is a real state + main.ts split into modules (post-1.0)
+
+- The site now boots INTO the main menu instead of building the whole game world
+  and painting a menu overlay on top. `main.ts` (was 1856 lines) is now a ~200-line
+  menu shell: renderer, input, auth, settings, and the entry/settings/admin
+  screens. On a fresh URL it shows the menu and stops — no physics, no WASM sim,
+  no map/prop/character loading, no game loop. Verified in-browser: a fresh load
+  makes zero .glb/.wasm/session-chunk requests.
+- The game world + fixed-timestep loop moved to `src/game/session.ts`
+  (`startGameSession(ctx)`), dynamic-imported only on a game boot
+  (`?bots=&rounds=` from Singleplayer, `?connect=` from Multi-player). Vite splits
+  it into its own 2.2 MB chunk the menu never downloads. "Exit to Menu" reloads to
+  a clean URL, which remains the whole teardown story.
+- Extracted `src/game/props.ts` (prop placements, breakable metadata, and the
+  placement math — the collider-box computation previously existed in 3 copies:
+  placeProps, the sim mirror, and restoreBreakables; now one `propBoxAt`) and
+  `src/game/characters.ts` (CT rig template, material flattening, team tinting —
+  the tint traverse previously existed in 3 copies; now one `tintCharacter`).
+- `ScreenManager` now boots in `'entry'` instead of `'in-game'`; the keydown
+  handling split with it (shell owns settings-back, session owns pause/resume;
+  pause overlay visibility is a session-registered `onBeforeShow` hook).
+- Deleted the dead `createSettingsPanel` wiring from boot (created and immediately
+  hidden since the Phase 19 screens replaced it) and its never-reachable
+  `disconnectViaReload`. `core/settings.ts` itself is untouched.
+- `pnpm typecheck` green, `pnpm test` 248/248 green, `pnpm build` green.
+  Verified in Chrome: menu → SP boot (loading → team menu → spawn as T) →
+  pause → Exit to Menu → clean menu.
+- CLAUDE.md/AGENTS.md repo-layout notes updated to match.
