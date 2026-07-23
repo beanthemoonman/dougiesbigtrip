@@ -687,7 +687,9 @@ hardened. Nothing new to build.
 
 # Post-1.0: Configuration, Auth, Persistence, Screens
 
-Phases 16–20 come from the notebook feature notes (`docs/plan-post-1.0-config-auth.md`). They
+Phases 16–20 come from the notebook feature notes. The detailed, per-increment breakdown —
+codebase survey, cross-cutting decisions, DB schema, sequencing — lives in
+**`docs/plan-post-1.0-config-auth.md`**; the sections below are the summary. They
 turn the demo into a deployed, multi-user product: configurable matches, Google login brokered
 through Keycloak, a database of record, and the menu/admin screens around it.
 
@@ -724,10 +726,10 @@ Configurable scope:
 - **Server-side:** bot count, map, rounds-to-win — same knobs, applied authoritatively (the
   admin surface for these arrives in Phase 20).
 
-- [ ] Typed config object (extend `src/game/` round-config, not scattered constants) with
-      validated bounds — reject over-max player counts at the boundary, SP and server both.
-- [ ] SP path reads config at match start (bot count / map / rounds-to-win).
-- [ ] MP client can target a chosen server address; server applies its configured knobs on start.
+- [x] Typed config object (extend `src/game/` round-config, not scattered constants) with
+      validated bounds — reject over-max player counts at the boundary, SP and server both. (16.1)
+- [x] SP path reads config at match start (bot count / map / rounds-to-win). (16.2)
+- [ ] MP client can target a chosen server address; server applies its configured knobs on start. (16.4)
 
 **Exit test:** Start SP matches with different bot counts / rounds-to-win and see them honoured;
 point the MP client at a server started with a non-default config and observe those values in play.

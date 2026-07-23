@@ -32,7 +32,8 @@ import { type Breakable, damageProp, resetBrokenBreakables } from './game/breaka
 import { computeDamage } from './game/damage';
 import { hitboxAt, hitboxRay } from './game/hitbox';
 import { buildMapColliders, CT_SPAWN, MAP_BOXES, MAP_RAMPS, T_SPAWN, mapCuboids } from './game/map_douglas';
-import { createRoundState, DEFAULT_ROUND, tickRound } from './game/round';
+import { createRoundState, DEFAULT_MATCH, LIMITS, tickRound, validateMatchConfig, type MatchConfig } from './game/round';
+import { spawnRing } from './game/spawning';
 import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from './player/constants';
 import { updateViewCamera, type ViewState } from './player/camera';
 import { createMovementContext, createPlayerState, type PlayerState } from './player/movement';
@@ -312,6 +313,21 @@ async function main(): Promise<void> {
   // of truth; the panel mutates it and pushes each value live. Shown while out of
   // pointer lock (the menu state), hidden during play.
   const settings = { ...DEFAULT_SETTINGS };
+
+  // Match config — mutable so the config panel can change it for the next start.
+  // ponytail: placeholder; Phase 19 entry screen replaces the config panel.
+  let currentMatchConfig: MatchConfig = { ...DEFAULT_MATCH };
+  {
+    // `params.get` returns null for a missing key and Number(null) is 0, not NaN —
+    // so presence must be tested with `has`, or ?bots=4 would also send roundsToWin: 0.
+    const params = new URLSearchParams(location.search);
+    const partial: { -readonly [K in keyof MatchConfig]?: MatchConfig[K] } = {};
+    if (params.has('bots')) partial.botCount = Number(params.get('bots'));
+    if (params.has('rounds')) partial.roundsToWin = Number(params.get('rounds'));
+    const validated = validateMatchConfig(partial);
+    if (validated.ok) currentMatchConfig = validated.value;
+    else console.warn('ignoring match config in URL:', validated.errors.join('; '));
+  }
   function applySettings(): void {
     input.state.sensitivity = settings.sensitivity;
     renderCtx.setWorldFov(settings.worldFovDeg);
@@ -613,7 +629,20 @@ async function main(): Promise<void> {
     defaultPort,
     onConnect: connectViaReload,
     onDisconnect: disconnectViaReload,
-  }, gameActions);
+  }, gameActions, {
+    botCount: currentMatchConfig.botCount,
+    roundsToWin: currentMatchConfig.roundsToWin,
+    botCountMin: LIMITS.botCount[0],
+    botCountMax: LIMITS.botCount[1],
+    roundsMin: LIMITS.roundsToWin[0],
+    roundsMax: LIMITS.roundsToWin[1],
+    onNewMatch(botCount, roundsToWin): void {
+      const u = new URL(location.href);
+      u.searchParams.set('bots', String(botCount));
+      u.searchParams.set('rounds', String(roundsToWin));
+      location.href = u.toString();
+    },
+  });
   applySettings();
   document.addEventListener('pointerlockchange', () => {
     if (gameMode === 'menu') return; // don't toggle settings during team selection
@@ -870,19 +899,13 @@ async function main(): Promise<void> {
   // out: one holds the dense spine chokepoints down toward T, one contests mid,
   // one swings the sparse east curve flank. findPath snaps each waypoint to the
   // navmesh and routes around cover, so bots roam instead of standing at spawn.
-  // y is the walkable-surface height the nav query snaps to.
-  const F = CT_SPAWN[1];
-  // 3v3 by default: three bots per team fill the roster; when the human picks a side
-  // one bot on that side is benched and the human takes its place. T bots patrol north
-  // toward CT (mirror of the CT routes with z negated). Bots pick the nearest visible
-  // ENEMY each tick (human + opposing bots), so both sides fight.
+
+  // Generate bot spawns from config. Splits count: half CT, rest T.
+  const ctCount = Math.floor(currentMatchConfig.botCount / 2);
+  const tCount = currentMatchConfig.botCount - ctCount;
   const botDefs: { team: Team; s: Vector3 }[] = [
-    { team: 'CT', s: new Vector3(-18, F, 25) },
-    { team: 'CT', s: new Vector3(-13, F, 26) },
-    { team: 'CT', s: new Vector3(-10, F, 24) },
-    { team: 'T', s: new Vector3(-18, F, -25) },
-    { team: 'T', s: new Vector3(-13, F, -26) },
-    { team: 'T', s: new Vector3(-10, F, -24) },
+    ...spawnRing('CT', ctCount).map((s) => ({ team: 'CT' as Team, s })),
+    ...spawnRing('T', tCount).map((s) => ({ team: 'T' as Team, s })),
   ];
   // Tint teammates so they read apart from enemies at a glance (one shared CT
   // model). CT keep their baked colour; T get a warm tan.
@@ -1018,13 +1041,6 @@ async function main(): Promise<void> {
   const botToPlayer = new Vector3();
 
   const round = createRoundState();
-  // Bug 4: fixed 3-minute match. When it expires the world freezes on a final
-  // banner instead of looping into another round.
-  const MATCH_TIME = 180; // s
-  const MATCH_RESTART_DELAY = 5; // s shown on the MATCH OVER banner before a fresh game
-  let matchClock = MATCH_TIME;
-  let matchOver = false;
-  let matchRestartTimer = 0; // counts down while matchOver, then startNewMatch()
   let playerAlive = false; // Phase 9: not alive until a team is chosen
   let health = 100;
   let armor = 100;
@@ -1170,21 +1186,6 @@ async function main(): Promise<void> {
     restoreBreakables();
   }
 
-  // Loop into a fresh game after a match ends: reset scores, the match clock,
-  // and the round FSM back to round 1 / freezetime, then respawn everyone.
-  function startNewMatch(): void {
-    matchClock = MATCH_TIME;
-    matchOver = false;
-    matchRestartTimer = 0;
-    round.phase = 'freezetime';
-    round.timer = DEFAULT_ROUND.freezetime;
-    round.round = 1;
-    round.score.t = 0;
-    round.score.ct = 0;
-    round.winner = null;
-    respawn();
-  }
-
   // Both weapons, welded to the eye on layer 1 (viewmodel pass, renderer.ts).
   // Each keeps its own rest pose (hand-tuned lower-right hold) and its own
   // ammo/recoil state that persists across switches, like CS. The inactive
@@ -1260,7 +1261,7 @@ async function main(): Promise<void> {
       if (!playerAlive) return 'SPECTATING';
       return '';
     }
-    if (matchOver) return `MATCH OVER   T ${round.score.t} : ${round.score.ct} CT   —   new game in ${Math.ceil(matchRestartTimer)}`;
+    if (round.matchOver) return `MATCH OVER   T ${round.score.t} : ${round.score.ct} CT   —   new game in ${Math.ceil(round.timer)}`;
     if (round.phase === 'freezetime') return `FREEZE  ${Math.ceil(round.timer)}`;
     if (round.phase === 'over') {
       if (gameMode !== 'playing') return `ROUND OVER   ${round.winner} WINS`;
@@ -1300,20 +1301,6 @@ async function main(): Promise<void> {
       // must be rebuilt after colliders move — building it first means
       // every query works on stale (previous-tick) positions.
 
-      // Bug 4: fixed match clock. Counts total elapsed sim time; at zero the
-      // match freezes (see the !matchOver guards below). Accumulated fixedDt →
-      // deterministic. ponytail: counts freezetime too; gate on
-      // round.phase === 'live' if only live time should count.
-      if (!predictor) {
-        if (!matchOver) {
-          matchClock -= fixedDt;
-          if (matchClock <= 0) { matchClock = 0; matchOver = true; matchRestartTimer = MATCH_RESTART_DELAY; }
-        } else {
-          matchRestartTimer -= fixedDt;
-          if (matchRestartTimer <= 0) startNewMatch();
-        }
-      }
-
       prevView.position.copy(currView.position);
       prevView.eyeHeight = currView.eyeHeight;
       prevView.viewPunch = currView.viewPunch;
@@ -1330,11 +1317,11 @@ async function main(): Promise<void> {
         if (e.team === 'CT') ctAlive++;
         else tAlive++;
       }
-      const event = (predictor || matchOver) ? 'none' : tickRound(round, DEFAULT_ROUND, tAlive, ctAlive, fixedDt);
+      const event = predictor ? 'none' : tickRound(round, currentMatchConfig, tAlive, ctAlive, fixedDt);
       if (!predictor && event === 'reset') respawn();
       const live = predictor
         ? (serverPhase === 1 && playerAlive)
-        : (!matchOver && round.phase === 'live');
+        : (!round.matchOver && round.phase === 'live');
 
       playerFeet.copy(player.position);
 
@@ -1379,7 +1366,7 @@ async function main(): Promise<void> {
 
       // Bug 3: while dead, free-fly the spectator cam (noclip). Does not touch
       // the WASM sim or player state — purely a render-camera position.
-      if (!playerAlive && !matchOver) {
+      if (!playerAlive && !round.matchOver) {
         moveSpectator(specPos, input.state.buttons, input.state.yaw, input.state.pitch, fixedDt);
       }
 
@@ -1630,7 +1617,7 @@ async function main(): Promise<void> {
         const pitchUp = Math.atan2(dir.y, flatLen);
         renderCtx.camera.rotation.order = 'YXZ';
         renderCtx.camera.rotation.set(-pitchUp, yaw, 0);
-      } else if (!playerAlive && !matchOver) {
+      } else if (!playerAlive && !round.matchOver) {
         // Bug 3: spectator free-fly — pose the camera straight at specPos
         // (eyeHeight 0, no punch) instead of the frozen corpse view.
         renderCtx.camera.position.copy(specPos);
@@ -1650,7 +1637,7 @@ async function main(): Promise<void> {
       // ponytail: read straight off the last sim tick, no render interpolation —
       // the kick/reload move fast and 64 Hz stepping is imperceptible on the gun.
       // Hide the welded viewmodel while spectating/match-over (no eye to hold it).
-      active.root.visible = playerAlive && !matchOver;
+      active.root.visible = playerAlive && !round.matchOver;
       const weapon = WEAPONS[active.id];
       viewmodelPose(anim, animPose);
       active.root.position.set(

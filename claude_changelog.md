@@ -4,6 +4,27 @@ A running log of what Claude Code did in this repo, appended to at the end of ea
 
 ---
 
+## 2026-07-23
+
+- **Phase 16.1 — Match config type + rounds-to-win.** Extended `src/game/round.ts`:
+  - Added `MapId` type (`'de_douglas'`), `MatchConfig` interface extending `RoundConfig` with `map`, `botCount`, `roundsToWin`.
+  - Added `DEFAULT_MATCH` (16 rounds to win, 6 bots), `LIMITS` bounds constant, and `validateMatchConfig()` with per-field error messages. Used by SP, server, and admin endpoint — one implementation, three callers.
+  - `RoundState` gains `matchOver` (boolean) and `matchWinner` ('T'|'CT'|null). `tickRound` now takes `MatchConfig` and emits `'match-over'` event when a side's score reaches `roundsToWin`. Match-over resets scores/round to initial values after `endDelay`.
+  - `RoundEvent` union adds `'match-over'`.
+  - **main.ts integration:** Removed the entire manual match clock (`MATCH_TIME`, `matchClock`, `matchOver` local, `matchRestartTimer`, `startNewMatch()`). `tickRound` now called unconditionally (no `matchOver` guard) with `DEFAULT_MATCH`. All remaining `matchOver` references point to `round.matchOver`. Banner text reads `round.timer` for match-over countdown (was `matchRestartTimer`).
+  - **Tests (T0):** 9 new tests in `round.test.ts` — match-over emission, single-fire, score/round reset, validator accept/reject paths (botCount bounds, roundsToWin bounds, unknown map, non-integer).
+  - `pnpm test` 218 tests green. `pnpm typecheck` / `pnpm build` green.
+  - Updated `plan_to_implement.md`: Phase 16 first checkbox ticked (16.1).
+
+- **Phase 16.2 — SP reads config at match start.** 
+  - Created `src/game/spawning.ts`: `spawnRing(team, count)` generates N spread positions from CT_SPAWN/T_SPAWN anchors. Preset offsets reproduce exact original 6 positions at count=3 (regression). Scale-out positions for count > 3 extend linearly. T0 tests in `spawning.test.ts` (6 tests: count, regression, Y-consistency, distinctness, z-mirror, determinism).
+  - **main.ts:** `botDefs` literal array replaced with `spawnRing('CT', ctCount)` + `spawnRing('T', tCount)` where counts are split from `currentMatchConfig.botCount`. `tickRound` uses `currentMatchConfig` (was `DEFAULT_MATCH`). `currentMatchConfig` seeded from `?bots=N&rounds=N` URL params via `validateMatchConfig`. Hoisted before settings panel for early initialization.
+  - **Settings panel:** Extended `createSettingsPanel()` with optional `MatchConfigFields` parameter. Renders "New Match" section with Bot Count (0–10) and Rounds (1–30) sliders + "New Match" button that reloads via URL params. Marked `ponytail: placeholder`.
+  - **T3:** Created `tests/acceptance/ACC-022-configuration.md` (6-step script: non-default bot count, max bots, defaults, settings panel UI, match-over at low rounds, invalid config rejection).
+  - **Budget T0:** `spawning_budget.test.ts` — max bot count produces correct number of distinct positions.
+  - `pnpm test` 227 tests green. `pnpm typecheck` / `pnpm build` green.
+  - Updated `plan_to_implement.md`: Phase 16 second checkbox ticked (16.2).
+
 ## 2026-07-22
 
 - **Fixed reconnection affecting server game state** (client-side bug). Root cause: the client ran its own independent match clock and round FSM even in networked mode. When a player reconnected, the local `matchClock` (180s) had expired, `startNewMatch()` fired, resetting local `round` to freezetime, which gated movement/live state and showed "FREEZE" banner — while the server was mid-round. Fixed with 7 changes in `src/main.ts`:
@@ -2635,3 +2656,40 @@ Verified: `pnpm typecheck` clean, `pnpm test` 210/210 green.
     from substantively-complete to complete.
 
 Bada Bing!
+
+## Phase 16–20 planning (2026-07-23)
+
+- Surveyed the codebase against Phases 16–20 and wrote `docs/plan-post-1.0-config-auth.md`:
+  per-increment breakdown (16.1–20.2), current-state table, cross-cutting decisions
+  (Postgres + sqlx, no ORM; keycloak-js PKCE; plain-DOM screens; `AUTH_REQUIRED=false` dev path),
+  DB schema, sequencing graph, and phase-specific risks.
+- Key findings: rounds-to-win does not exist yet (Phase 16 carries real gameplay work);
+  SP bot count is a hardcoded `botDefs` literal in `src/main.ts`; MP server selection is ~90%
+  done in `connect.ts`/`settings.ts`; nginx already has a commented `/ws` proxy block;
+  Phase 18.1 (Postgres) must precede 17.2 because Keycloak needs the DB.
+- `plan_to_implement.md` now points at the detailed doc. No code changed.
+
+## Review fixes: match-config URL parsing + botCount floor (2026-07-23)
+
+Reviewed the uncommitted Phase 16.1 work (`MatchConfig`, `validateMatchConfig`, `spawnRing`,
+config panel). Three findings, all fixed:
+
+- **Bug — `src/main.ts`:** URL config used `Number(params.get(k))` to detect presence, but
+  `params.get` returns `null` for a missing key and `Number(null)` is `0`, never `NaN`. So
+  `?bots=4` alone also sent `roundsToWin: 0`, failed validation, and silently discarded the
+  whole config. Switched to `params.has(k)`. The validator had 6 tests; the parsing in front
+  of it had none, which is exactly where the bug lived.
+- **`LIMITS.botCount` floor 0 → 2** (`src/game/round.ts`): the count splits `floor(n/2)` CT /
+  rest T, so 0 or 1 leaves a team empty and `decideWinner` ends every round on its first tick —
+  a match would burn through `roundsToWin` in a second. Added a T0 test for 0 and 1, and
+  updated `docs/plan-post-1.0-config-auth.md` (the spec) to match, with the rationale.
+- **Silent failure:** invalid URL config now `console.warn`s the validator errors instead of
+  quietly falling back to defaults.
+
+`ACC-022` gained steps for the single-param case, the warn, and the `?bots=1` floor; its
+slider-range step now reads 2–10. `pnpm typecheck` clean, `pnpm test` 228 green.
+
+Verified as correct (no change needed): `spawnRing` reproduces the original six 3v3 positions
+exactly (both anchors are `[-15, 0.05, ±25]`, so the old shared `F = CT_SPAWN[1]` and the new
+per-team `anchor[1]` agree); bot benching still works against the generated roster; replacing
+the fixed 180 s match clock with `roundsToWin` is intended and its reset path is tested.

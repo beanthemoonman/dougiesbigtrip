@@ -63,6 +63,18 @@ export interface GameActions {
 
 export type GamePanelMode = 'playing' | 'spectating' | 'none';
 
+/** Fields exposed in the "New Match" section of the settings panel.
+ *  ponytail: placeholder UI, superseded by Phase 19 entry screen. */
+export interface MatchConfigFields {
+  botCount: number;
+  roundsToWin: number;
+  botCountMin: number;
+  botCountMax: number;
+  roundsMin: number;
+  roundsMax: number;
+  onNewMatch(botCount: number, roundsToWin: number): void;
+}
+
 export interface SettingsPanel {
   show(): void;
   hide(): void;
@@ -80,6 +92,7 @@ export function createSettingsPanel(
   onChange: (s: Settings) => void,
   serverOpts?: ServerConnectionOpts,
   gameOpts?: GameActions,
+  matchConfig?: MatchConfigFields,
 ): SettingsPanel {
   // wss:// from an https page, ws:// otherwise — a browser blocks ws:// from a
   // secure page as mixed content, so the scheme must follow the page.
@@ -256,6 +269,56 @@ export function createSettingsPanel(
     teamRow.appendChild(joinCtBtn);
     gameSection.appendChild(teamRow);
     panel.appendChild(gameSection);
+  }
+
+  let configSection: HTMLDivElement | null = null;
+  if (matchConfig) {
+    configSection = document.createElement('div');
+    configSection.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid #3a4450';
+
+    const configLabel = document.createElement('div');
+    configLabel.textContent = 'New Match';
+    configLabel.style.cssText = 'font-size:13px;margin-bottom:8px;letter-spacing:1px;opacity:0.8';
+    configSection.appendChild(configLabel);
+
+    const mkCfgSlider = (label: string, min: number, max: number, val: number, cb: (v: number) => void): void => {
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;margin:6px 0';
+      const name = document.createElement('span');
+      name.textContent = label;
+      name.style.cssText = 'flex:0 0 90px';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = '1';
+      slider.value = String(val);
+      slider.style.flex = '1';
+      const readout = document.createElement('span');
+      readout.textContent = String(val);
+      readout.style.cssText = 'flex:0 0 32px;text-align:right';
+      slider.addEventListener('input', () => {
+        readout.textContent = slider.value;
+        cb(Number(slider.value));
+      });
+      row.append(name, slider, readout);
+      configSection!.appendChild(row);
+    };
+
+    let selectedBots = matchConfig.botCount;
+    let selectedRounds = matchConfig.roundsToWin;
+    mkCfgSlider('Bots', matchConfig.botCountMin, matchConfig.botCountMax, matchConfig.botCount, (v) => { selectedBots = v; });
+    mkCfgSlider('Rounds', matchConfig.roundsMin, matchConfig.roundsMax, matchConfig.roundsToWin, (v) => { selectedRounds = v; });
+
+    const btn = document.createElement('button');
+    btn.textContent = 'New Match';
+    btn.style.cssText =
+      'margin-top:12px;padding:6px 16px;background:#2a5a2a;color:#eee;border:none;' +
+      'cursor:pointer;font:14px monospace;width:100%';
+    btn.onclick = (): void => matchConfig.onNewMatch(selectedBots, selectedRounds);
+    configSection.appendChild(btn);
+
+    panel.appendChild(configSection);
   }
 
   document.body.appendChild(panel);
