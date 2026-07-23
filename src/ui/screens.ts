@@ -19,11 +19,11 @@ export interface ScreenManager {
   onBeforeHide(cb: (id: ScreenId) => void): void;
 }
 
-export function createScreenManager(_canvas: HTMLElement): ScreenManager {
+export function createScreenManager(): ScreenManager {
   let _current: ScreenId = 'in-game';
   let _previous: ScreenId = 'in-game';
-  let _onBeforeShow: ((id: ScreenId) => void)[] = [];
-  let _onBeforeHide: ((id: ScreenId) => void)[] = [];
+  const _onBeforeShow: ((id: ScreenId) => void)[] = [];
+  const _onBeforeHide: ((id: ScreenId) => void)[] = [];
 
   return {
     get current(): ScreenId {

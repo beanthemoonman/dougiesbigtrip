@@ -32,7 +32,7 @@ services:
       start_period: 3s
 
   auth:
-    image: quay.io/keycloak/keycloak:26
+    image: quay.io/keycloak/keycloak:26.7
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}

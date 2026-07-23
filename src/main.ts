@@ -327,7 +327,7 @@ async function main(): Promise<void> {
   }
 
   // Phase 19 screen state machine — governs entry/settings/admin/in-game.
-  const screens = createScreenManager(canvas!);
+  const screens = createScreenManager();
 
   // Phase 19.2 entry screen (created early so auth can update it).
   // connectViaReload is defined below; we pass it via a mutable ref.
@@ -358,9 +358,7 @@ async function main(): Promise<void> {
   });
 
   // Phase 19.3 settings screen (three tabs, replaces the old inline panel).
-  let settingsScreen: SettingsScreen;
-
-  settingsScreen = createSettingsScreen({
+  const settingsScreen: SettingsScreen = createSettingsScreen({
     settings,
     onChange: applySettings,
     onBack(): void {
@@ -369,8 +367,6 @@ async function main(): Promise<void> {
   });
 
   // --- Settings loaded + applied ---
-  // These are declared early so the team menu can reference them; assigned below.
-  let settingsPanel: ReturnType<typeof createSettingsPanel>; // eslint-disable-line prefer-const
   const sendJoinRef: { fn: ((team: number) => void) | null } = { fn: null };
 
   // Match config — mutable so the config panel can change it for the next start.
@@ -646,7 +642,7 @@ async function main(): Promise<void> {
     } catch { /* malformed ?connect= — fall back to defaults */ }
   }
 
-  settingsPanel = createSettingsPanel(settings, applySettings, {
+  const settingsPanel = createSettingsPanel(settings, applySettings, {
     defaultAddress,
     defaultPort,
     onConnect: connectViaReload,

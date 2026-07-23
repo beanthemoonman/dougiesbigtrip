@@ -237,7 +237,7 @@ export function createSettingsScreen(opts: {
     btn.onmouseenter = (): void => { if (activeTab !== id) btn.style.color = '#eee'; };
     btn.onmouseleave = (): void => { if (activeTab !== id) btn.style.color = '#aaa'; };
     btn.onclick = (): void => { activateTab(id); };
-    nav && nav.appendChild(btn);
+    if (nav) nav.appendChild(btn);
     navBtns.push(btn);
   }
   body.appendChild(nav);

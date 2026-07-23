@@ -3392,3 +3392,5 @@ not have worked as shipped — the two P0s are wiring, not logic.
 - Not covered by a test: the bot-budget resize at round reset lives inside the
   game loop's tick arm and would need the slot table extracted to reach. The
   rule is one line ("humans keep their slot, otherwise `i < bot_count`").
+
+- Fixed 7 CI lint errors: `const` for settingsScreen/settingsPanel (main.ts), dropped unused `_canvas` param + `const` arrays in screens.ts, `if (nav)` over unused-expression in settings_screen.ts.
