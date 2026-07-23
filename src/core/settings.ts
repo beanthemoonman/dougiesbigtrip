@@ -24,8 +24,12 @@ export const DEFAULT_SETTINGS: Settings = {
   volume: 1,
 };
 
-export const DEFAULT_SERVER_ADDRESS = '127.0.0.1';
-export const DEFAULT_SERVER_PORT = '9876';
+// Phase 17.1: when the page is served over HTTPS, default to the same-origin
+// proxy endpoint (wss://<host>/ws). On plain HTTP (local dev, bare cargo run),
+// keep the direct-connect default that points at the server's game port.
+const _isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
+export const DEFAULT_SERVER_ADDRESS = _isHttps ? `${location.hostname}/ws` : '127.0.0.1';
+export const DEFAULT_SERVER_PORT = _isHttps ? '443' : '9876';
 
 export type ConnectState = 'disconnected' | 'connecting' | 'connected' | 'error';
 

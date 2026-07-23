@@ -12,8 +12,17 @@ service.
 | `dougys-client` | nginx serving the TypeScript/Vite SPA (includes the WASM sim client-side) | 8080→80 |
 | Postgres 16 | Database (named volume `pgdata`) — migrations run on server start | internal |
 
-The SPA connects to the server via WebSocket (`ws://localhost:9876` by
-default — type this in the Connect overlay).
+Only the nginx proxy publishes host ports. The server and database are
+internal — the browser talks to the server through the proxy at `/ws`:
+
+```
+Browser ──HTTPS──► nginx (client)   :443 (or :80 for plain HTTP)
+    │                   │
+    └──wss://host/ws────┤  /ws → server:9876    (WebSocket)
+                        │  /status → server:9876 (HTTP)
+                        │  /api/   → server:9876 (admin, Phase 20)
+                        │  /auth/  → Keycloak    (Phase 17.2)
+```
 
 ## Quick start
 
@@ -25,37 +34,13 @@ cp .env.example .env
 docker compose --env-file .env up --build
 ```
 
-Open `http://localhost:8080`. The Connect overlay appears. Enter the
-server URL:
-
-```
-ws://localhost:9876
-```
+Open `https://localhost:8443` (accept the self-signed cert warning) or
+`http://localhost:8080` for plain HTTP. The client auto-detects ws:// vs.
+wss:// from the page protocol. The Connect overlay defaults to the proxy
+endpoint — no manual server URL needed.
 
 Hit **Connect**. You have a slot as soon as the server acknowledges.
-Up to 10 slots (the 11th connection spectates).
-
-## Architecture
-
-```
-Browser ──HTTP──► nginx (client)     serves index.html + dist/assets/
-   │                                        │
-   └──WebSocket──► Rust server :9876        │  (direct, or via /ws proxy)
-                                            │
-                                            ▼
-                                   64 Hz game loop owns the
-                                   authoritative sim world.
-                                   Bots fill empty slots.
-```
-
-## Single-port setup (optional)
-
-To serve everything on port 8080 (no separate 9876):
-
-1.  Uncomment the `/ws` location block in `nginx.conf`.
-2.  In `docker-compose.yml`, replace `ports: ["9876:9876"]` on the
-    server service with `expose: ["9876"]`.
-3.  Rebuild and in the Connect overlay use `ws://localhost:8080/ws`.
+Up to 6 slots (the 7th connection spectates).
 
 ## Building images individually
 

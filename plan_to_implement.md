@@ -750,14 +750,17 @@ directly — it trusts Keycloak tokens.
 phase adds a third, `auth`. It does not start without the Phase 18 `db` container, so bring that
 up first.
 
-- [ ] `auth` service added to `docker-compose.yml` — official Keycloak image, `expose:` only (no
-      host port), `depends_on: db` with a health condition, realm-export JSON mounted in, Google
-      client id/secret from env.
-- [ ] Reverse proxy terminates HTTPS/WSS and routes to Client / Server / Auth (per the diagram).
-- [ ] Keycloak configured as an OAuth 2.0 broker to Google.
-- [ ] Admin capability gated by the Keycloak role **`role_admin`** (claim checked server-side, not
-      trusted from the client).
-- [ ] Server validates the Keycloak token on connect; unauthenticated users can't join.
+- [x] **17.1** Promote nginx to single ingress — terminates TLS (self-signed for dev), proxies
+      `/`→client, `/ws`→server WebSocket, `/status`+`/api/`→server HTTP, `/auth/`→Keycloak (placeholder).
+      Server stops publishing host ports (`expose:` only). Client defaults to `wss://<host>/ws` over HTTPS.
+- [ ] **17.2** `auth` service added to `docker-compose.yml` — official Keycloak image, `expose:` only,
+      `depends_on: db` with a health condition, realm-export JSON mounted in, Google client id/secret
+      from env.
+- [ ] **17.3** Client-side login flow — Authorization Code + PKCE via `keycloak-js`, token in memory
+      only, expose `auth.name`/`sub`/`isAdmin`/`token()`.
+- [ ] **17.4** Server-side token validation — verify JWT signature against realm JWKS, check
+      `exp`/`iss`/`aud`, reject unauthenticated when `AUTH_REQUIRED=true`, `role_admin` checked
+      server-side only. `AUTH_REQUIRED=false` (default) skips validation.
 
 **Exit test:** A fresh user signs in with Google, lands authenticated; a user with `role_admin`
 is recognised as admin and one without is not — verified from the token server-side, not the UI.

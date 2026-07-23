@@ -2803,6 +2803,43 @@ the fixed 180 s match clock with `roundsToWin` is intended and its reset path is
 
 **All tests green:** 19 server + 231 TS. Typecheck + build clean.
 
+## 2026-07-23 — Phase 17.1: Reverse proxy + TLS
+
+**`nginx.conf`** — rewritten as the single ingress:
+- HTTPS server block (port 443) with self-signed cert, mirrors all proxy paths.
+- HTTP server block (port 80) kept as fallback — `ws:` vs `wss:` detection in
+  the client chooses the right protocol automatically.
+- `/ws` → server:9876 (WebSocket upgrade proxy, previously commented out).
+- `/status` → server:9876 (HTTP status endpoint).
+- `/api/` → server:9876 (placeholder for Phase 20 admin REST).
+- `/auth/` → Keycloak (commented out, activates in 17.2).
+
+**`Dockerfile.client`**
+- Stage 3 installs `openssl` and generates a self-signed cert at build time
+  (`/etc/nginx/certs/server.crt` + `.key`, CN=localhost, 365-day validity).
+- Exposes both 80 and 443.
+
+**`docker-compose.yml`**
+- Server changed from `ports: ["9876:9876"]` → `expose: ["9876"]`.
+  Only the proxy is reachable from the host.
+- Client now publishes `8443:443` in addition to `8080:80`.
+- Header comment updated: proxy is the default, no more direct :9876.
+
+**`src/core/settings.ts`**
+- `DEFAULT_SERVER_ADDRESS` and `DEFAULT_SERVER_PORT` are now protocol-aware:
+  HTTPS page → `hostname/ws` + `443` (same-origin proxy).
+  HTTP page  → `127.0.0.1` + `9876` (direct connect, local dev / cargo run).
+
+**`src/ui/connect.ts`**
+- `DEFAULT_WS_URL` computed from page protocol — `wss://host/ws` over HTTPS,
+  `ws://127.0.0.1:9876` over HTTP. Imports from `settings.ts` for non-HTTPS.
+
+**`docs/deploy.md`**
+- Title → "Phase 17". Architecture diagram updated to proxy-only.
+- Removed Single-port setup section (now the default). Quick-start updated.
+
+**All tests green:** 231 TS + typecheck + build.
+
 ---
 
 ## Phase 16 review fixes

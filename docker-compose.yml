@@ -1,12 +1,12 @@
-# Phase 18 — one-command deploy of the Counter Douglas stack.
+# Phase 17 — one-command deploy of the Counter Douglas stack.
 #
 #   docker compose --env-file .env up --build
 #
-# Then open http://localhost:8080 in a browser. In the Connect overlay,
-# enter:  ws://localhost:9876  (the server is exposed directly).
+# Then open http://localhost:8080 (or https://localhost:8443 with a
+# self-signed cert warning). The browser connects to the server through
+# the nginx proxy — no separate :9876 port needed.
 #
-# If you enable the /ws proxy in nginx.conf, use:  ws://localhost:8080/ws
-# and comment out the "ports" line on the server service.
+#   WS path:    ws://localhost:8080/ws   (or wss://localhost:8443/ws)
 #
 # Requires a .env file (copy .env.example and fill in values).
 
@@ -35,15 +35,12 @@ services:
       dockerfile: Dockerfile.server
     environment:
       DATABASE_URL: ${DATABASE_URL}
-    ports:
-      - "9876:9876"
+    expose:
+      - "9876"
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
-    # Uncomment to keep the server internal (only reachable via nginx proxy).
-    # expose:
-    #   - "9876"
 
   client:
     build:
@@ -51,6 +48,7 @@ services:
       dockerfile: Dockerfile.client
     ports:
       - "8080:80"
+      - "8443:443"
     depends_on:
       - server
     restart: unless-stopped

@@ -11,7 +11,10 @@
 
 import { DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PORT } from '../core/settings';
 
-const DEFAULT_WS_URL = `ws://${DEFAULT_SERVER_ADDRESS}:${DEFAULT_SERVER_PORT}`;
+const _isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
+const DEFAULT_WS_URL = _isHttps
+  ? `wss://${location.hostname}/ws`
+  : `ws://${DEFAULT_SERVER_ADDRESS}:${DEFAULT_SERVER_PORT}`;
 
 export interface ConnectOverlay {
   readonly el: HTMLElement;
