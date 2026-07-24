@@ -224,18 +224,17 @@ export function createEntryScreen(opts: {
 
   const spBtn = mkBtn('Singleplayer', '#4a6a3a', () => { spPopup.style.display = 'flex'; });
   const mpBtn = mkBtn('Multi-player', '#3a4a7a', () => {
+    // Multi-player needs an account: send unauthenticated users to Keycloak.
+    if (!_authRef?.authenticated) {
+      void _authRef?.login();
+      return;
+    }
     // Prefill the handle with the signed-in display name (editable).
     if (!nameInput.value) nameInput.value = _authRef?.name ?? '';
     mpPopup.style.display = 'flex';
   });
   container.appendChild(spBtn);
   container.appendChild(mpBtn);
-
-  // Login gate: you must be signed in to play (Phase 19.2 / auth-required).
-  const gateNote = document.createElement('div');
-  gateNote.textContent = 'Log in to play';
-  gateNote.style.cssText = `margin-top:20px;font-size:13px;color:${MUTED};letter-spacing:1px;`;
-  container.appendChild(gateNote);
 
   el.appendChild(container);
 
@@ -324,13 +323,6 @@ export function createEntryScreen(opts: {
       userBtn.textContent = 'Log in';
       adminItem.style.display = 'none';
     }
-    // Play is gated behind login.
-    for (const b of [spBtn, mpBtn]) {
-      b.disabled = !authed;
-      b.style.opacity = authed ? '1' : '0.4';
-      b.style.cursor = authed ? 'pointer' : 'not-allowed';
-    }
-    gateNote.style.display = authed ? 'none' : '';
   }
 
   logoutItem.onclick = (): void => {

@@ -3532,3 +3532,9 @@ Wrote `docs/plan-modelview-cli.md` — detailed spec for a headless `pnpm view <
 - `src/game/session.ts`: Tab scoreboard no longer force-shown while the team menu is open
   (`scoreboard.visible = input.state.scoreboard && gameMode !== 'menu'`).
 - Player still spawns only on team pick (`enterGame`), unchanged.
+
+## Entry screen: single-player no longer requires login
+- `src/ui/entry.ts`: Removed the login gate that disabled both play buttons when
+  signed out. Singleplayer always opens the match popup. Multi-player, when not
+  authenticated, redirects to Keycloak via `auth.login()` instead of opening the
+  connect popup. Dropped the "Log in to play" gate note.
