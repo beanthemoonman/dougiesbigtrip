@@ -4,9 +4,12 @@
  * `?connect=…` URL parameter. See docs/connect-and-scoreboard.md §1.
  *
  * Mounted on load when the client is in networked mode; hidden once connected.
+ *
+ * Default server address is sourced from `src/core/settings.ts` — a single
+ * source of truth across the connect overlay and the in-game settings panel.
  */
 
-export const DEFAULT_WS_URL = 'ws://127.0.0.1:9876';
+import { DEFAULT_WS_URL } from '../core/settings';
 
 export interface ConnectOverlay {
   readonly el: HTMLElement;

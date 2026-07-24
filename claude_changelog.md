@@ -4,6 +4,41 @@ A running log of what Claude Code did in this repo, appended to at the end of ea
 
 ---
 
+## 2026-07-24
+
+- **Implemented `modelview` CLI tool** (per `docs/plan-modelview-cli.md`):
+  - Created `tools/modelview/view.ts` (~200 lines): headless multi-angle GLB renderer using three.js r170 + Puppeteer + pngjs.
+  - **Pivot from `gl` to Puppeteer**: The `gl` (headless-gl) package only provides WebGL 1.0, but three.js r170 requires WebGL 2.0. Switched to Puppeteer headless Chrome which provides full WebGL 2.0 — same WebGL implementation as the game (Chromium). The tool still reuses the project's exact three.js via a temporary local HTTP server.
+  - **CLI contract**: `pnpm modelview <path.glb> [--angles list] [--size px] [--out dir] [--bg hex]`. Six canned angles (front, back, left, right, top, iso). Auto-framing via bounding sphere + 45° FOV. Three lights per angle (hemisphere + key + fill) that track the camera.
+  - **Created `tools/modelview/view.test.ts`**: One self-check test — renders `crate_wood.glb` at iso/256² and asserts >1% non-background pixels.
+  - **Config changes**: Added `"modelview"` package.json script, `.modelview/` to `.gitignore`, `tools/**/*.test.ts` to vitest include.
+  - **Dependencies**: Added `puppeteer` and `pngjs` as devDependencies. Removed `gl` (unused after pivot).
+  - Verified against all asset types: props (crate, barrel, cone, jerry can, pallet), weapons (AK, pistol), characters (CT, T), and the full map (`de_douglas.glb`). All render non-blank PNGs.
+  - Updated `docs/plan-modelview-cli.md`: status → done, documented Puppeteer pivot, updated CLI contract, risks, and render pipeline section.
+  - `pnpm typecheck` green. `pnpm test` 250 tests green.
+
+
+## 2026-07-23
+
+- **Phase 16.1 — Match config type + rounds-to-win.** Extended `src/game/round.ts`:
+  - Added `MapId` type (`'de_douglas'`), `MatchConfig` interface extending `RoundConfig` with `map`, `botCount`, `roundsToWin`.
+  - Added `DEFAULT_MATCH` (16 rounds to win, 6 bots), `LIMITS` bounds constant, and `validateMatchConfig()` with per-field error messages. Used by SP, server, and admin endpoint — one implementation, three callers.
+  - `RoundState` gains `matchOver` (boolean) and `matchWinner` ('T'|'CT'|null). `tickRound` now takes `MatchConfig` and emits `'match-over'` event when a side's score reaches `roundsToWin`. Match-over resets scores/round to initial values after `endDelay`.
+  - `RoundEvent` union adds `'match-over'`.
+  - **main.ts integration:** Removed the entire manual match clock (`MATCH_TIME`, `matchClock`, `matchOver` local, `matchRestartTimer`, `startNewMatch()`). `tickRound` now called unconditionally (no `matchOver` guard) with `DEFAULT_MATCH`. All remaining `matchOver` references point to `round.matchOver`. Banner text reads `round.timer` for match-over countdown (was `matchRestartTimer`).
+  - **Tests (T0):** 9 new tests in `round.test.ts` — match-over emission, single-fire, score/round reset, validator accept/reject paths (botCount bounds, roundsToWin bounds, unknown map, non-integer).
+  - `pnpm test` 218 tests green. `pnpm typecheck` / `pnpm build` green.
+  - Updated `plan_to_implement.md`: Phase 16 first checkbox ticked (16.1).
+
+- **Phase 16.2 — SP reads config at match start.** 
+  - Created `src/game/spawning.ts`: `spawnRing(team, count)` generates N spread positions from CT_SPAWN/T_SPAWN anchors. Preset offsets reproduce exact original 6 positions at count=3 (regression). Scale-out positions for count > 3 extend linearly. T0 tests in `spawning.test.ts` (6 tests: count, regression, Y-consistency, distinctness, z-mirror, determinism).
+  - **main.ts:** `botDefs` literal array replaced with `spawnRing('CT', ctCount)` + `spawnRing('T', tCount)` where counts are split from `currentMatchConfig.botCount`. `tickRound` uses `currentMatchConfig` (was `DEFAULT_MATCH`). `currentMatchConfig` seeded from `?bots=N&rounds=N` URL params via `validateMatchConfig`. Hoisted before settings panel for early initialization.
+  - **Settings panel:** Extended `createSettingsPanel()` with optional `MatchConfigFields` parameter. Renders "New Match" section with Bot Count (0–10) and Rounds (1–30) sliders + "New Match" button that reloads via URL params. Marked `ponytail: placeholder`.
+  - **T3:** Created `tests/acceptance/ACC-022-configuration.md` (6-step script: non-default bot count, max bots, defaults, settings panel UI, match-over at low rounds, invalid config rejection).
+  - **Budget T0:** `spawning_budget.test.ts` — max bot count produces correct number of distinct positions.
+  - `pnpm test` 227 tests green. `pnpm typecheck` / `pnpm build` green.
+  - Updated `plan_to_implement.md`: Phase 16 second checkbox ticked (16.2).
+
 ## 2026-07-22
 
 - **Fixed reconnection affecting server game state** (client-side bug). Root cause: the client ran its own independent match clock and round FSM even in networked mode. When a player reconnected, the local `matchClock` (180s) had expired, `startNewMatch()` fired, resetting local `round` to freezetime, which gated movement/live state and showed "FREEZE" banner — while the server was mid-round. Fixed with 7 changes in `src/main.ts`:
@@ -2635,3 +2670,856 @@ Verified: `pnpm typecheck` clean, `pnpm test` 210/210 green.
     from substantively-complete to complete.
 
 Bada Bing!
+
+## Phase 16–20 planning (2026-07-23)
+
+- Surveyed the codebase against Phases 16–20 and wrote `docs/plan-post-1.0-config-auth.md`:
+  per-increment breakdown (16.1–20.2), current-state table, cross-cutting decisions
+  (Postgres + sqlx, no ORM; keycloak-js PKCE; plain-DOM screens; `AUTH_REQUIRED=false` dev path),
+  DB schema, sequencing graph, and phase-specific risks.
+- Key findings: rounds-to-win does not exist yet (Phase 16 carries real gameplay work);
+  SP bot count is a hardcoded `botDefs` literal in `src/main.ts`; MP server selection is ~90%
+  done in `connect.ts`/`settings.ts`; nginx already has a commented `/ws` proxy block;
+  Phase 18.1 (Postgres) must precede 17.2 because Keycloak needs the DB.
+- `plan_to_implement.md` now points at the detailed doc. No code changed.
+
+## Review fixes: match-config URL parsing + botCount floor (2026-07-23)
+
+Reviewed the uncommitted Phase 16.1 work (`MatchConfig`, `validateMatchConfig`, `spawnRing`,
+config panel). Three findings, all fixed:
+
+- **Bug — `src/main.ts`:** URL config used `Number(params.get(k))` to detect presence, but
+  `params.get` returns `null` for a missing key and `Number(null)` is `0`, never `NaN`. So
+  `?bots=4` alone also sent `roundsToWin: 0`, failed validation, and silently discarded the
+  whole config. Switched to `params.has(k)`. The validator had 6 tests; the parsing in front
+  of it had none, which is exactly where the bug lived.
+- **`LIMITS.botCount` floor 0 → 2** (`src/game/round.ts`): the count splits `floor(n/2)` CT /
+  rest T, so 0 or 1 leaves a team empty and `decideWinner` ends every round on its first tick —
+  a match would burn through `roundsToWin` in a second. Added a T0 test for 0 and 1, and
+  updated `docs/plan-post-1.0-config-auth.md` (the spec) to match, with the rationale.
+- **Silent failure:** invalid URL config now `console.warn`s the validator errors instead of
+  quietly falling back to defaults.
+
+`ACC-022` gained steps for the single-param case, the warn, and the `?bots=1` floor; its
+slider-range step now reads 2–10. `pnpm typecheck` clean, `pnpm test` 228 green.
+
+Verified as correct (no change needed): `spawnRing` reproduces the original six 3v3 positions
+exactly (both anchors are `[-15, 0.05, ±25]`, so the old shared `F = CT_SPAWN[1]` and the new
+per-team `anchor[1]` agree); bot benching still works against the generated roster; replacing
+the fixed 180 s match clock with `roundsToWin` is intended and its reset path is tested.
+
+## 2026-07-23 — Phase 16.3: server-side config
+
+**`sim/src/protocol.rs`**
+- `Welcome` gains `rounds_to_win: u8` field (appended at end of encoding for backward compat).
+- Old-format decode defaults to 0; old-format compat test updated to truncate 5 bytes.
+- `with_capacity` updated: `+ 4` → `+ 5`.
+
+**`server/src/game.rs`**
+- `State` gains `rounds_to_win: u8`, `match_over: bool`, `match_winner: Option<char>` plus
+  stored timing values (`freezetime_ms`, `round_time_ms`, `end_delay_ms`).
+- `new()` takes all four config values (no more env reads).
+- `RoundEvent` gains `MatchOver` variant.
+- `tick()`: Live→Over checks `match_over_this_round()`; if true → MatchOver with winner.
+  Over→Freezetime: if match_over, reset scores/round and emit MatchOver; else normal Reset.
+- `match_over_this_round(score)` helper: `score >= rounds_to_win`.
+- Removed `freezetime_ms()`, `round_time_ms()`, `end_delay_ms()` env-reading functions.
+- Constants made `pub` for use by `main.rs`.
+- 4 FSM unit tests: starts_in_freezetime, match_over_at_rounds_to_win,
+  normal_round_transition_does_not_match_over, match_over_is_emitted_only_on_winning_round.
+
+**`server/src/main.rs`**
+- `ServerConfig` struct with fields: `bind`, `bot_count`, `rounds_to_win`, `map`,
+  `freezetime_ms`, `round_time_ms`, `end_delay_ms`.
+- `build_config()` reads env vars and calls `validate_config()`.
+- `validate_config()` pure validation: bot_count 2..=MAX_SLOTS, rounds_to_win 1..=30,
+  map "de_douglas" only. Returns `Result<ServerConfig, Vec<String>>` with all errors.
+- `main()`: builds config, passes to `game_loop()` and `handle_conn()`.
+- Slots creation: only first `bot_count` slots occupied with bots; rest vacant (unoccupied, dead).
+- `game::State::new()` receives timing from config.
+- Both Welcome constructions include `rounds_to_win` from config.
+- `GET /status` reports `botCount`, `roundsToWin`, `map` in JSON response.
+- 9 config validation unit tests: default, rejects all out-of-bounds (bot, rounds, map),
+  accepts boundary values, reports multiple errors at once.
+
+**`src/net/protocol.ts` (client)**
+- `Welcome` interface gains `roundsToWin: number`.
+- `encodeWelcome`: buffer size +1 byte; writes `roundsToWin` after `specCap`.
+- `decodeWelcome`: reads `data[off + 4]` with `?? 0` default.
+
+**`src/net/protocol.test.ts`**
+- All Welcome test objects include `roundsToWin`.
+- Old-format compat test truncates 5 bytes (not 4) and asserts `roundsToWin: 0`.
+- Cross-compat buffer size increased from 17 to 18 bytes.
+
+**All tests green:** 228 TS tests, 39 sim tests, 19 server tests (including 4 new FSM tests + 9 config tests). Typecheck + build clean.
+
+## 2026-07-23 — Phase 16.4: MP client targets a chosen server
+
+**`src/ui/connect.ts`**
+- `DEFAULT_WS_URL` sourced from `settings.ts` constants (`DEFAULT_SERVER_ADDRESS` + `DEFAULT_SERVER_PORT`).
+  Single source of truth — removed duplicate hardcoded default.
+
+**`src/core/settings.ts`**
+- `buildWsUrl()` now validates explicit URL schemes: only `ws://` and `wss://` accepted;
+  non-ws schemes (like `http://`) return `null` and show "invalid URL" in the UI.
+- Both connect handlers (initial connect + re-connect after disconnect) handle the nullable return.
+
+**`src/main.ts`**
+- `?connect=` URL param validated: only `ws:` and `wss:` protocols accepted;
+  non-ws schemes produce a console warning and fall back to page-host defaults.
+
+**Cross-cutting adjustments from 16.3 testing**
+- `LIMITS.botCount` ceiling lowered from 10 → 6 (matches server `MAX_SLOTS = 6`).
+- `isMatchOver(scoreT, scoreCt, roundsToWin)` exported — networked client checks match-over
+  from Welcome.roundsToWin + snapshot scores (server snapshots carry scores, not a match-over flag).
+- Server match-over reset emits `Reset` instead of duplicate `MatchOver` — the game loop
+  already respawns everyone on Reset; emitting a second MatchOver was noise.
+- `docs/plan-post-1.0-config-auth.md` updated: botCount ceiling documented.
+
+**All tests green:** 231 TS tests, 39 sim tests, 19 server tests. Typecheck + build clean.
+
+## 2026-07-23 — Phase 18.1: Postgres + migrations
+
+**`.env.example`**
+- Template env file: `POSTGRES_USER/PASSWORD/DB`, `DATABASE_URL`, and Keycloak
+  bootstrap admin creds (Phase 17 prep). `.env` is gitignored.
+
+**`.gitignore`**
+- Added `.env` and `data/` (Docker volume mounts) to ignored paths.
+
+**`docker-compose.yml`**
+- New `db` service: Postgres 16, named volume `pgdata`, `pg_isready` health check
+  (2 s interval, 10 retries, 3 s start period), `expose:` only (no host port).
+- `server` now `depends_on: db: { condition: service_healthy }` and receives
+  `DATABASE_URL` from the env file.
+- Compose command updated: `docker compose --env-file .env up --build`.
+
+**`server/Cargo.toml`**
+- Added `sqlx` v0.8 with features: `runtime-tokio`, `postgres`, `migrate`.
+
+**`server/migrations/001_initial.sql`**
+- Creates `app` schema if absent.
+- `app.users` table: `sub` (PK Keycloak subject), `display_name`, `email`,
+  `first_seen`, `last_seen`.
+- `app.server_config` table: single-row guard (`check (id = 1)`), columns
+  `bot_count`, `map`, `rounds_to_win`, `updated_at`, `updated_by`.
+
+**`server/src/main.rs`**
+- `main()` now checks `DATABASE_URL`: if set, creates a `PgPool` (max 2 connections),
+  runs `sqlx::migrate!("./migrations")`, logs the result. If unset or connection
+  fails, the server continues with env-only config — bare `cargo run` stays functional.
+
+**`docs/deploy.md`**
+- Title → "Phase 18". Quick-start updated for `.env` + `--env-file`. Architecture
+  table now lists Postgres. New Database section documents volumes, migration startup,
+  `DATABASE_URL` behaviour, and `docker compose down -v` to reset.
+
+**All tests green:** 19 server + 231 TS. Typecheck + build clean.
+
+## 2026-07-23 — Phase 17.1: Reverse proxy + TLS
+
+**`nginx.conf`** — rewritten as the single ingress:
+- HTTPS server block (port 443) with self-signed cert, mirrors all proxy paths.
+- HTTP server block (port 80) kept as fallback — `ws:` vs `wss:` detection in
+  the client chooses the right protocol automatically.
+- `/ws` → server:9876 (WebSocket upgrade proxy, previously commented out).
+- `/status` → server:9876 (HTTP status endpoint).
+- `/api/` → server:9876 (placeholder for Phase 20 admin REST).
+- `/auth/` → Keycloak (commented out, activates in 17.2).
+
+**`Dockerfile.client`**
+- Stage 3 installs `openssl` and generates a self-signed cert at build time
+  (`/etc/nginx/certs/server.crt` + `.key`, CN=localhost, 365-day validity).
+- Exposes both 80 and 443.
+
+**`docker-compose.yml`**
+- Server changed from `ports: ["9876:9876"]` → `expose: ["9876"]`.
+  Only the proxy is reachable from the host.
+- Client now publishes `8443:443` in addition to `8080:80`.
+- Header comment updated: proxy is the default, no more direct :9876.
+
+**`src/core/settings.ts`**
+- `DEFAULT_SERVER_ADDRESS` and `DEFAULT_SERVER_PORT` are now protocol-aware:
+  HTTPS page → `hostname/ws` + `443` (same-origin proxy).
+  HTTP page  → `127.0.0.1` + `9876` (direct connect, local dev / cargo run).
+
+**`src/ui/connect.ts`**
+- `DEFAULT_WS_URL` computed from page protocol — `wss://host/ws` over HTTPS,
+  `ws://127.0.0.1:9876` over HTTP. Imports from `settings.ts` for non-HTTPS.
+
+**`docs/deploy.md`**
+- Title → "Phase 17". Architecture diagram updated to proxy-only.
+- Removed Single-port setup section (now the default). Quick-start updated.
+
+**All tests green:** 231 TS + typecheck + build.
+
+## 2026-07-23 — Phase 17.2: Keycloak service + Google broker
+
+**`auth/counter-douglas-realm.json`** — committed realm-export JSON:
+- Realm `counter-douglas` with `sslRequired=external`, brute-force protection.
+- Public OIDC client `counter-douglas-spa`: PKCE/S256, standard flow, redirect
+  URIs for `localhost:8080`, `:5173` (Vite dev), `:8443` (Docker HTTPS).
+  Client scopes: `roles` (realm-roles → `realm_access.roles` claim), `profile`,
+  `email`, `web-origins`.
+- Realm role `role_admin` (admin-only config changes, Phase 20).
+- Google IDP: `clientId` + `clientSecret` from `${env.GOOGLE_CLIENT_ID}` /
+  `${env.GOOGLE_CLIENT_SECRET}` — never committed. Attribute mappers for
+  email/username import.
+
+**`docker-compose.yml`**
+- New `auth` service: `keycloak/keycloak:26`, `start-dev --import-realm`,
+  `expose: 8080`, `depends_on: db {condition: service_healthy}`.
+  `KC_DB_SCHEMA=keycloak` so Keycloak owns its own schema. `KC_PROXY_HEADERS=xforwarded`
+  for correct redirect URIs behind the proxy. Health check on `/health/ready`.
+  `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` env vars forwarded.
+- Realm JSON mounted read-only at `/opt/keycloak/data/import/`.
+
+**`nginx.conf`**
+- `/auth/` proxy to `auth:8080` uncommented in both HTTP and HTTPS server blocks
+  (previously a placeholder). Fixed broken include → inline rewrite.
+
+**`.env.example`**
+- Added `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` fields with instructions on
+  obtaining them from Google Cloud Console.
+
+**`docs/deploy.md`**
+- `What's in the box` table now lists 4 services (Keycloak 26 + Postgres 16).
+- New "Auth (Keycloak + Google)" section: obtaining OAuth credentials, redirect
+  URI, granting `role_admin`.
+
+**All tests green:** 231 TS + typecheck.
+
+**Follow-up fix (f86dd2a):** Reconcile 17.2 nginx.conf with the include pattern
+from the 17.1 review fix (23c064f). `/auth/` is uncommented in
+`nginx-locations.conf`, not inlined.
+
+---
+
+## Phase 16 review fixes
+
+Reviewed the Phase 16.1–16.3 diff (`main...post-1.0`) and fixed three defects. Each was
+reproduced with a failing test before the fix.
+
+**1. Match reset never respawned anyone — `server/src/game.rs`**
+The `Over → Freezetime` transition returned `RoundEvent::MatchOver` *instead of* `Reset` when
+a match had just ended. `game_loop` only respawns/backfills bots on `RoundEvent::Reset`
+(`main.rs:292`), so after a match ended every slot stayed dead permanently. The FSM unit test
+asserted the wrong event, so it went green over a broken server. Now returns `Reset` on that
+edge (`state.match_over` is the flag; the event is the cue to respawn), matching the TS FSM
+which already returned `'reset'` there.
+
+**2. Client and server config bounds disagreed — `src/game/round.ts`, doc**
+`LIMITS.botCount` was `[2, 10]` while `validate_config` rejects anything above `MAX_SLOTS`
+(6), so the "New Match" slider offered counts that make the server `exit(1)`. Lowered the
+client ceiling to 6 and updated `docs/plan-post-1.0-config-auth.md` (the spec) with why —
+raising it again means raising `MAX_SLOTS`, `MAX_SPECTATORS`, and giving the server real
+per-slot spawns instead of one anchor per team.
+
+**3. `Welcome.roundsToWin` was sent but never read — `src/main.ts`**
+Added to the wire format in 16.3 and consumed by nothing, so "MATCH OVER" only ever appeared
+in single-player. The client now stores it from Welcome (cleared on disconnect) and the
+multiplayer banner derives match-over from snapshot scores via a new pure
+`isMatchOver(scoreT, scoreCt, roundsToWin)` in `round.ts` — 0 means a pre-Phase-16 server, so
+never over.
+
+**Not a bug (review finding withdrawn):** the server's `team_ct = i % 2 == 1` over the first
+`bot_count` slots and the client's `floor(n/2)` CT / rest T produce the *same* split. Odd bot
+counts are lopsided by one on both sides; that is inherent to odd counts, not a divergence.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean, `cargo test -p server` 19 passed.
+
+## Review of cf3f14f — two fixes
+
+**`?connect=` scheme validation was cosmetic.** The ws:/wss: check added in 16.4 only gated how
+the param seeded the settings-panel address/port inputs; the auto-connect at the bottom of
+`main()` re-read the raw param and dialled it regardless, so `?connect=http://host` still reached
+`new WebSocket()` (caught, but the documented validation didn't hold). The validated URL is now
+kept in `validatedBootUrl` and is the only thing `handleConnect` is given.
+
+**Deduplicated the invalid-URL branch in `settings.ts`.** The build-and-validate block was pasted
+in both the initial `connect` closure and the re-bind inside `setConnected()`. Hoisted to a
+`connectFromInputs` ref set once when the server section is built; `setConnected()` now just calls it.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean.
+
+## Phases 17–18: container setup made explicit
+
+Both plans named `auth` and `db` as services but never said they are **new containers to write** —
+easy to read as "configure something that already exists." The compose stack today is two services
+(`server`, `client`).
+
+- `plan_to_implement.md` — Phase 17 and 18 each gained a "New container" note plus checklist items
+  for the compose service, the named Postgres volume, and the `depends_on: service_healthy` gate.
+- `docs/plan-post-1.0-config-auth.md` — a "Compose delta" paragraph under Phase 17 (two services →
+  four); 17.2 and 18.1 now spell out the image, `expose:`-only ports, health check, mounted realm
+  export, Keycloak `start-dev` vs `start --optimized`, and why the volume must be named.
+
+Docs only, no code.
+
+## Review fixes: Phase 17.1 / 18.1 (nginx ingress + Postgres)
+
+Review of `777214e..570c9ea` found the new proxy defaults didn't actually work from either
+documented entry point. Fixed, plus three smaller items.
+
+**Connect default was broken on both HTTP and HTTPS.** `docs/deploy.md` promises "no manual server
+URL needed," and 17.1 stopped publishing the server's 9876 port (`ports:` → `expose:`) — but
+`connect.ts` still defaulted to `ws://127.0.0.1:9876` on plain HTTP (a port nothing publishes any
+more), and on HTTPS built the URL from `location.hostname`, dropping the `:8443` from the compose
+port mapping → `wss://localhost/ws`, connecting to nothing. `main.ts` had a third, correct copy of
+this logic using `location.host`.
+
+Collapsed all three into one `DEFAULT_WS_URL` in `src/core/settings.ts`: same-origin `<host>/ws`
+with the scheme following the page, except under `import.meta.env.DEV` (the vite dev server proxies
+nothing) where it stays `ws://127.0.0.1:9876`. `connect.ts` imports it; `main.ts` seeds the panel
+from `DEFAULT_SERVER_ADDRESS` instead of recomputing.
+
+**Migration failure now exits.** `main.rs` logged `DB migration error` and carried on. Continuing
+past an *unreachable* database is the documented design; continuing past a failed migration on a
+*reachable* one leaves the server running against a half-applied schema — harmless today, not once
+Phase 20's `/api/` reads `app.server_config`. `std::process::exit(1)`.
+
+**nginx location blocks deduped.** The `:80` and `:443` servers had ~40 identical lines each,
+including the commented-out Keycloak block that would have needed uncommenting twice. Extracted to
+`nginx-locations.conf`, `include`d by both; `Dockerfile.client` copies it.
+
+**Minor:** stale "connect directly to ws://host:9876" comment removed from `nginx.conf` (the port
+isn't published); `ponytail:` note on the baked-in self-signed cert naming the key-in-layer ceiling
+and the mount path, with a commented `volumes:` stub in `docker-compose.yml` and a TLS section in
+`docs/deploy.md`; `.env.example` warns that `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`
+verbatim, so URL-meaningful characters need encoding.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean, `cargo check` clean, `nginx -t` parses
+the split config (fails only on upstream DNS for `server`, expected outside compose).
+
+## 2026-07-23 — Phase 17.2: Keycloak auth container + Google broker
+
+**`auth/counter-douglas-realm.json`** — committed realm-export JSON:
+- Realm `counter-douglas` with `sslRequired=external`, brute-force protection.
+- Public OIDC client `counter-douglas-spa`: PKCE/S256, standard flow, redirect URIs for
+  `localhost:8080`, `:5173` (Vite dev), `:8443` (Docker HTTPS). Client scopes: `roles`
+  (realm-roles → `realm_access.roles` claim), `profile`, `email`, `web-origins`.
+- Realm role `role_admin` (admin-only config changes, Phase 20).
+- Google IDP: `clientId` + `clientSecret` from `${env.GOOGLE_CLIENT_ID}` /
+  `${env.GOOGLE_CLIENT_SECRET}` — never committed. Attribute mappers for email/username import.
+
+**`docker-compose.yml`**
+- New `auth` service: `keycloak/keycloak:26`, `start-dev --import-realm`, `expose: 8080`,
+  `depends_on: db {condition: service_healthy}`. `KC_DB_SCHEMA=keycloak` so Keycloak owns its
+  own schema. `KC_PROXY_HEADERS=xforwarded` for correct redirect URIs behind the proxy.
+  Health check on `/health/ready`. `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` env vars.
+- Realm JSON mounted read-only at `/opt/keycloak/data/import/`.
+
+**`nginx-locations.conf`**
+- `/auth/` proxy to `auth:8080` uncommented (was a placeholder). `nginx.conf` uses the
+  existing `include` pattern.
+
+**`.env.example`**
+- Added `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` fields with instructions on obtaining them
+  from Google Cloud Console. Warns about URL-meaningful chars in credentials.
+
+**`docs/deploy.md`**
+- `What's in the box` table now lists 4 services (Keycloak 26 + Postgres 16).
+- New "Auth (Keycloak + Google)" section: obtaining OAuth credentials, redirect URI format,
+  granting `role_admin` via admin console.
+
+**Follow-up reconciliation (f86dd2a):** 17.2's `nginx.conf` initially overwrote the
+`nginx-locations.conf` include pattern from the review fix (23c064f). Restored the include
+and uncommented `/auth/` in `nginx-locations.conf`.
+
+**Tests:** `pnpm test` 231 passed, `pnpm typecheck` clean.
+
+---
+
+## Review fixes — Phase 17.2 (`61f7570..HEAD`)
+
+Four defects found reviewing the Keycloak commits. All config/docs; no source changes.
+
+**`auth/init-schema.sql`** (new)
+- `create schema if not exists keycloak;`, mounted into the `db` service's
+  `/docker-entrypoint-initdb.d/`. `KC_DB_SCHEMA=keycloak` pointed at a schema nothing created —
+  Keycloak's Liquibase does not create its own schema, so `auth` failed at boot. The comment in
+  `server/migrations/001_initial.sql` claiming Keycloak manages it was wrong and is corrected.
+  Hook is first-boot-only; an existing `pgdata` needs the manual `psql` in `docs/deploy.md`.
+
+**`docker-compose.yml`**
+- `KC_HTTP_RELATIVE_PATH: /auth` — nginx proxies to `http://auth:8080/auth/` and every
+  advertised redirect URI is `/auth/realms/...`, but Keycloak 26 serves at `/` by default.
+  Every auth request was 404ing.
+- Healthcheck moved from port 8080 to **9000**. Keycloak has served health on the management
+  port since 25, so the container could never become healthy.
+- `KC_HOSTNAME` is now `${KC_HOSTNAME:-https://localhost:8443/auth}`. nginx sends `Host`
+  without the port, so the bare `localhost` built redirect/issuer URLs missing `:8443` and
+  broke the OAuth round-trip.
+
+**`.env.example`** — added `KC_HOSTNAME` (blank = use the compose default).
+
+**`docs/deploy.md`** — documented the schema hook, the `KC_HOSTNAME` requirement, and that
+`--import-realm` is first-boot-only (later realm-JSON edits, including a rotated Google
+secret, are silently ignored).
+
+**Tests:** none — config only. Compose YAML re-parsed clean; not brought up end-to-end.
+
+## 2026-07-23 — Phase 17.3: Client login flow (keycloak-js + PKCE)
+
+### `pnpm add keycloak-js` (26.2.4)
+Official adapter — the plan explicitly calls for it over hand-rolled PKCE.
+
+### `src/core/auth.ts`
+- `initAuth()` → creates Keycloak instance with `check-sso` onLoad and PKCE `S256`, returns
+  `AuthState`. Silently stays unauthenticated when Keycloak is unreachable (dev without the
+  stack, `pnpm dev`).
+- `AuthState` interface: `authenticated`, `name`, `sub`, `isAdmin` (derived from
+  `realm_access.roles`), `token()`, `login()`, `logout()`.
+- Token held **in memory only** — `Keycloak` instance internal state, never written to
+  localStorage/sessionStorage (matches CLAUDE.md's "no web storage assumption" and happens
+  to be the safer choice anyway).
+- Reload-survival: `check-sso` re-checks the Keycloak SSO cookie via silent iframe redirect
+  — no stored token to steal, no refresh-token storage.
+- Pure helpers exported for testing: `displayNameFromToken()`, `isAdminFromToken()`.
+
+### `public/sso-silent.html`
+Standard Keycloak silent check-sso receiver — loaded in an iframe by the adapter, posts
+`location.href` back to the parent window via `postMessage`.
+
+### `src/ui` wiring (temporary — ponytail marker for Phase 19)
+- `main.ts`: calls `initAuth()` fire-and-forget at boot (non-blocking — rest of startup doesn't
+  depend on it). A small fixed-position button in the bottom-left shows "Log in" / "Hello,
+  {name}". Clicking logs in or out. `refreshAuthButton()` updates the label when auth
+  initializes.
+- `ponytail` marker: Phase 19 entry screen replaces this with the proper "Hello, {name} ▾"
+  dropdown.
+
+### `.env.example` fix
+`DATABASE_URL` previously used `${POSTGRES_USER}`, `${POSTGRES_PASSWORD}`, `${POSTGRES_DB}`
+variable references — Docker Compose `.env` files do NOT expand `${VAR}` references within
+the same file. Replaced with a concrete example URL and a warning about percent-encoding
+URL-meaningful password characters.
+
+### Tests — 11 new T0 tests in `src/core/auth.test.ts`
+- `displayNameFromToken`: name present, falls back to preferred_username, prefers name,
+  undefined for missing/empty.
+- `isAdminFromToken`: role_admin present/absent, missing realm_access, empty roles, undefined
+  input, undefined realm_access.
+
+**Results:** `pnpm test` 242 passed (+11), `pnpm typecheck` clean, `pnpm build` clean.
+
+## 2026-07-23 — Phase 17.4: Server-side JWT validation
+
+### Protocol: Join extended with token (sim + TS)
+- `sim/src/protocol.rs`: `Join` gains `token: Option<String>`. Wire format is
+  `[TAG_JOIN, PROTOCOL_VERSION, team, token_len_lo, token_len_hi, …bytes]`.
+  Old 3-byte format still decodes as `token=None` (backwards-compatible).
+- `src/net/protocol.ts`: `encodeJoin`/`decodeJoin` mirror the new format.
+  `Join` interface gains `token?: string`.
+- `src/main.ts`: `sendJoinRef` includes `auth?.token()` in the Join frame.
+- 4 new T0 TS tests: token round-trip, old 3-byte decode, new 5-byte decode.
+- 1 new Rust test: `join_with_token_round_trip`. 40 sim tests green.
+
+### `server/src/auth.rs` — JWT validation module
+- `AuthConfig { required, issuer, audience, jwks_url }` — built from env vars.
+  `AUTH_REQUIRED` (default `false`), `AUTH_ISSUER`, `AUTH_JWKS_URL`,
+  `AUTH_AUDIENCE`.
+- `prefetch_jwks()` — fetches realm `openid-connect/certs` at startup and
+  caches `kid → DecodingKey`. Keys cached for 15 minutes.
+- `validate_token_sync(tok, &config)` — synchronous validation (uses
+  `blocking_read` on cached JWKS): decode header → lookup `kid` → verify
+  signature → check `exp`/`iss`/`aud` (leeway 30 s) → extract
+  `sub`/`name`/`is_admin` from `realm_access.roles`.
+- 7 Rust unit tests with fixture HS256 tokens: valid-with-role,
+  valid-without-role, wrong issuer, wrong audience, expired, bad signature,
+  auth-not-required default.
+- Dependencies: `jsonwebtoken` 9, `reqwest` 0.12 (rustls-tls).
+
+### Server wiring (`server/src/main.rs`)
+- `Ev::JoinTeam` gains `token: Option<String>`. Server's connect handler
+  passes `join.token` through from decoded Join frame.
+- `Slot` gains `validated_user: Option<ValidatedUser>` — populated from a
+  successful JWT validation, stored on the slot.
+- `JoinTeam` handler: when `AUTH_REQUIRED=true`, validates the token before
+  assigning a slot. Missing/invalid token → `Bye { reason }` + close before
+  the slot is allocated. Never reaches Team assignment.
+- `prefetch_jwks()` called at startup in `main()` (no-op when !required).
+- `ServerConfig` + `validate_config` gain `auth_config` field.
+
+### Build + local-dev invariant
+- Bare `cargo run` (no DATABASE_URL, no AUTH_REQUIRED) still works — the
+  prefetch is a no-op, JoinTeam skips validation, every connection is an
+  anonymous non-admin.
+- `AUTH_REQUIRED=true` in compose `.env` gates the entire flow; never a
+  self-signed JWT or mocked validation path.
+
+### Tests
+- TS: `pnpm test` 245 passed (+3). `pnpm typecheck` clean. `pnpm build` clean.
+- Rust: `cargo test -p sim` 40 passed (+1). `cargo test -p server` 26 passed (+7).
+  `cargo check` zero warnings.
+
+## Phase 17.4 review fixes — JWT validation hardening
+
+Review of `0c26a08..2bd3b16` found two server-killers on the first
+`AUTH_REQUIRED=true` join plus an audience hole. Fixed all six findings.
+
+### P0 — auth rejection killed the whole server
+- `Ev::JoinTeam`'s two refusal paths used `return`, which returns from
+  `game_loop` itself (the arm lives inside `tokio::select!` inside `loop`), not
+  from the handler. One unauthenticated connection froze the simulation for
+  every player already in the match. Now `continue`, with a comment saying why.
+
+### P0 — `blocking_read` inside the async runtime
+- `validate_token_sync` called `tokio::sync::RwLock::blocking_read()` from the
+  async game loop, which panics ("Cannot block the current thread from within a
+  runtime") and aborts the task. Validation is now `async fn validate_token`
+  using `JWKS.read().await`.
+
+### Security — `aud` accepted Keycloak's realm-wide `account`
+- `set_audience(&[&config.audience, "account"])` let any token minted for any
+  other client in the realm through. Now only the configured audience.
+- Added a `game-server audience` (`oidc-audience-mapper`) protocol mapper to the
+  `counter-douglas-spa` client in `auth/counter-douglas-realm.json`, so the
+  access token actually carries `counter-douglas-spa` in `aud`.
+
+### JWKS cache never refreshed
+- `expiry` was set and then `#[allow(dead_code)]`; a Keycloak key rotation broke
+  every login until an operator restarted the server. Replaced with
+  `key_for_kid`, which refetches on cold cache, TTL expiry (900 s), or unknown
+  `kid`, rate-limited to one fetch per 60 s so a bogus `kid` can't be used to
+  hammer Keycloak. `prefetch_jwks` is now an optimisation, not a precondition.
+- `ponytail:` note on the inline refetch — it stalls one tick during a rotation;
+  move to a background refresh task if that ever shows up in a tick histogram.
+
+### Tests
+- The old `auth.rs` suite built its own HS256 `Validation` and called
+  `jsonwebtoken::decode` directly — it tested the library, never
+  `validate_token_sync`, which is exactly why both P0s shipped green. Replaced
+  with tests of our own code: `user_from_claims` (admin role, role near-misses,
+  `name` → `preferred_username` fallback, missing `sub`) and `validation_for`
+  (RS256 pinned, issuer pinned, `validate_exp`, and a regression test asserting
+  `aud` is *only* the configured audience).
+- `auth_config_defaults_to_not_required` asserted a literal it had just
+  constructed. Replaced with `parse_required`, a pure helper `from_env` now
+  delegates to, tested over unset/""/false/true/1 (env mutation is `unsafe` in
+  edition 2024 and racy across parallel tests, so the helper is the seam).
+
+### Tests run
+- Rust: `cargo test` — 40 sim + 28 server passed. TS: `pnpm test` 245 passed,
+  `pnpm typecheck` clean.
+
+## 2026-07-23 — Phase 18.2 + 18.3: Config persistence + user upsert
+
+### Phase 18.2 — Config load/save from database
+- `server/src/db.rs` — thin async DB accessor: `load_config(pool)`,
+  `insert_config(pool)`, `upsert_user(pool)`. Uses raw `sqlx::query()` (no
+  compile-time macros) so no build-time `DATABASE_URL` requirement.
+- `main()` now keeps the `PgPool` as `Option<PgPool>` (not consumed inside
+  the migration block). After migrations:
+  - `load_config` → if a row exists, re-validates it through the **same**
+    `validate_config()` from Phase 16.3. Passes → DB config replaces env.
+    Fails → logs each error, keeps env config.
+  - No row → `insert_config` seeds the DB with env values (id=1, default
+    bot_count/map/rounds_to_win).
+  - Load/seed error → warns, keeps env config.
+- `DATABASE_URL` unset → pool is `None`, entire DB path skipped, bare
+  `cargo run` unchanged.
+- `PgPool` passed to `game_loop` for user upsert (Phase 18.3).
+
+### Phase 18.3 — Users upsert on authenticated connect
+- In `Ev::JoinTeam` handler, after successful token validation, calls
+  `db::upsert_user(pool, sub, display_name, email=None)` — a single
+  `INSERT … ON CONFLICT (sub) DO UPDATE SET display_name, email, last_seen`.
+  No read-then-write race.
+- `display_name` from `ValidatedUser.name`, falls back to `"unknown"` when
+  the JWT doesn't carry a `name` claim (always non-null per the migration
+  constraint).
+- Normal flow: first-time login inserts the row; subsequent logins update
+  `last_seen` (via the `DO UPDATE` clause). Mismatch between two
+  simultaneous first-time logins with the same `sub` is impossible since the
+  game loop is single-threaded.
+
+### Tests
+- Rust: `cargo test -p sim` 40 passed. `cargo test -p server` 28 passed.
+  `cargo check` zero warnings.
+- TS: `pnpm test` 245 passed. `pnpm typecheck` clean. `pnpm build` clean.
+
+## Review fixes for ded671a (Phase 18.2 + 18.3)
+
+Post-commit review of `ded671a` found three issues; all fixed in `server/src/main.rs`.
+
+- **P0 — DB I/O blocked the 64 Hz game loop.** The Phase 18.3 `db::upsert_user`
+  call was `.await`ed directly inside the `tokio::select!` arm of `game_loop`,
+  the same task that drives the fixed-timestep tick. With `max_connections(2)`
+  and sqlx's default 30 s acquire timeout, a slow or saturated DB would freeze
+  the sim for every connected player. Now detached via `tokio::spawn` with a
+  cloned `PgPool` (an `Arc`, so cheap); nothing downstream read the result.
+  The spawned task also logs upsert failures instead of swallowing them with
+  `let _ =` — a broken `app.users` table was previously invisible.
+- **P2 — silent integer truncation on DB config load.** `rounds_to_win as u8`
+  turned a DB value of `257` into a valid-looking `1`. Replaced both casts with
+  `u8::try_from(..).unwrap_or(u8::MAX)` / `usize::try_from(..).unwrap_or(usize::MAX)`
+  so out-of-range rows saturate into a validation *failure* (and the server
+  falls back to env config) rather than truncating into a plausible value.
+- **P3 — config is read-only.** Marked with a `ponytail:` comment: the row is
+  seeded once and never written back, so `updated_at`/`updated_by` stay at
+  their insert defaults until the admin config API lands.
+
+Also restored two load-bearing comments the commit deleted: the rationale for
+bailing on a migration failure against a *reachable* DB, and the note that
+`prefetch_jwks` is safe to call unconditionally.
+
+### Tests
+- Rust: `cargo test -p server` 28 passed. `cargo build` zero warnings.
+- No new tests: the truncation fix is a saturating conversion at a call site
+  whose validator is already covered by `config_tests`, and the upsert detach
+  needs a live Postgres to exercise.
+
+## 2026-07-23 — Phases 19 + 20: Entry/Settings screens, Admin screen, Config API
+
+### Phase 19 — Entry & Settings screens
+- `src/ui/screens.ts` — tiny screen state machine over `entry | settings | admin |
+   in-game` (four states, no router, no history API). Tracks `previous` for back-
+   button routing. Pointer lock released on show, restored on enterGame.
+- `src/ui/entry.ts` — "Counter Douglas" title screen with user menu (Hello
+  {name} dropdown → Settings/Logout/Admin), Singleplayer button (→ match config
+  popup), Multi-player button (→ server connect popup). Auth state updates live
+  through `setAuth()`. SP/MP both use page reload with URL params.
+- `src/ui/settings_screen.ts` — three-tab left-nav layout (Graphics, Game,
+  Bindings). Sliders for FOV, sensitivity, volume. Bindings tab shows per-action
+  key bindings with click-to-rebind UI.
+- `src/core/input.ts` — replaced `const KEY_TO_BUTTON` with mutable `Map`.
+  Added `rebindAction(action, code)`, `getBinding(action)`, `ACTION_NAMES`,
+  `ACTION_ORDER` exports. Key handlers now read the map instead of the const.
+- `src/core/settings.ts` — `GameActions`, `MatchConfigFields`, config sliders,
+  game section, and team buttons still exist in the file but are no longer used
+  by main.ts (the settings panel now only serves the server-connect section).
+
+### main.ts integration
+- Removed `GameActions` import, `gameActions` object, auth button +
+  `refreshAuthButton()`, match-config section from settingsPanel creation.
+- Created `ScreenManager`, `EntryScreen`, `SettingsScreen`, `AdminScreen` early.
+- Boot flow: on fresh load (no `?connect=`/`?bots=`/`?rounds=`) shows entry
+  screen; reload paths skip entry and go straight to team menu/game.
+- Pointer lock: `screens.enterGame()` replaces raw `canvas.requestPointerLock()`.
+- Esc key shows settings screen; M key shows team menu (unchanged).
+- `applySettings()` moved before screen creation so `settingsScreen` can read it.
+
+### Phase 20 — Admin screen
+- `src/ui/admin.ts` — form over bot count, rounds-to-win, map. Loads via
+  `GET /api/config`, saves via `PUT /api/config`. Status line shows
+  load/save/error. Admin menu item is hidden when `!auth.isAdmin`; the server
+  enforces the gate (hidden button is not the control).
+
+### Phase 20.1 — Server config API (axum)
+- Added `axum` dependency with `json` feature to `server/Cargo.toml`.
+- `server/src/http.rs` — axum router with `GET/PUT /api/config` and
+  `GET /status`. `PUT` validates through the same `validate_config()` from
+  Phase 16.3, gates on `role_admin` via JWT Bearer token, persists to DB
+  via `db::update_config()`, and updates a shared `Arc<RwLock<ServerConfig>>`.
+  `GET` returns the current config; `GET /status` folds in the old hand-rolled
+  peek.
+- `server/Cargo.toml`: `axum` added with `json` feature.
+- `server/src/db.rs`: added `update_config()` — UPDATE on `app.server_config`
+  row id=1.
+- `ServerConfig.map` changed from `&'static str` to `String` for runtime
+  mutability.
+- `ServerConfig.api_bind` added (`API_BIND` env var, default `0.0.0.0:9877`).
+- `validate_config()` signature gained `api_bind` parameter.
+- `main()` creates `Arc<RwLock<ServerConfig>>`, passes it to both `game_loop()`
+  and the axum server. Game loop reads mutable fields (bot_count, map,
+  rounds_to_win) from the shared lock at Welcome time and match boundaries.
+- `game_loop()` signature updated to accept the shared lock.
+
+### Tests
+- TS: `pnpm test` 245 passed. `pnpm typecheck` clean. `pnpm build` clean.
+- Rust: `cargo test -p server` 28 passed. `cargo test -p sim` 40 passed.
+  `cargo clippy` zero new warnings.
+
+## Review fixes for ae0a806 (Phase 19 + 20)
+
+Twelve findings from a review of the Phase 19/20 commit. The admin screen could
+not have worked as shipped — the two P0s are wiring, not logic.
+
+**P0 — admin API was unreachable from the browser**
+- `nginx-locations.conf`: `/api/` proxied to `server:9876` (the *game* port,
+  which has no `/api` handler). Now proxies to `server:9877`, the axum
+  `API_BIND` port. `/status` stays on 9876 — the game port's peek handler
+  answers it and an e2e Gate 1 test depends on that.
+- `docker-compose.yml`: `server` now sets `API_BIND=0.0.0.0:9877` and exposes
+  9877 on the compose network (`expose`, not `ports` — still not published to
+  the host) so nginx can reach it.
+- `vite.config.ts`: dev server proxies `/api` → `127.0.0.1:9877`, so
+  `apiBase: location.origin` in `src/main.ts` is correct in dev too.
+- Consequence: every call is same-origin, so **no CORS layer is needed** — the
+  `tower-http` dependency added mid-fix was removed again.
+
+**P1**
+- `http.rs`: `db::update_config()` errors were swallowed with `let _ =`; the
+  admin saw "Saved" while the write failed and a restart reverted it. Now
+  persists *before* mutating shared state and returns 500 on failure.
+- `http.rs`: the config read guard was held across `auth::validate_token().await`
+  (a JWKS network fetch). Tokio's `RwLock` is write-preferring, so a slow IdP
+  would have stalled the game loop's own `config.read()` on the player-join
+  path. `auth_config` is now cloned out and the guard dropped first.
+- `main.rs`: config split-brain — `game_loop` held a by-value `ServerConfig` and
+  only read `shared_config` in the two `Welcome` builders, so an admin edit made
+  new joiners see a `roundsToWin` the round FSM was not using, and `bot_count`
+  never changed at all. The loop now re-reads the shared config at each
+  `RoundEvent::Reset`, applying `rounds_to_win` to the live `game::State` and
+  re-sizing the bot budget (human-held slots are never vacated). Applied before
+  the respawn pass so newly-occupied slots get their bot backfilled in the same
+  pass. Admin screen wording changed to "takes effect next round".
+- `main.rs`: `handle_conn` took a startup clone of the config for its `/status`
+  response, so that endpoint reported pre-edit values forever. Now takes the
+  shared lock.
+
+**P2 — the dev-mode admin bypass**
+- `PUT /api/config` skipped the admin gate entirely when `AUTH_REQUIRED=false`,
+  and compose never passed `AUTH_REQUIRED` to the server container at all — so
+  wiring nginx up would have exposed an unauthenticated config-write endpoint.
+  The bypass is now `ApiState::open_admin`, true only when auth is off **and**
+  the API is bound to loopback (a developer's own box). Off-loopback with auth
+  off returns 403 with a message naming the fix. Default `API_BIND` moved from
+  `0.0.0.0:9877` to `127.0.0.1:9877`; compose opts in explicitly.
+- `AUTH_REQUIRED` is now passed through in `docker-compose.yml` and documented
+  in `.env.example`.
+- `GET /api/config` was ungated while `PUT` was admin-only; both now go through
+  the same `require_admin()`.
+
+**P3 — cuts and nits**
+- Deleted `ServerCounters` (a struct wrapping two `&'static AtomicU8` in an
+  `Arc`): `http.rs` reads `crate::ACTIVE_HUMANS` / `SPECTATOR_COUNT` directly.
+- `http::serve()` no longer panics a detached task on bind/serve failure — it
+  logs and returns, and the game server stays up.
+- `http.rs` module doc claimed it "replaces the hand-rolled /status peek". It
+  doesn't; both exist for different ports. Doc corrected to say so.
+- `admin.ts`: `saveBtn.disabled = false` was set on the error path but never
+  set true. Now disabled for the duration of the request via `finally`.
+- `input.ts`: `rebindAction()` silently stole a key from whichever action held
+  it. It now returns that action (or 0), and the bindings tab says
+  "KeyR taken from Reload — it is now unbound."
+
+**Tests**
+- New `server/src/http.rs::gate_tests` (3): auth-off-off-loopback refuses,
+  auth-off-on-loopback allows, auth-on-without-header is 401.
+- New `src/core/input.test.ts` (3): rebind replaces all codes for an action,
+  reports the action a stolen key came from, reports 0 when the key was free.
+- `pnpm test` 248 passed, `pnpm typecheck` clean. `cargo test -p server` 31
+  passed, `cargo test -p sim` 40 passed. No new clippy warnings.
+- Not covered by a test: the bot-budget resize at round reset lives inside the
+  game loop's tick arm and would need the slot table extracted to reach. The
+  rule is one line ("humans keep their slot, otherwise `i < bot_count`").
+
+- Fixed 7 CI lint errors: `const` for settingsScreen/settingsPanel (main.ts), dropped unused `_canvas` param + `const` arrays in screens.ts, `if (nav)` over unused-expression in settings_screen.ts.
+
+## Login gate + Escape fix (post-1.0)
+
+- **Require login to play.** Entry screen now gates the Singleplayer/Multi-player
+  buttons behind auth: disabled + dimmed with a "Log in to play" note until the
+  Keycloak session resolves authenticated (`src/ui/entry.ts`). Starts gated at
+  construction so there's no unauthenticated flash before `initAuth` resolves.
+- **Escape re-broken → fixed.** The browser suppresses the Escape keydown that
+  releases pointer lock, so the keydown-based menu open never fired; the old
+  `pointerlockchange` handler actively re-exited lock to "stay in-game", so Esc
+  did nothing. Now `pointerlockchange` opens the settings screen when lock is lost
+  during a live game (`gameMode !== 'menu'` guards the team-menu path). Settings
+  "Back" re-enters the game via `enterGame` so the pointer re-locks.
+- **Entry re-show fix.** `onBeforeShow` was hiding the entry screen even when
+  showing `entry`, blanking the main menu when returning from settings/admin. Now
+  shows on `entry`, hides otherwise.
+
+## P pause key + team-screen keybind guide (post-1.0)
+
+- **P is now the pause key.** Escape can't be relied on — the browser consumes the
+  keydown that releases pointer lock, so it never reaches the page. Added a `KeyP`
+  keydown handler in `main.ts` that toggles the settings/pause menu (in-game →
+  settings, and back to game when previous was in-game). Kept the
+  `pointerlockchange` fallback so Esc/alt-tab losing lock still opens the menu.
+- **Keybind guide** on the team selection screen (`src/ui/teammenu.ts`): a
+  two-column grid listing Move/Jump/Duck/Walk/Reload/Use/Weapons/Scoreboard/
+  Team menu/Pause and their keys.
+
+## Fix: pause released mouse but showed no menu (post-1.0)
+
+- `screens.show('settings')` / `show('admin')` released pointer lock but never
+  called `settingsScreen.show()` / `adminScreen.show()` — the `onBeforeShow` hook
+  only handled `entry`. So P/Esc freed the mouse to a blank in-game view. Hook now
+  hides all three overlays and shows the one matching the screen id.
+
+## Pause screen (post-1.0)
+
+- P/Esc now opens a dedicated pause menu (`src/ui/pause.ts`) with Resume /
+  Settings / Exit to Menu, instead of jumping straight into the settings screen.
+  Added a `pause` ScreenId; Settings from the pause menu returns to the pause menu
+  on Back; Exit reloads to a clean URL (fresh boot → entry screen).
+
+## Esc backs out of settings (post-1.0)
+
+- Esc (or P) in the settings screen now backs out to wherever it was opened from
+  (pause menu → pause, entry → entry), mirroring the Back button.
+
+## Main menu is a real state + main.ts split into modules (post-1.0)
+
+- The site now boots INTO the main menu instead of building the whole game world
+  and painting a menu overlay on top. `main.ts` (was 1856 lines) is now a ~200-line
+  menu shell: renderer, input, auth, settings, and the entry/settings/admin
+  screens. On a fresh URL it shows the menu and stops — no physics, no WASM sim,
+  no map/prop/character loading, no game loop. Verified in-browser: a fresh load
+  makes zero .glb/.wasm/session-chunk requests.
+- The game world + fixed-timestep loop moved to `src/game/session.ts`
+  (`startGameSession(ctx)`), dynamic-imported only on a game boot
+  (`?bots=&rounds=` from Singleplayer, `?connect=` from Multi-player). Vite splits
+  it into its own 2.2 MB chunk the menu never downloads. "Exit to Menu" reloads to
+  a clean URL, which remains the whole teardown story.
+- Extracted `src/game/props.ts` (prop placements, breakable metadata, and the
+  placement math — the collider-box computation previously existed in 3 copies:
+  placeProps, the sim mirror, and restoreBreakables; now one `propBoxAt`) and
+  `src/game/characters.ts` (CT rig template, material flattening, team tinting —
+  the tint traverse previously existed in 3 copies; now one `tintCharacter`).
+- `ScreenManager` now boots in `'entry'` instead of `'in-game'`; the keydown
+  handling split with it (shell owns settings-back, session owns pause/resume;
+  pause overlay visibility is a session-registered `onBeforeShow` hook).
+- Deleted the dead `createSettingsPanel` wiring from boot (created and immediately
+  hidden since the Phase 19 screens replaced it) and its never-reachable
+  `disconnectViaReload`. `core/settings.ts` itself is untouched.
+- `pnpm typecheck` green, `pnpm test` 248/248 green, `pnpm build` green.
+  Verified in Chrome: menu → SP boot (loading → team menu → spawn as T) →
+  pause → Exit to Menu → clean menu.
+- CLAUDE.md/AGENTS.md repo-layout notes updated to match.
+
+## Fix: MP remote entity yaw interpolation across ±π
+
+- Bug: `src/net/interpolation.ts` lerped remote yaw with a plain linear lerp.
+  Server bot yaw jumps discontinuously (set to `atan2(-dx,-dz)` per tick at
+  corners/target switches) and wraps at ±π, so a lerp from e.g. +3.0 to -3.0
+  swept the long way through 0 — remote bots whipped/spun ~360° every corner.
+  Read as "bot movement/behaviour completely broken" in MP; position was fine.
+- Fix: shortest-arc `lerpAngle` for yaw. Added a wrap-crossing test
+  (all prior interp tests used yaw=0, so the gap was untested).
+- typecheck + interpolation tests green.
+
+## Model-view CLI plan
+
+Wrote `docs/plan-modelview-cli.md` — detailed spec for a headless `pnpm view <model.glb>` tool (approach A: `gl` + `pngjs`, single `tools/modelview/view.ts` run via tsx). Renders any project `.glb` from six canned angles to PNGs for asset refinement without booting the game. Plan-only; no code yet.
+
+## Feature: server-authoritative scoreboard K/D + multiplayer usernames
+
+- **Broken scoreboard:** `session.ts` fed the board fake data — the "kills"
+  column was the team round-win score, deaths were hardcoded 0, bots were 0/0.
+  No per-player K/D existed anywhere.
+- **Multiplayer (server-authoritative):** `Slot` now owns `kills`/`deaths`; the
+  kill resolver in `server/src/main.rs` increments `victim.deaths` +
+  `killer.kills`. Both ride every `Snapshot` entity (`EntityState.kills`/`deaths`),
+  so all clients render the identical board. `build_snapshot` now includes
+  occupied-but-dead players (F_ALIVE reflects `s.alive`) so the board shows
+  everyone mid-respawn; vacated slots (no bot, no human) stay excluded.
+  `session.ts` builds the MP roster straight off the latest snapshot.
+- **Usernames:** new MP-popup username field (prefilled with the signed-in
+  display name, editable, ≤24 chars). Rides `?name=` across the connect reload →
+  `Join.name` → `Slot.display_name` (falls back to JWT name, then "player") →
+  `EntityState.name` in snapshots. Empty name = a bot → client renders "Bot N".
+- **Single-player:** tallied locally at the kill sites (`humanKills`/`Deaths`,
+  `Enemy.kills`/`deaths`).
+- **Wire:** `EntityState` gained `kills:u16, deaths:u16, name:{len:u8,utf8}`;
+  `Join` gained an optional trailing `name` string. Mirrored in
+  `sim/src/protocol.rs` + `src/net/protocol.ts` in lockstep; golden-byte tests
+  updated on both ends. `EntityState` lost `Copy` (now holds a `String`).
+- Docs: `docs/netcode.md` §3.2 + `docs/connect-and-scoreboard.md` §3–4 updated.
+- Rust `cargo test` (49 tests) + `pnpm test` (252 tests) + `pnpm typecheck` green.

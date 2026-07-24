@@ -2,6 +2,9 @@
  * Keyboard/mouse -> wishdir bitmask + look delta, and pointer lock lifecycle.
  * Movement code (Phase 1) reads `InputState.buttons` and `wishdir`/`yaw`/`pitch`
  * every tick; this module only produces those values, it does not interpret them.
+ *
+ * Phase 19.3: key rebind support — KEY_TO_BUTTON is now a mutable map, with
+ * `rebindAction` and `getBinding` for the settings screen.
  */
 
 export const Buttons = {
@@ -16,7 +19,30 @@ export const Buttons = {
   WALK: 1 << 8,
 } as const;
 
-const KEY_TO_BUTTON: Record<string, number> = {
+export type ActionId = number;
+
+/** Display names for each action, used by the settings screen bindings tab. */
+export const ACTION_NAMES: Record<ActionId, string> = {
+  [Buttons.FORWARD]: 'Forward',
+  [Buttons.BACK]: 'Back',
+  [Buttons.LEFT]: 'Left',
+  [Buttons.RIGHT]: 'Right',
+  [Buttons.JUMP]: 'Jump',
+  [Buttons.DUCK]: 'Duck',
+  [Buttons.ATTACK]: 'Fire',
+  [Buttons.RELOAD]: 'Reload',
+  [Buttons.WALK]: 'Walk',
+};
+
+/** Order in which actions appear in the bindings tab. */
+export const ACTION_ORDER: ActionId[] = [
+  Buttons.FORWARD, Buttons.BACK, Buttons.LEFT, Buttons.RIGHT,
+  Buttons.JUMP, Buttons.DUCK, Buttons.WALK,
+  Buttons.ATTACK, Buttons.RELOAD,
+];
+
+/** Default key bindings (mutable copy seeded from this on init). */
+const DEFAULT_BINDINGS: Record<string, number> = {
   KeyW: Buttons.FORWARD,
   ArrowUp: Buttons.FORWARD,
   KeyS: Buttons.BACK,
@@ -32,6 +58,33 @@ const KEY_TO_BUTTON: Record<string, number> = {
   ShiftLeft: Buttons.WALK,
   ShiftRight: Buttons.WALK,
 };
+
+/** Mutable key→action map (code → button bitmask). */
+const _codeToAction = new Map<string, number>(Object.entries(DEFAULT_BINDINGS));
+
+/**
+ * Clear all bindings for an action and set a single new code. Binding a key
+ * that another action holds takes it away from that action — returns the
+ * action that lost the key (or 0) so the settings screen can say so.
+ */
+export function rebindAction(action: ActionId, code: string): ActionId {
+  const stolenFrom = _codeToAction.get(code) ?? 0;
+  for (const [c, a] of _codeToAction) {
+    if (a === action) _codeToAction.delete(c);
+  }
+  _codeToAction.set(code, action);
+  return stolenFrom === action ? 0 : stolenFrom;
+}
+
+/** Return all key codes bound to an action, sorted. */
+export function getBinding(action: ActionId): string[] {
+  const codes: string[] = [];
+  for (const [c, a] of _codeToAction) {
+    if (a === action) codes.push(c);
+  }
+  codes.sort();
+  return codes;
+}
 
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
 
@@ -109,7 +162,7 @@ export function createInputManager(target: HTMLElement): InputManager {
     if (e.code === 'Digit1') state.weaponSlot = 1;
     else if (e.code === 'Digit2') state.weaponSlot = 2;
     else if (e.code === 'KeyM' && document.pointerLockElement === target) state.teamMenuToggle = 1;
-    const bit = KEY_TO_BUTTON[e.code];
+    const bit = _codeToAction.get(e.code);
     if (bit !== undefined) state.buttons |= bit;
     if (document.pointerLockElement === target) {
       lockKeyboard();
@@ -119,7 +172,7 @@ export function createInputManager(target: HTMLElement): InputManager {
 
   function onKeyUp(e: KeyboardEvent): void {
     if (e.code === 'Tab') { state.scoreboard = false; return; }
-    const bit = KEY_TO_BUTTON[e.code];
+    const bit = _codeToAction.get(e.code);
     if (bit !== undefined) state.buttons &= ~bit;
     if (document.pointerLockElement === target) {
       e.preventDefault();

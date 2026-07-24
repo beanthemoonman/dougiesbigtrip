@@ -55,7 +55,9 @@ src/
   player/        movement (Source port), camera, viewmodel, stamina/duck
   weapons/       defs, hitscan, spray patterns, recoil, ammo
   ai/            bot FSM, nav queries, aim model
-  game/          round state, spawns, scoring, damage/hitboxes
+  game/          round state, spawns, scoring, damage/hitboxes; session.ts is the
+                 whole game world + loop (main.ts is just the menu shell that
+                 dynamic-imports it on a ?bots=/?connect= boot)
   ui/            HUD, scoreboard, menus
 assets/
   maps/          .glb per map + baked navmesh blob + lightmap KTX2

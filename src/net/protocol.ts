@@ -26,11 +26,13 @@ export interface Welcome {
   players: number;
   spectators: number;
   specCap: number;
+  /** Phase 16: configurable rounds-to-win from the server (defaults to 0 for old-form). */
+  roundsToWin: number;
 }
 
 export function encodeWelcome(w: Welcome): Uint8Array {
   const mapBytes = new TextEncoder().encode(w.map);
-  const buf = new ArrayBuffer(1 + 1 + 1 + 1 + mapBytes.length + 4 + 4 + 4);
+  const buf = new ArrayBuffer(1 + 1 + 1 + 1 + mapBytes.length + 4 + 4 + 5);
   const v = new DataView(buf);
   let off = 0;
   v.setUint8(off, TAG_WELCOME);
@@ -54,6 +56,8 @@ export function encodeWelcome(w: Welcome): Uint8Array {
   v.setUint8(off, w.spectators);
   off += 1;
   v.setUint8(off, w.specCap);
+  off += 1;
+  v.setUint8(off, w.roundsToWin);
   return new Uint8Array(buf);
 }
 
@@ -77,25 +81,62 @@ export function decodeWelcome(data: Uint8Array): Welcome | null {
   const players = data[off + 1] ?? 0;
   const spectators = data[off + 2] ?? 0;
   const specCap = data[off + 3] ?? 0;
-  return { yourSlot, map, seed, serverTick, maxPlayers, players, spectators, specCap };
+  // Phase 16 rounds-to-win; default to 0 for old-form Welcome.
+  const roundsToWin = data[off + 4] ?? 0;
+  return { yourSlot, map, seed, serverTick, maxPlayers, players, spectators, specCap, roundsToWin };
 }
 
 // ---------------------------------------------------------------
-// Join — client → server team choice. Phase 9.
+// Join — client → server team choice. Phase 9 / Phase 17.4.
 // team: 0 = T, 1 = CT, 2 = spectator.
+// token: optional access-token (JWT) sent when AUTH_REQUIRED.
+//
+// Wire format: [TAG_JOIN, PROTOCOL_VERSION, team, token_len_lo, token_len_hi, …bytes]
+// token_len 0 = no token (backwards-compatible with old 3-byte Join).
 // ---------------------------------------------------------------
 
 export interface Join {
   team: number;
+  token?: string;
+  /** Phase 21: player-picked display handle. */
+  name?: string;
 }
 
 export function encodeJoin(j: Join): Uint8Array {
-  return new Uint8Array([TAG_JOIN, PROTOCOL_VERSION, j.team]);
+  // [TAG, VER, team, tlen_lo, tlen_hi, ...token, nlen_lo, nlen_hi, ...name]
+  const enc = new TextEncoder();
+  const parts = [j.token, j.name].map((s) => (s ? enc.encode(s) : new Uint8Array(0)));
+  const total = 3 + parts.reduce((n, p) => n + 2 + p.length, 0);
+  const buf = new Uint8Array(total);
+  buf[0] = TAG_JOIN;
+  buf[1] = PROTOCOL_VERSION;
+  buf[2] = j.team;
+  let o = 3;
+  for (const p of parts) {
+    buf[o++] = p.length & 0xFF;
+    buf[o++] = (p.length >> 8) & 0xFF;
+    buf.set(p, o);
+    o += p.length;
+  }
+  return buf;
 }
 
 export function decodeJoin(data: Uint8Array): Join | null {
   if (data.length < 3 || data[0] !== TAG_JOIN || data[1] !== PROTOCOL_VERSION) return null;
-  return { team: data[2]! };
+  const team = data[2]!;
+  let o = 3;
+  const readStr = (): string | undefined => {
+    if (data.length < o + 2) return undefined;
+    const len = data[o]! | (data[o + 1]! << 8);
+    o += 2;
+    let s: string | undefined;
+    if (len > 0 && data.length >= o + len) s = new TextDecoder().decode(data.slice(o, o + len));
+    o += len;
+    return s;
+  };
+  const token = readStr();
+  const name = readStr();
+  return { team, token, name };
 }
 
 // ---------------------------------------------------------------
@@ -204,6 +245,10 @@ export interface EntityState {
   armor: number;
   weapon: number;
   ammo: number;
+  /** Phase 21: server-authoritative match tally + display name (see protocol.rs). */
+  kills: number;
+  deaths: number;
+  name: string;
 }
 
 export interface RoundState {
@@ -239,7 +284,7 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
   const count = v.getUint8(o); o += 1;
   const entities: EntityState[] = [];
   for (let i = 0; i < count; i++) {
-    if (data.length < o + 38) return null;
+    if (data.length < o + 43) return null;
     const slot = v.getUint8(o); o += 1;
     const flags = v.getUint8(o); o += 1;
     const f = (): number => { const n = v.getFloat32(o, true); o += 4; return n; };
@@ -251,7 +296,12 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
     const armor = v.getUint8(o); o += 1;
     const weapon = v.getUint8(o); o += 1;
     const ammo = v.getUint8(o); o += 1;
-    entities.push({ slot, flags, pos, vel, yaw, pitch, health, armor, weapon, ammo });
+    const kills = v.getUint16(o, true); o += 2;
+    const deaths = v.getUint16(o, true); o += 2;
+    const nameLen = v.getUint8(o); o += 1;
+    if (data.length < o + nameLen) return null;
+    const name = new TextDecoder().decode(data.slice(o, o + nameLen)); o += nameLen;
+    entities.push({ slot, flags, pos, vel, yaw, pitch, health, armor, weapon, ammo, kills, deaths, name });
   }
   const evCount = v.getUint8(o); o += 1;
   const events: GameEvent[] = [];

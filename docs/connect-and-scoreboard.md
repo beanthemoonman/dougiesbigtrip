@@ -51,17 +51,25 @@ interface PlayerScore {
 
 ## 3. K/D feed
 
-- Kills accumulate **client-side** from `Snapshot.events`: `kill(slot, by)` → `players[by].kills++`,
-  `players[slot].deaths++`. No new wire field for K/D.
-- The accumulator is fed where snapshots are decoded (6.6). Before that exists, the roster is the
-  static default and the board reads zeros — acceptable, flagged, not blocking.
+- **Multiplayer (Phase 21): server-authoritative.** Each `Slot` on the server owns a `kills`/`deaths`
+  tally; the kill resolver increments `victim.deaths` and `killer.kills`. Both ride every
+  `Snapshot` entity (`EntityState.kills`/`deaths`), so all clients render the identical board — no
+  client-side accumulation. `session.ts` builds the MP roster straight off the latest snapshot's
+  entities (team from `F_TEAM_CT`, alive from `F_ALIVE`). Occupied-but-dead players are included in
+  the snapshot (see `build_snapshot`) so the board shows everyone mid-respawn; truly-empty slots
+  (human left, no bot yet) are excluded.
+- **Single-player: tallied locally.** No server, so `session.ts` counts at the kill sites —
+  `humanKills`/`humanDeaths` for the local player, `Enemy.kills`/`deaths` per bot.
 
-## 4. Known wire-format gaps (not this phase)
+## 4. Player names on the wire (Phase 21)
 
-| Gap | Why deferred |
-|---|---|
-| **Player names on the wire** | `Welcome`/`Snapshot` carry no name field. Default to `"Bot N"`. Real names need a field added to `src/net/protocol.ts` **and** `sim/src/protocol.rs` in lockstep — a protocol change, not UI. |
-| **Genuine 3v3 server** | The stub server sends `SPECTATOR` and holds no slots. Real 3v3 = server-side `MAX_PLAYERS = 6` + team split in the slot manager (6.4). The board renders whatever roster it's handed; the default roster fakes 3v3 for the demo. |
+- The player picks a handle in the Multi-player popup (prefilled with the signed-in display name,
+  editable, ≤24 chars). It rides the `?name=` param across the connect reload, then goes out in the
+  `Join` message (`Join.name`, alongside the auth token).
+- The server stores it as `Slot.display_name` (falling back to the JWT name, then `"player"`) and
+  sends it in every `Snapshot` entity (`EntityState.name`). An empty name = a bot; the client
+  renders `"Bot N"`. `Join` and `EntityState` changed in lockstep in `src/net/protocol.ts` **and**
+  `sim/src/protocol.rs` — the on-the-wire contract.
 
 ## Definition of Done (HUD / UI rows from CLAUDE.md)
 

@@ -127,7 +127,11 @@ tag: u8 = SNAP
 serverTick: u32
 ackSeq: u32               // highest CommandFrame consumed for THIS client → reconciliation anchor
 entities[]:  { slot:u8, flags:u8 (alive|ducked|team), pos:vec3f (feet), vel:vec3f,
-               yaw:f32, pitch:f32, health:u8, armor:u8, weapon:u8, ammo:u8 }  // changed fields only
+               yaw:f32, pitch:f32, health:u8, armor:u8, weapon:u8, ammo:u8,
+               kills:u16, deaths:u16, name:{len:u8, utf8} }  // Phase 21: server-authoritative
+                                                             // scoreboard tally + display handle
+                                                             // (empty name = a bot). Occupied-but-
+                                                             // dead players are included.
 events[]:    kill(slot,by) | shotTracer(slot,from,to,weapon) | spawn(slot) | roundPhase(phase)
 round:       { phase:u8, timeLeftMs:u32, scoreT:u16, scoreCT:u16 }
 ```

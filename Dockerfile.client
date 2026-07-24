@@ -31,6 +31,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --from=wasm /app/sim/pkg ./sim/pkg/
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN pnpm install --frozen-lockfile
 
 COPY index.html tsconfig.json vite.config.ts vitest.config.ts ./
@@ -43,9 +44,21 @@ RUN pnpm build
 # --- Stage 3: nginx serve ---------------------------------------------
 FROM nginx:alpine
 
+# ponytail: self-signed cert baked into the image so `docker compose up` gives
+# working TLS with zero setup. The private key ships inside the layer — fine for
+# dev, never for prod. In prod mount real certs over /etc/nginx/certs (see the
+# commented volume in docker-compose.yml); nginx.conf reads the same paths.
+RUN apk add --no-cache openssl && \
+    mkdir -p /etc/nginx/certs && \
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout /etc/nginx/certs/server.key \
+      -out /etc/nginx/certs/server.crt \
+      -subj "/CN=localhost"
+
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx-locations.conf /etc/nginx/nginx-locations.conf
 
-EXPOSE 80
+EXPOSE 80 443
 
 CMD ["nginx", "-g", "daemon off;"]

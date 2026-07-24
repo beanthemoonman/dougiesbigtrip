@@ -687,7 +687,9 @@ hardened. Nothing new to build.
 
 # Post-1.0: Configuration, Auth, Persistence, Screens
 
-Phases 16–20 come from the notebook feature notes (`docs/plan-post-1.0-config-auth.md`). They
+Phases 16–20 come from the notebook feature notes. The detailed, per-increment breakdown —
+codebase survey, cross-cutting decisions, DB schema, sequencing — lives in
+**`docs/plan-post-1.0-config-auth.md`**; the sections below are the summary. They
 turn the demo into a deployed, multi-user product: configurable matches, Google login brokered
 through Keycloak, a database of record, and the menu/admin screens around it.
 
@@ -724,10 +726,15 @@ Configurable scope:
 - **Server-side:** bot count, map, rounds-to-win — same knobs, applied authoritatively (the
   admin surface for these arrives in Phase 20).
 
-- [ ] Typed config object (extend `src/game/` round-config, not scattered constants) with
-      validated bounds — reject over-max player counts at the boundary, SP and server both.
-- [ ] SP path reads config at match start (bot count / map / rounds-to-win).
-- [ ] MP client can target a chosen server address; server applies its configured knobs on start.
+- [x] Typed config object (extend `src/game/` round-config, not scattered constants) with
+      validated bounds — reject over-max player counts at the boundary, SP and server both. (16.1)
+- [x] SP path reads config at match start (bot count / map / rounds-to-win). (16.2)
+- [x] Server-side config (`ServerConfig` from env vars, validated bounds, `GET /status` reports
+      effective config, Welcome includes `roundsToWin`). (16.3)
+      *Review fixes:* match reset now emits `Reset` so the server respawns after a match ends;
+      `LIMITS.botCount` capped at 6 = server `MAX_SLOTS`; MP banner consumes
+      `Welcome.roundsToWin` via `isMatchOver()`. `pnpm test` 231 / `cargo test -p server` 19 green.
+- [x] MP client can target a chosen server address; server applies its configured knobs on start. (16.4)
 
 **Exit test:** Start SP matches with different bot counts / rounds-to-win and see them honoured;
 point the MP client at a server started with a non-default config and observe those values in play.
@@ -739,11 +746,25 @@ point the MP client at a server started with a non-default config and observe th
 Google login, brokered through **Keycloak** (its own service). App code never sees Google
 directly — it trusts Keycloak tokens.
 
-- [ ] Reverse proxy terminates HTTPS/WSS and routes to Client / Server / Auth (per the diagram).
-- [ ] Keycloak configured as an OAuth 2.0 broker to Google.
-- [ ] Admin capability gated by the Keycloak role **`role_admin`** (claim checked server-side, not
-      trusted from the client).
-- [ ] Server validates the Keycloak token on connect; unauthenticated users can't join.
+**New container.** `docker-compose.yml` currently runs two services (`server`, `client`); this
+phase adds a third, `auth`. It does not start without the Phase 18 `db` container, so bring that
+up first.
+
+- [x] **17.1** Promote nginx to single ingress — terminates TLS (self-signed for dev), proxies
+      `/`→client, `/ws`→server WebSocket, `/status`+`/api/`→server HTTP, `/auth/`→Keycloak (placeholder).
+      Server stops publishing host ports (`expose:` only). Client defaults to `wss://<host>/ws` over HTTPS.
+- [x] **17.2** `auth` service added to `docker-compose.yml` — official Keycloak 26 image, `expose:` only,
+      `depends_on: db: {condition: service_healthy}`, realm-export JSON mounted in, Google OAuth
+      client id/secret from env (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET placeholders).
+      `start-dev --import-realm` for local; `KC_DB_SCHEMA=keycloak`. Health check on
+      `/health/ready`.
+- [x] **17.3** Client-side login flow — Authorization Code + PKCE via `keycloak-js`, token in memory
+      only, expose `auth.name`/`sub`/`isAdmin`/`token()`.
+- [x] **17.4** Server-side token validation — verify JWT signature against realm JWKS, check
+      `exp`/`iss`/`aud`, reject unauthenticated when `AUTH_REQUIRED=true`, `role_admin` checked
+      server-side only. `AUTH_REQUIRED=false` (default) skips validation. JWKS is cached with a
+      900 s TTL and refetched on key rotation (rate-limited); `aud` accepts only the configured
+      client, backed by an audience mapper in the realm export.
 
 **Exit test:** A fresh user signs in with Google, lands authenticated; a user with `role_admin`
 is recognised as admin and one without is not — verified from the token server-side, not the UI.
@@ -760,9 +781,16 @@ DB holds:
 - **Keycloak schema** (its own tables)
 - **Server configuration** (the Phase 16 knobs, made durable and admin-editable)
 
-- [ ] DB provisioned behind the proxy; Server and Auth both connect.
-- [ ] Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
-- [ ] Users row created/updated on first authenticated login.
+**New container.** Adds a fourth compose service, `db`, and it is the one the other two wait on
+— stand it up before the Phase 17 `auth` container.
+
+- [x] **18.1** `db` service added to `docker-compose.yml` — Postgres 16 image, **named volume**
+      (`pgdata`), `pg_isready` health check, `expose:` only, credentials from `.env`. `server`
+      depends on `db: service_healthy`. `DATABASE_URL` env var. Migrations (`server/migrations/`)
+      applied on server start via `sqlx::migrate!`. When unset, server runs without persistence
+      (bare `cargo run` still works).
+- [x] **18.2** Server config persisted and loaded on start (replaces any in-memory/flag config from 16).
+- [x] **18.3** Users row created/updated on first authenticated login.
 
 **Exit test:** Restart the stack — server config survives, a returning user is recognised from
 their stored record, Keycloak state persists.
@@ -774,12 +802,15 @@ their stored record, Keycloak state persists.
 The menu shell around the game. Plain DOM overlay (no React — see `CLAUDE.md`).
 
 **Entry screen:**
-- [ ] Title: **"Counter Douglas"**.
-- [ ] Top-right `Hello, {name} ▾` menu → **Settings**, **Logout** (name from the auth token).
-- [ ] Primary buttons: **Singleplayer**, **Multi-player** (wire to the Phase 16 config flows).
+- [x] Title: **"Counter Douglas"**.
+- [x] Top-right `Hello, {name} ▾` menu → **Settings**, **Logout** (name from the auth token).
+- [x] Primary buttons: **Singleplayer**, **Multi-player** (wire to the Phase 16 config flows).
 
 **Settings screen:**
-- [ ] Left-nav sections: **Graphics**, **Game**, **Bindings**.
+- [x] Left-nav sections: **Graphics**, **Game**, **Bindings**.
+
+**Exit test:** Signed-in user sees their name, opens Settings, moves between the three sections,
+and launches SP/MP from the entry buttons.
 
 **Exit test:** Signed-in user sees their name, opens Settings, moves between the three sections,
 and launches SP/MP from the entry buttons.
@@ -790,8 +821,16 @@ and launches SP/MP from the entry buttons.
 
 Server-admin surface for the Phase 16/18 knobs. Visible **only to `role_admin`**.
 
-- [ ] Admin screen exposes server bot count, map, rounds-to-win; writes persist (Phase 18).
-- [ ] Entirely hidden and server-refused for non-admins (gate on the token role, both sides).
+- [x] Admin screen exposes server bot count, map, rounds-to-win; writes persist (Phase 18).
+- [x] Entirely hidden and server-refused for non-admins (gate on the token role, both sides).
+      *Review fixes (ae0a806):* nginx proxied `/api/` to the game port, so the admin API was
+      unreachable — now `server:9877`, with a matching vite dev proxy (same-origin, no CORS).
+      DB persist errors no longer swallowed (500 instead of a false "Saved"). Config read guard
+      no longer held across the JWKS fetch. Admin edits now apply at the next round reset
+      (`rounds_to_win` + bot budget) instead of only appearing in `Welcome`. The
+      `AUTH_REQUIRED=false` bypass is restricted to a loopback-bound API; `API_BIND` defaults to
+      `127.0.0.1:9877` and compose opts in to `0.0.0.0` explicitly.
+      `pnpm test` 248 / `cargo test -p server` 31 green.
 
 **Exit test:** A `role_admin` user changes the server's bot count / map / rounds-to-win, the
 change persists and takes effect; a non-admin cannot see or reach the screen.

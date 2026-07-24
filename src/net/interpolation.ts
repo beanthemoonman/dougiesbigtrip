@@ -17,6 +17,16 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+// Yaw wraps at ±π. A plain lerp from +3.0 to -3.0 sweeps the long way through
+// 0 (a full ~360° whip); take the shortest arc instead. Server bot yaw jumps
+// discontinuously at corners/target switches, so this is not optional.
+function lerpAngle(a: number, b: number, t: number): number {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
 function lerpPos(
   a: readonly [number, number, number],
   b: readonly [number, number, number],
@@ -91,7 +101,7 @@ export function createInterpolationBuffer() {
       const pos = hiEnt
         ? lerpPos(e.pos, hiEnt.pos, t)
         : e.pos;
-      const yaw = hiEnt ? lerp(e.yaw, hiEnt.yaw, t) : e.yaw;
+      const yaw = hiEnt ? lerpAngle(e.yaw, hiEnt.yaw, t) : e.yaw;
       result.push({
         slot: e.slot,
         pos,

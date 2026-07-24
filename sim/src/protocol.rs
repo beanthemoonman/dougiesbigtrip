@@ -19,12 +19,14 @@ pub struct Welcome {
     pub players: u8,
     pub spectators: u8,
     pub spec_cap: u8,
+    /// Phase 16: rounds-to-win for match end (defaults to 0 for old-form Welcome).
+    pub rounds_to_win: u8,
 }
 
 impl Welcome {
     pub fn encode(&self) -> Vec<u8> {
         let map_bytes = self.map.as_bytes();
-        let len = 1 + 1 + 1 + 1 + map_bytes.len() + 4 + 4 + 4;
+        let len = 1 + 1 + 1 + 1 + map_bytes.len() + 4 + 4 + 5;
         let mut buf = Vec::with_capacity(len);
         buf.push(TAG_WELCOME);
         buf.push(PROTOCOL_VERSION);
@@ -37,6 +39,7 @@ impl Welcome {
         buf.push(self.players);
         buf.push(self.spectators);
         buf.push(self.spec_cap);
+        buf.push(self.rounds_to_win);
         buf
     }
 
@@ -62,6 +65,8 @@ impl Welcome {
         let players = data.get(off + 1).copied().unwrap_or(0);
         let spectators = data.get(off + 2).copied().unwrap_or(0);
         let spec_cap = data.get(off + 3).copied().unwrap_or(0);
+        // Phase 16 rounds-to-win; default to 0 for old-form Welcome.
+        let rounds_to_win = data.get(off + 4).copied().unwrap_or(0);
         Some(Welcome {
             your_slot,
             map,
@@ -71,30 +76,68 @@ impl Welcome {
             players,
             spectators,
             spec_cap,
+            rounds_to_win,
         })
     }
 }
 
 // ---------------------------------------------------------------
-// Join — client → server team choice. Phase 9.
+// Join — client → server team choice. Phase 9 / Phase 17.4.
 // team: 0 = T, 1 = CT, 2 = spectator.
+// token: optional access-token string (JWT), sent when AUTH_REQUIRED.
+//
+// Wire format (backwards-compatible):
+//   [TAG_JOIN, PROTOCOL_VERSION, team, token_len_lo, token_len_hi, …bytes]
+// Old 3-byte format still decodes as token=None.
 // ---------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Join {
     pub team: u8,
+    pub token: Option<String>,
+    /// Phase 21: the player-picked display handle. Falls back to the token's
+    /// name server-side when absent (old-form Join has no name section).
+    pub name: Option<String>,
 }
 
 impl Join {
     pub fn encode(&self) -> Vec<u8> {
-        vec![TAG_JOIN, PROTOCOL_VERSION, self.team]
+        // [TAG, VER, team, tlen_lo, tlen_hi, ...token, nlen_lo, nlen_hi, ...name]
+        let mut buf = vec![TAG_JOIN, PROTOCOL_VERSION, self.team];
+        for part in [self.token.as_deref(), self.name.as_deref()] {
+            let bytes = part.map(str::as_bytes).unwrap_or(&[]);
+            buf.push((bytes.len() & 0xFF) as u8);
+            buf.push(((bytes.len() >> 8) & 0xFF) as u8);
+            buf.extend_from_slice(bytes);
+        }
+        buf
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
         if data.len() < 3 || data[0] != TAG_JOIN || data[1] != PROTOCOL_VERSION {
             return None;
         }
-        Some(Join { team: data[2] })
+        let team = data[2];
+        let mut off = 3;
+        // Two length-prefixed strings: token, then name. Either may be absent
+        // (old-form Join stops after the token, or after team).
+        let mut read_str = || -> Option<String> {
+            if data.len() < off + 2 {
+                return None;
+            }
+            let len = u16::from_le_bytes([data[off], data[off + 1]]) as usize;
+            off += 2;
+            let s = if len > 0 && data.len() >= off + len {
+                String::from_utf8(data[off..off + len].to_vec()).ok()
+            } else {
+                None
+            };
+            off += len;
+            s
+        };
+        let token = read_str();
+        let name = read_str();
+        Some(Join { team, token, name })
     }
 }
 
@@ -244,7 +287,7 @@ impl GameEvent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EntityState {
     pub slot: u8,
     pub flags: u8,
@@ -256,6 +299,13 @@ pub struct EntityState {
     pub armor: u8,
     pub weapon: u8,
     pub ammo: u8,
+    /// Phase 21: server-authoritative match tally + display name, so every
+    /// client renders the same scoreboard. ponytail: name ships every snapshot
+    /// (it only changes on join) — cheap for a ≤12-player deathmatch; move to a
+    /// join-time roster message if the player cap ever grows.
+    pub kills: u16,
+    pub deaths: u16,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -295,6 +345,11 @@ impl Snapshot {
             buf.push(e.armor);
             buf.push(e.weapon);
             buf.push(e.ammo);
+            buf.extend_from_slice(&e.kills.to_le_bytes());
+            buf.extend_from_slice(&e.deaths.to_le_bytes());
+            let name_bytes = e.name.as_bytes();
+            buf.push(name_bytes.len() as u8);
+            buf.extend_from_slice(name_bytes);
         }
         buf.push(self.events.len() as u8);
         for ev in &self.events {
@@ -328,6 +383,12 @@ impl Snapshot {
                 armor: r.u8()?,
                 weapon: r.u8()?,
                 ammo: r.u8()?,
+                kills: r.u16()?,
+                deaths: r.u16()?,
+                name: {
+                    let n = r.u8()? as usize;
+                    String::from_utf8(r.take(n)?.to_vec()).ok()?
+                },
             });
         }
         let ev_count = r.u8()? as usize;
@@ -397,6 +458,7 @@ mod tests {
             players: 5,
             spectators: 2,
             spec_cap: 7,
+            rounds_to_win: 16,
         };
         let encoded = original.encode();
         let decoded = Welcome::decode(&encoded).expect("decode failed");
@@ -409,9 +471,10 @@ mod tests {
         let mut buf = Welcome {
             your_slot: 1, map: "x".into(), seed: 0, server_tick: 0,
             max_players: 0, players: 0, spectators: 0, spec_cap: 0,
+            rounds_to_win: 0,
         }.encode();
-        // Snip off the 4 capacity bytes.
-        buf.truncate(buf.len() - 4);
+        // Snip off the 5 capacity + rounds-to-win bytes.
+        buf.truncate(buf.len() - 5);
         let w = Welcome::decode(&buf).expect("old welcome decode failed");
         assert_eq!(w.max_players, 0);
         assert_eq!(w.players, 0);
@@ -428,6 +491,7 @@ mod tests {
             players: 10,
             spectators: 3,
             spec_cap: 7,
+            rounds_to_win: 0,
         };
         let encoded = original.encode();
         let decoded = Welcome::decode(&encoded).expect("decode failed");
@@ -451,6 +515,7 @@ mod tests {
             players: 0,
             spectators: 0,
             spec_cap: 0,
+            rounds_to_win: 0,
         };
         let mut buf = welcome.encode();
         buf[1] = 99;
@@ -460,10 +525,25 @@ mod tests {
     #[test]
     fn join_round_trip() {
         for team in [0u8, 1, 2] {
-            let j = Join { team };
+            let j = Join { team, token: None, name: None };
             let decoded = Join::decode(&j.encode()).expect("join decode failed");
             assert_eq!(decoded, j);
         }
+    }
+
+    #[test]
+    fn join_with_token_round_trip() {
+        let token = Some("eyJhbGciOiJSUzI1NiJ9.test".to_string());
+        let j = Join { team: 1, token: token.clone(), name: Some("Dougy".into()) };
+        let decoded = Join::decode(&j.encode()).expect("join decode failed");
+        assert_eq!(decoded, j);
+    }
+
+    #[test]
+    fn join_name_without_token_round_trip() {
+        let j = Join { team: 0, token: None, name: Some("guest".into()) };
+        let decoded = Join::decode(&j.encode()).expect("join decode failed");
+        assert_eq!(decoded, j);
     }
 
     #[test]
@@ -546,6 +626,9 @@ mod tests {
                     armor: 0,
                     weapon: 1,
                     ammo: 30,
+                    kills: 4,
+                    deaths: 1,
+                    name: "Dougy".into(),
                 },
                 EntityState {
                     slot: 3,
@@ -558,6 +641,9 @@ mod tests {
                     armor: 50,
                     weapon: 2,
                     ammo: 12,
+                    kills: 0,
+                    deaths: 0,
+                    name: String::new(),
                 },
             ],
             events: vec![],
@@ -589,6 +675,9 @@ mod tests {
                 armor: 0,
                 weapon: 1,
                 ammo: 30,
+                kills: 2,
+                deaths: 3,
+                name: "CT1".into(),
             }],
             events: vec![],
             round: RoundState { phase: 1, time_left_ms: 60000, score_t: 2, score_ct: 3 },

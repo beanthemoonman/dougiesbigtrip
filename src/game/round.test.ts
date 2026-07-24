@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { createRoundState, DEFAULT_ROUND, tickRound, type RoundConfig } from './round';
+import { createRoundState, DEFAULT_MATCH, isMatchOver, LIMITS, tickRound, validateMatchConfig, type MatchConfig } from './round';
 
 // T0/T1: the round state machine. Deterministic timers, no world.
-const CFG: RoundConfig = { freezetime: 3, roundTime: 10, endDelay: 2 };
+const CFG: MatchConfig = { freezetime: 3, roundTime: 10, endDelay: 2, map: 'de_douglas', botCount: 6, roundsToWin: 16 };
 const DT = 1 / 64;
 
 /** Tick until `event` fires (or `maxTicks`), returning the tick count. */
 function runUntil(
   state: ReturnType<typeof createRoundState>,
-  cfg: RoundConfig,
+  cfg: MatchConfig,
   t: number,
   ct: number,
   event: string,
@@ -62,7 +62,115 @@ describe('round loop', () => {
   });
 
   it('default config is sane', () => {
-    expect(DEFAULT_ROUND.freezetime).toBeGreaterThan(0);
-    expect(DEFAULT_ROUND.roundTime).toBeGreaterThan(DEFAULT_ROUND.freezetime);
+    expect(DEFAULT_MATCH.freezetime).toBeGreaterThan(0);
+    expect(DEFAULT_MATCH.roundTime).toBeGreaterThan(DEFAULT_MATCH.freezetime);
+    expect(DEFAULT_MATCH.roundsToWin).toBeGreaterThan(1);
+    expect(DEFAULT_MATCH.botCount).toBeGreaterThan(0);
+  });
+});
+
+describe('match-over', () => {
+  it('emits match-over when a side reaches roundsToWin', () => {
+    const cfg: MatchConfig = { ...CFG, roundsToWin: 2 };
+    const s = createRoundState();
+    runUntil(s, cfg, 1, 1, 'went-live');
+    tickRound(s, cfg, 1, 0, DT); // T wins round 1, score 1-0
+    expect(s.score).toEqual({ t: 1, ct: 0 });
+    runUntil(s, cfg, 1, 1, 'reset');
+    runUntil(s, cfg, 1, 1, 'went-live');
+    const ev = tickRound(s, cfg, 1, 0, DT); // T wins round 2, score 2-0 → match over
+    expect(ev).toBe('match-over');
+    expect(s.matchOver).toBe(true);
+    expect(s.matchWinner).toBe('T');
+  });
+
+  it('emits match-over exactly once — subsequent ticks stay in over', () => {
+    const cfg: MatchConfig = { ...CFG, roundsToWin: 1 };
+    const s = createRoundState();
+    runUntil(s, cfg, 1, 1, 'went-live');
+    expect(tickRound(s, cfg, 1, 0, DT)).toBe('match-over');
+    // Extra ticks in the same 'over' phase do not fire again.
+    expect(tickRound(s, cfg, 1, 0, DT)).toBe('none');
+    expect(tickRound(s, cfg, 1, 0, DT)).toBe('none');
+  });
+
+  it('match-over resets scores and round on restart', () => {
+    const cfg: MatchConfig = { ...CFG, roundsToWin: 1 };
+    const s = createRoundState();
+    runUntil(s, cfg, 1, 1, 'went-live');
+    tickRound(s, cfg, 1, 0, DT); // T wins → match-over
+    expect(s.matchOver).toBe(true);
+    expect(s.score.t).toBe(1);
+    runUntil(s, cfg, 1, 1, 'reset');
+    expect(s.phase).toBe('freezetime');
+    expect(s.round).toBe(1);
+    expect(s.score).toEqual({ t: 0, ct: 0 });
+    expect(s.matchOver).toBe(false);
+    expect(s.matchWinner).toBeNull();
+  });
+});
+
+describe('validateMatchConfig', () => {
+  it('accepts a valid config, filling defaults', () => {
+    const r = validateMatchConfig({ botCount: 4, roundsToWin: 8 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.botCount).toBe(4);
+      expect(r.value.roundsToWin).toBe(8);
+      expect(r.value.map).toBe('de_douglas');
+    }
+  });
+
+  it('rejects botCount out of upper bounds', () => {
+    const r = validateMatchConfig({ botCount: 99 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.some((e) => e.includes('botCount'))).toBe(true);
+  });
+
+  // A count below 2 leaves one side empty, so every round ends on its first tick.
+  it('rejects botCount below the lower bound', () => {
+    for (const botCount of [0, 1]) {
+      const r = validateMatchConfig({ botCount });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errors.some((e) => e.includes('botCount'))).toBe(true);
+    }
+  });
+
+  it('rejects roundsToWin of 0 (below lower bound)', () => {
+    const r = validateMatchConfig({ roundsToWin: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.some((e) => e.includes('roundsToWin'))).toBe(true);
+  });
+
+  it('rejects unknown map', () => {
+    const r = validateMatchConfig({ map: 'de_dust2' as never });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.some((e) => e.includes('map'))).toBe(true);
+  });
+
+  it('rejects non-integer botCount', () => {
+    const r = validateMatchConfig({ botCount: 3.5 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.some((e) => e.includes('botCount'))).toBe(true);
+  });
+
+  // The server's slot array is MAX_SLOTS = 6 (server/src/main.rs); a config the
+  // client accepts but the server exits(1) on is worse than a lower ceiling.
+  it('caps botCount at the server slot capacity', () => {
+    expect(LIMITS.botCount[1]).toBe(6);
+    expect(validateMatchConfig({ botCount: 7 }).ok).toBe(false);
+  });
+});
+
+describe('isMatchOver', () => {
+  it('is true once either score reaches roundsToWin', () => {
+    expect(isMatchOver(16, 3, 16)).toBe(true);
+    expect(isMatchOver(3, 16, 16)).toBe(true);
+    expect(isMatchOver(15, 15, 16)).toBe(false);
+  });
+
+  // Welcome.roundsToWin is 0 for a pre-Phase-16 server: never claim match-over.
+  it('is false when roundsToWin is unknown (0)', () => {
+    expect(isMatchOver(9, 9, 0)).toBe(false);
   });
 });

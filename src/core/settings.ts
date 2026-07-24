@@ -24,8 +24,21 @@ export const DEFAULT_SETTINGS: Settings = {
   volume: 1,
 };
 
-export const DEFAULT_SERVER_ADDRESS = '127.0.0.1';
+// Phase 17.1: nginx is the single ingress — the server's game port is not
+// published by docker compose, so anything served from the built image must
+// dial the same-origin proxy endpoint (`<host>/ws`, port implicit in the
+// origin). The vite dev server proxies nothing, so dev dials 9876 directly.
+// `location.host` (not `.hostname`) keeps a non-default port like :8443.
+const _host = typeof location !== 'undefined' ? location.host : '';
+const _wsScheme = typeof location !== 'undefined' && location.protocol === 'https:' ? 'wss' : 'ws';
+const _direct = import.meta.env.DEV || _host === '';
+
+export const DEFAULT_SERVER_ADDRESS = _direct ? '127.0.0.1' : `${_host}/ws`;
 export const DEFAULT_SERVER_PORT = '9876';
+/** Fully-formed default WebSocket URL — the single source of truth. */
+export const DEFAULT_WS_URL = _direct
+  ? `ws://${DEFAULT_SERVER_ADDRESS}:${DEFAULT_SERVER_PORT}`
+  : `${_wsScheme}://${_host}/ws`;
 
 export type ConnectState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -63,6 +76,18 @@ export interface GameActions {
 
 export type GamePanelMode = 'playing' | 'spectating' | 'none';
 
+/** Fields exposed in the "New Match" section of the settings panel.
+ *  ponytail: placeholder UI, superseded by Phase 19 entry screen. */
+export interface MatchConfigFields {
+  botCount: number;
+  roundsToWin: number;
+  botCountMin: number;
+  botCountMax: number;
+  roundsMin: number;
+  roundsMax: number;
+  onNewMatch(botCount: number, roundsToWin: number): void;
+}
+
 export interface SettingsPanel {
   show(): void;
   hide(): void;
@@ -80,6 +105,7 @@ export function createSettingsPanel(
   onChange: (s: Settings) => void,
   serverOpts?: ServerConnectionOpts,
   gameOpts?: GameActions,
+  matchConfig?: MatchConfigFields,
 ): SettingsPanel {
   // wss:// from an https page, ws:// otherwise — a browser blocks ws:// from a
   // secure page as mixed content, so the scheme must follow the page.
@@ -94,8 +120,11 @@ export function createSettingsPanel(
   //   - bare host              → "127.0.0.1" + "9876" → "ws://127.0.0.1:9876"
   // The path forms let clients reach a TLS reverse-proxy endpoint like
   // wss://counterdouggo.yikersis.land/ws where the port is 443 and implicit.
-  const buildWsUrl = (addr: string, port: string): string => {
+  // Returns null if an explicit URL uses a non-ws scheme (http:// etc.).
+  const buildWsUrl = (addr: string, port: string): string | null => {
     if (/^wss?:\/\//.test(addr)) return addr;
+    // Reject explicit non-ws schemes (http://, https://, etc.).
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(addr)) return null;
     if (addr.includes('/')) return `${wsScheme}//${addr}`;
     return `${wsScheme}//${addr}:${port}`;
   };
@@ -156,6 +185,8 @@ export function createSettingsPanel(
   let connBtn: HTMLButtonElement | null = null;
   let connStatus: HTMLDivElement | null = null;
   let addrReadonly: HTMLDivElement | null = null;
+  /** Set when the server section is built; re-bound by setConnected(). */
+  let connectFromInputs: (() => void) | null = null;
 
   if (serverOpts) {
     serverSection = document.createElement('div');
@@ -200,8 +231,14 @@ export function createSettingsPanel(
       const addr = addrInput!.value.trim();
       const port = portInput!.value.trim();
       if (!addr || (needsPort(addr) && !port)) return;
-      serverOpts.onConnect(buildWsUrl(addr, port));
+      const url = buildWsUrl(addr, port);
+      if (!url) {
+        if (connStatus) { connStatus.textContent = 'invalid URL'; connStatus.style.color = '#c44'; connStatus.style.display = ''; }
+        return;
+      }
+      serverOpts.onConnect(url);
     };
+    connectFromInputs = connect;
 
     connBtn.onclick = connect;
     addrInput.onkeydown = (e: KeyboardEvent): void => {
@@ -258,6 +295,56 @@ export function createSettingsPanel(
     panel.appendChild(gameSection);
   }
 
+  let configSection: HTMLDivElement | null = null;
+  if (matchConfig) {
+    configSection = document.createElement('div');
+    configSection.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid #3a4450';
+
+    const configLabel = document.createElement('div');
+    configLabel.textContent = 'New Match';
+    configLabel.style.cssText = 'font-size:13px;margin-bottom:8px;letter-spacing:1px;opacity:0.8';
+    configSection.appendChild(configLabel);
+
+    const mkCfgSlider = (label: string, min: number, max: number, val: number, cb: (v: number) => void): void => {
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;margin:6px 0';
+      const name = document.createElement('span');
+      name.textContent = label;
+      name.style.cssText = 'flex:0 0 90px';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = '1';
+      slider.value = String(val);
+      slider.style.flex = '1';
+      const readout = document.createElement('span');
+      readout.textContent = String(val);
+      readout.style.cssText = 'flex:0 0 32px;text-align:right';
+      slider.addEventListener('input', () => {
+        readout.textContent = slider.value;
+        cb(Number(slider.value));
+      });
+      row.append(name, slider, readout);
+      configSection!.appendChild(row);
+    };
+
+    let selectedBots = matchConfig.botCount;
+    let selectedRounds = matchConfig.roundsToWin;
+    mkCfgSlider('Bots', matchConfig.botCountMin, matchConfig.botCountMax, matchConfig.botCount, (v) => { selectedBots = v; });
+    mkCfgSlider('Rounds', matchConfig.roundsMin, matchConfig.roundsMax, matchConfig.roundsToWin, (v) => { selectedRounds = v; });
+
+    const btn = document.createElement('button');
+    btn.textContent = 'New Match';
+    btn.style.cssText =
+      'margin-top:12px;padding:6px 16px;background:#2a5a2a;color:#eee;border:none;' +
+      'cursor:pointer;font:14px monospace;width:100%';
+    btn.onclick = (): void => matchConfig.onNewMatch(selectedBots, selectedRounds);
+    configSection.appendChild(btn);
+
+    panel.appendChild(configSection);
+  }
+
   document.body.appendChild(panel);
 
   return {
@@ -281,12 +368,7 @@ export function createSettingsPanel(
         } else {
           connBtn.textContent = 'Connect';
           connBtn.style.background = '#2a5a2a';
-          connBtn.onclick = (): void => {
-            const addr = addrInput!.value.trim();
-            const port = portInput!.value.trim();
-            if (!addr || (needsPort(addr) && !port)) return;
-            serverOpts?.onConnect(buildWsUrl(addr, port));
-          };
+          connBtn.onclick = (): void => { connectFromInputs?.(); };
         }
       }
       if (connStatus) {
