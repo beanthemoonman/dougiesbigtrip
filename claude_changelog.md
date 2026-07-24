@@ -4,6 +4,20 @@ A running log of what Claude Code did in this repo, appended to at the end of ea
 
 ---
 
+## 2026-07-24
+
+- **Implemented `modelview` CLI tool** (per `docs/plan-modelview-cli.md`):
+  - Created `tools/modelview/view.ts` (~200 lines): headless multi-angle GLB renderer using three.js r170 + Puppeteer + pngjs.
+  - **Pivot from `gl` to Puppeteer**: The `gl` (headless-gl) package only provides WebGL 1.0, but three.js r170 requires WebGL 2.0. Switched to Puppeteer headless Chrome which provides full WebGL 2.0 — same WebGL implementation as the game (Chromium). The tool still reuses the project's exact three.js via a temporary local HTTP server.
+  - **CLI contract**: `pnpm modelview <path.glb> [--angles list] [--size px] [--out dir] [--bg hex]`. Six canned angles (front, back, left, right, top, iso). Auto-framing via bounding sphere + 45° FOV. Three lights per angle (hemisphere + key + fill) that track the camera.
+  - **Created `tools/modelview/view.test.ts`**: One self-check test — renders `crate_wood.glb` at iso/256² and asserts >1% non-background pixels.
+  - **Config changes**: Added `"modelview"` package.json script, `.modelview/` to `.gitignore`, `tools/**/*.test.ts` to vitest include.
+  - **Dependencies**: Added `puppeteer` and `pngjs` as devDependencies. Removed `gl` (unused after pivot).
+  - Verified against all asset types: props (crate, barrel, cone, jerry can, pallet), weapons (AK, pistol), characters (CT, T), and the full map (`de_douglas.glb`). All render non-blank PNGs.
+  - Updated `docs/plan-modelview-cli.md`: status → done, documented Puppeteer pivot, updated CLI contract, risks, and render pipeline section.
+  - `pnpm typecheck` green. `pnpm test` 250 tests green.
+
+
 ## 2026-07-23
 
 - **Phase 16.1 — Match config type + rounds-to-win.** Extended `src/game/round.ts`:
@@ -3469,3 +3483,43 @@ not have worked as shipped — the two P0s are wiring, not logic.
   Verified in Chrome: menu → SP boot (loading → team menu → spawn as T) →
   pause → Exit to Menu → clean menu.
 - CLAUDE.md/AGENTS.md repo-layout notes updated to match.
+
+## Fix: MP remote entity yaw interpolation across ±π
+
+- Bug: `src/net/interpolation.ts` lerped remote yaw with a plain linear lerp.
+  Server bot yaw jumps discontinuously (set to `atan2(-dx,-dz)` per tick at
+  corners/target switches) and wraps at ±π, so a lerp from e.g. +3.0 to -3.0
+  swept the long way through 0 — remote bots whipped/spun ~360° every corner.
+  Read as "bot movement/behaviour completely broken" in MP; position was fine.
+- Fix: shortest-arc `lerpAngle` for yaw. Added a wrap-crossing test
+  (all prior interp tests used yaw=0, so the gap was untested).
+- typecheck + interpolation tests green.
+
+## Model-view CLI plan
+
+Wrote `docs/plan-modelview-cli.md` — detailed spec for a headless `pnpm view <model.glb>` tool (approach A: `gl` + `pngjs`, single `tools/modelview/view.ts` run via tsx). Renders any project `.glb` from six canned angles to PNGs for asset refinement without booting the game. Plan-only; no code yet.
+
+## Feature: server-authoritative scoreboard K/D + multiplayer usernames
+
+- **Broken scoreboard:** `session.ts` fed the board fake data — the "kills"
+  column was the team round-win score, deaths were hardcoded 0, bots were 0/0.
+  No per-player K/D existed anywhere.
+- **Multiplayer (server-authoritative):** `Slot` now owns `kills`/`deaths`; the
+  kill resolver in `server/src/main.rs` increments `victim.deaths` +
+  `killer.kills`. Both ride every `Snapshot` entity (`EntityState.kills`/`deaths`),
+  so all clients render the identical board. `build_snapshot` now includes
+  occupied-but-dead players (F_ALIVE reflects `s.alive`) so the board shows
+  everyone mid-respawn; vacated slots (no bot, no human) stay excluded.
+  `session.ts` builds the MP roster straight off the latest snapshot.
+- **Usernames:** new MP-popup username field (prefilled with the signed-in
+  display name, editable, ≤24 chars). Rides `?name=` across the connect reload →
+  `Join.name` → `Slot.display_name` (falls back to JWT name, then "player") →
+  `EntityState.name` in snapshots. Empty name = a bot → client renders "Bot N".
+- **Single-player:** tallied locally at the kill sites (`humanKills`/`Deaths`,
+  `Enemy.kills`/`deaths`).
+- **Wire:** `EntityState` gained `kills:u16, deaths:u16, name:{len:u8,utf8}`;
+  `Join` gained an optional trailing `name` string. Mirrored in
+  `sim/src/protocol.rs` + `src/net/protocol.ts` in lockstep; golden-byte tests
+  updated on both ends. `EntityState` lost `Copy` (now holds a `String`).
+- Docs: `docs/netcode.md` §3.2 + `docs/connect-and-scoreboard.md` §3–4 updated.
+- Rust `cargo test` (49 tests) + `pnpm test` (252 tests) + `pnpm typecheck` green.

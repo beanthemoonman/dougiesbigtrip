@@ -47,3 +47,6 @@ target/
 data/
 
 secrets/
+
+# modelview CLI output (regenerable, never committed)
+.modelview/

@@ -178,6 +178,7 @@ enum Ev {
         conn_id: u32,
         team: u8, // 0=T, 1=CT, 2=SPEC
         token: Option<String>,
+        name: Option<String>,
     },
     /// Per-tick command from an assigned player.
     Cmd {
@@ -221,6 +222,11 @@ struct Slot {
     ammo: u8,
     /// Phase 17.4: authenticated user info from the validated JWT.
     validated_user: Option<ValidatedUser>,
+    /// Phase 21: server-authoritative match tally + the display handle shown on
+    /// every client's scoreboard. Empty name = a bot (client renders "Bot N").
+    kills: u16,
+    deaths: u16,
+    display_name: String,
 }
 
 async fn game_loop(
@@ -280,6 +286,9 @@ async fn game_loop(
                 weapon: 1,
                 ammo: 30,
                 validated_user: None,
+                kills: 0,
+                deaths: 0,
+                display_name: String::new(),
             }
         })
         .collect();
@@ -573,6 +582,10 @@ async fn game_loop(
                                     target.alive = false;
                                     let bf = target.bot_spawn.feet;
                                     target.player.reset(bf[0], bf[1], bf[2]);
+                                    // Server-authoritative K/D tally (ts != shooter_idx,
+                                    // enforced by the target-search filter above).
+                                    target.deaths += 1;
+                                    slots[shooter_idx].kills += 1;
                                     frame_events.push(GameEvent {
                                         tag: EV_KILL,
                                         slot: ts as u8,
@@ -631,7 +644,7 @@ async fn game_loop(
                     println!("conn {conn_id} connected (pending)");
                     }
                 }
-                Ev::JoinTeam { conn_id, team, token } => {
+                Ev::JoinTeam { conn_id, team, token, name } => {
                     // Stale or invalid conn_id → no entry → ignored.
                     if let Some((out, slot_tx)) = pending_conns.remove(&conn_id) {
                     // Phase 17.4: validate auth token when AUTH_REQUIRED.
@@ -675,6 +688,17 @@ async fn game_loop(
                         .filter(|s| s.is_human).count() as u8;
                     match team {
                         0 | 1 => {
+                            // Display handle: the client's picked name (trimmed, capped),
+                            // falling back to the JWT name, then "player". ponytail: a
+                            // 24-char cap is the only sanitisation — it rides the wire as
+                            // plain text, never into SQL or a shell.
+                            let display = name
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|n| !n.is_empty())
+                                .map(|n| n.chars().take(24).collect::<String>())
+                                .or_else(|| validated.as_ref().and_then(|u| u.name.clone()))
+                                .unwrap_or_else(|| "player".to_string());
                             let target_ct = team == 1;
                             let mut out_opt = Some(out);
                             let mut found_slot: Option<u8> = None;
@@ -703,6 +727,9 @@ async fn game_loop(
                                 );
                                 s.bot = None;
                                 s.validated_user = validated;
+                                s.display_name = display.clone();
+                                s.kills = 0;
+                                s.deaths = 0;
                                 break;
                             }
                             if let Some(assigned_slot) = found_slot {
@@ -773,6 +800,10 @@ async fn game_loop(
                         s.bot = None;
                         s.queue.clear();
                         s.last_shot = None;
+                        s.validated_user = None;
+                        s.display_name = String::new();
+                        s.kills = 0;
+                        s.deaths = 0;
                         println!("slot {slot} left (bot backfills next round)");
                     }
                 }
@@ -782,13 +813,20 @@ async fn game_loop(
 }
 
 fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events: Vec<GameEvent>) -> Snapshot {
+    // Include occupied-but-dead players (F_ALIVE clear) so the scoreboard sees
+    // everyone mid-respawn; the client hides dead remote bodies via the flag. A
+    // slot a human just left (occupied, but no bot and no human until the next
+    // round backfills it) stays out — it's nobody.
     let entities = slots
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.occupied && s.alive)
+        .filter(|(_, s)| s.occupied && (s.is_human || s.bot.is_some()))
         .map(|(i, s)| {
             let p = &s.player;
-            let mut flags = F_ALIVE;
+            let mut flags = 0;
+            if s.alive {
+                flags |= F_ALIVE;
+            }
             if p.ducked {
                 flags |= F_DUCKED;
             }
@@ -806,6 +844,9 @@ fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events:
                 armor: s.armor,
                 weapon: s.weapon,
                 ammo: s.ammo,
+                kills: s.kills,
+                deaths: s.deaths,
+                name: s.display_name.clone(),
             }
         })
         .collect();
@@ -913,11 +954,11 @@ async fn handle_conn(
             Some(Ok(Message::Binary(data))) => {
                 // First message must be Join.
                 if let Some(join) = Join::decode(&data) {
-                    let _ = events.send(Ev::JoinTeam { conn_id, team: join.team, token: join.token });
+                    let _ = events.send(Ev::JoinTeam { conn_id, team: join.team, token: join.token, name: join.name });
                     break;
                 }
                 // Backwards compat: old client sends Cmd first; treat as T auto-join.
-                let _ = events.send(Ev::JoinTeam { conn_id, team: 0, token: None });
+                let _ = events.send(Ev::JoinTeam { conn_id, team: 0, token: None, name: None });
                 break;
             }
             Some(Ok(Message::Close(_))) | None => {

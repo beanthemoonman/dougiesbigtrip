@@ -17,6 +17,9 @@ function snap(tick: number, entities: { slot: number; pos: [number, number, numb
       armor: 0,
       weapon: 1,
       ammo: 30,
+      kills: 0,
+      deaths: 0,
+      name: '',
     })),
     round: { phase: 1, timeLeftMs: 60000, scoreT: 0, scoreCt: 0 },
     events: [],
@@ -40,6 +43,16 @@ describe('interpolation', () => {
     expect(result[0]!.slot).toBe(1);
     // At renderTick=100, t=0 → position from sLo
     expect(result[0]!.alive).toBe(true);
+  });
+
+  it('lerps yaw the short way across the ±π wrap', () => {
+    const buf = createInterpolationBuffer();
+    buf.push(snap(100, [{ slot: 1, pos: [0, 0, 0], vel: [0, 0, 0], yaw: 3.0, pitch: 0 }]));
+    buf.push(snap(112, [{ slot: 1, pos: [0, 0, 0], vel: [0, 0, 0], yaw: -3.0, pitch: 0 }]));
+    // renderTick = 112 - 6 = 106 → halfway between the two snapshots.
+    // Short arc from 3.0 to -3.0 passes through ±π (~3.14), NOT through 0.
+    const yaw = buf.interpolate(0)[0]!.yaw;
+    expect(Math.abs(yaw)).toBeGreaterThan(3.1); // naive lerp would give ~0
   });
 
   it('excludes own slot', () => {

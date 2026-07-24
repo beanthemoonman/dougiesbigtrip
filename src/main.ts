@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   // Phase 19.2 entry screen. SP/MP both launch via a page reload with URL
   // params — the URL is the source of truth for what boots.
   // connectViaReload is defined below; we pass it via a mutable ref.
-  const mpConnect: { fn: ((url: string) => void) | null } = { fn: null };
+  const mpConnect: { fn: ((url: string, name: string) => void) | null } = { fn: null };
   const entryScreen: EntryScreen = createEntryScreen({
     onSettings: () => screens.show('settings'),
     onAdmin: () => screens.show('admin'),
@@ -74,8 +74,8 @@ async function main(): Promise<void> {
     mp: {
       defaultAddress: DEFAULT_SERVER_ADDRESS,
       defaultPort: '9876',
-      onConnect(url: string): void {
-        mpConnect.fn?.(url);
+      onConnect(url: string, name: string): void {
+        mpConnect.fn?.(url, name);
       },
     },
   });
@@ -104,7 +104,7 @@ async function main(): Promise<void> {
   // address first with a throwaway socket: only reload once it actually opens,
   // so an unreachable server shows "connection failed" here instead of booting
   // into a broken networked session.
-  function connectViaReload(url: string): void {
+  function connectViaReload(url: string, name: string): void {
     let done = false;
     let probe: WebSocket;
     const finish = (ok: boolean): void => {
@@ -115,6 +115,7 @@ async function main(): Promise<void> {
       if (!ok) return;
       const params = new URLSearchParams(location.search);
       params.set('connect', url);
+      params.set('name', name);
       location.search = params.toString();
     };
     try {

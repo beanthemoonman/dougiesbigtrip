@@ -31,6 +31,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --from=wasm /app/sim/pkg ./sim/pkg/
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN pnpm install --frozen-lockfile
 
 COPY index.html tsconfig.json vite.config.ts vitest.config.ts ./

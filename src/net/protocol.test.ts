@@ -117,6 +117,17 @@ describe('protocol (TS)', () => {
     expect(j!.token).toBe('eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.signature');
   });
 
+  it('round-trips Join with a picked name (Phase 21)', () => {
+    const j = decodeJoin(encodeJoin({ team: 0, token: 'tok', name: 'Dougy' }));
+    expect(j).toMatchObject({ team: 0, token: 'tok', name: 'Dougy' });
+  });
+
+  it('round-trips Join with a name but no token', () => {
+    const j = decodeJoin(encodeJoin({ team: 1, name: 'guest' }));
+    expect(j).toMatchObject({ team: 1, name: 'guest' });
+    expect(j!.token).toBeUndefined();
+  });
+
   it('decodes old 3-byte Join format (backwards compat)', () => {
     const buf = new Uint8Array([TAG_JOIN, PROTOCOL_VERSION, 1]);
     expect(decodeJoin(buf)).toEqual({ team: 1 });
@@ -183,7 +194,9 @@ describe('protocol (TS)', () => {
     //   + entity(36) + eventCount(1) + round(9: phase+time_left_ms.u32+scoreT+scoreCt) = 59
     const bytes = new Uint8Array([
       3, 1, 100, 0, 0, 0, 7, 0, 0, 0, 1, 0, 5, 0, 0, 192, 63, 0, 0, 0, 0, 0, 0, 200, 193, 0, 0,
-      128, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 63, 0, 0, 128, 190, 100, 0, 1, 30, 0, 1, 96,
+      128, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 63, 0, 0, 128, 190, 100, 0, 1, 30,
+      2, 0, 3, 0, 3, 67, 84, 49, // kills=2, deaths=3, nameLen=3, "CT1"
+      0, 1, 96,
       234, 0, 0, 2, 0, 3, 0,
     ]);
     const expected: Snapshot = {
@@ -201,6 +214,9 @@ describe('protocol (TS)', () => {
           armor: 0,
           weapon: 1,
           ammo: 30,
+          kills: 2,
+          deaths: 3,
+          name: 'CT1',
         },
       ],
       events: [],

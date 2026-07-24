@@ -33,7 +33,7 @@ interface SpOptions {
 interface MpOptions {
   defaultAddress: string;
   defaultPort: string;
-  onConnect(url: string): void;
+  onConnect(url: string, name: string): void;
 }
 
 export function createEntryScreen(opts: {
@@ -136,6 +136,7 @@ export function createEntryScreen(opts: {
   mpPopup.style.cssText =
     `position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;` +
     `background:${POPUP_BG};z-index:2100;`;
+  const nameInput = document.createElement('input'); // hoisted so mpBtn can prefill it
   {
     const box = document.createElement('div');
     box.style.cssText = `padding:24px 32px;border:1px solid ${BORDER};min-width:300px;text-align:left;`;
@@ -143,6 +144,12 @@ export function createEntryScreen(opts: {
     h.textContent = 'Connect to Server';
     h.style.cssText = 'font-size:16px;margin-bottom:16px;letter-spacing:1px;';
     box.appendChild(h);
+
+    nameInput.type = 'text';
+    nameInput.placeholder = 'username';
+    nameInput.maxLength = 24;
+    nameInput.style.cssText = 'width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:12px;background:#1a1a1a;color:#eee;border:1px solid #444;font:13px monospace;';
+    box.appendChild(nameInput);
 
     const addrRow = document.createElement('div');
     addrRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:12px;';
@@ -184,6 +191,12 @@ export function createEntryScreen(opts: {
     connect.textContent = 'Connect';
     connect.style.cssText = 'flex:1;padding:8px;background:#3a4a7a;color:#eee;border:none;cursor:pointer;font:13px monospace;';
     connect.onclick = (): void => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        statusEl.textContent = 'Pick a username';
+        statusEl.style.color = '#c44';
+        return;
+      }
       const addr = addrInput.value.trim();
       const port = portInput.value.trim();
       const needsPort = !/^wss?:\/\//.test(addr) && !addr.includes('/');
@@ -200,7 +213,7 @@ export function createEntryScreen(opts: {
       }
       statusEl.textContent = 'connecting\u2026';
       statusEl.style.color = MUTED;
-      opts.mp.onConnect(url);
+      opts.mp.onConnect(url, name);
     };
     btnRow.appendChild(cancel);
     btnRow.appendChild(connect);
@@ -210,7 +223,11 @@ export function createEntryScreen(opts: {
   el.appendChild(mpPopup);
 
   const spBtn = mkBtn('Singleplayer', '#4a6a3a', () => { spPopup.style.display = 'flex'; });
-  const mpBtn = mkBtn('Multi-player', '#3a4a7a', () => { mpPopup.style.display = 'flex'; });
+  const mpBtn = mkBtn('Multi-player', '#3a4a7a', () => {
+    // Prefill the handle with the signed-in display name (editable).
+    if (!nameInput.value) nameInput.value = _authRef?.name ?? '';
+    mpPopup.style.display = 'flex';
+  });
   container.appendChild(spBtn);
   container.appendChild(mpBtn);
 

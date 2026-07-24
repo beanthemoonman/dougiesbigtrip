@@ -56,7 +56,7 @@ import { createConnection } from '../net/connection';
 import { createPredictor, type Predictor } from '../net/prediction';
 import { createInterpolationBuffer } from '../net/interpolation';
 import { encodeCommand, encodeJoin } from '../net/protocol';
-import { SPECTATOR, EV_FIRE, EV_KILL, F_ALIVE } from '../net/protocol';
+import { SPECTATOR, EV_FIRE, EV_KILL, F_ALIVE, F_TEAM_CT, type Snapshot } from '../net/protocol';
 import { createDecals } from '../render/decals';
 import { createVfx, SURFACE_FX, type Surface } from '../render/vfx';
 import { loadLightmappedMap } from '../render/lightmap';
@@ -161,6 +161,10 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   let serverScore: { t: number; ct: number } | null = null;
   let serverPhase = -1; // 0=freezetime, 1=live, 2=over; -1 = not synced yet
   let serverRoundsToWin = 0; // from Welcome; 0 = pre-Phase-16 server, no match end
+  let lastSnapshot: Snapshot | null = null; // latest snapshot; drives the MP scoreboard
+  // Single-player K/D tally for the local human (bots carry their own on the Enemy).
+  let humanKills = 0;
+  let humanDeaths = 0;
   const interpBuf = createInterpolationBuffer();
 
   // --- Game mode: menu | playing | spectating ---
@@ -289,8 +293,10 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       if (w.yourSlot === SPECTATOR) {
         teamMenu.setCounts(w.players, w.maxPlayers, w.spectators, w.specCap);
         teamMenu.el.style.display = 'flex';
+        // The picked handle rides the ?name= param across the connect reload.
+        const pickedName = new URLSearchParams(location.search).get('name') ?? undefined;
         sendJoinRef.fn = (team: number) => {
-          conn.send(encodeJoin({ team, token: auth()?.token() }));
+          conn.send(encodeJoin({ team, token: auth()?.token(), name: pickedName }));
           teamMenu.el.style.display = 'none';
         };
         return;
@@ -313,6 +319,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     conn.onSnapshot = (s): void => {
       predictor?.reconcile(s);
       interpBuf.push(s);
+      lastSnapshot = s;
       serverRoundTimeSec = s.round.timeLeftMs / 1000;
       serverScore = { t: s.round.scoreT, ct: s.round.scoreCt };
       serverPhase = s.round.phase;
@@ -339,6 +346,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       serverScore = null;
       serverPhase = -1;
       serverRoundsToWin = 0;
+      lastSnapshot = null;
       sendJoinRef.fn = null;
     };
     conn.connect(url);
@@ -516,6 +524,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     alive: boolean;
     hp: number;
     fireCooldown: number;
+    // Single-player scoreboard tally (multiplayer K/D is server-authoritative).
+    kills: number;
+    deaths: number;
   }
 
   // CT rig template + world-model weapons (game/characters.ts). The template is
@@ -558,6 +569,8 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       alive: true,
       hp: BOT_MAX_HP,
       fireCooldown: 0,
+      kills: 0,
+      deaths: 0,
     };
   });
   // Map each bot's collider back to its Enemy so a player hitscan can find it.
@@ -1015,6 +1028,8 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 if (health <= 0) {
                   health = 0;
                   playerAlive = false;
+                  humanDeaths += 1;
+                  e.kills += 1;
                   // Bug 3: enter free-fly spectator from the death eye position.
                   specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
                   // Phase 12: ragdoll the player body so the spectator cam sees the corpse.
@@ -1025,6 +1040,8 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 target.hp -= computeDamage(BOT_WEAPON, dist, 'chest', 0).health;
                 if (target.hp <= 0) {
                   target.alive = false;
+                  target.deaths += 1;
+                  e.kills += 1;
                   target.brain.bot.collider.setEnabled(false);
                   killBot(target.brain);
                   // Phase 12.3: spawn a cosmetic ragdoll body at the death position
@@ -1124,6 +1141,8 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 playImpact('flesh');
                 if (enemy.hp <= 0) {
                   enemy.alive = false;
+                  enemy.deaths += 1;
+                  humanKills += 1;
                   enemy.brain.bot.collider.setEnabled(false);
                   killBot(enemy.brain);
                   const bp = enemy.brain.bot.position;
@@ -1336,21 +1355,33 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         MathUtils.degToRad(renderCtx.camera.fov),
         renderCtx.renderer.domElement.clientHeight,
       );
-      // Scoreboard roster built from live game state. ponytail: static "Bot N"
-      // + "You" labels; no per-entity K/D until kill bookkeeping exists.
-      const score = serverScore ?? round.score;
+      // Scoreboard roster. Multiplayer is server-authoritative — names and K/D
+      // come straight off the latest snapshot. Single-player is tallied locally.
       const roster: PlayerScore[] = [];
-      if (gameMode === 'playing') {
-        roster.push({
-          slot: 0, team: playerTeam, name: 'You',
-          kills: playerTeam === 'T' ? score.t : score.ct, deaths: 0, alive: playerAlive,
+      if (predictor) {
+        for (const ent of lastSnapshot?.entities ?? []) {
+          roster.push({
+            slot: ent.slot,
+            team: (ent.flags & F_TEAM_CT) !== 0 ? 'CT' : 'T',
+            name: ent.name || `Bot ${ent.slot + 1}`,
+            kills: ent.kills,
+            deaths: ent.deaths,
+            alive: (ent.flags & F_ALIVE) !== 0,
+          });
+        }
+      } else {
+        if (gameMode === 'playing') {
+          roster.push({
+            slot: 0, team: playerTeam, name: 'You',
+            kills: humanKills, deaths: humanDeaths, alive: playerAlive,
+          });
+        }
+        // Benched bots (the human's seat) are out of the roster.
+        enemies.forEach((e, i) => {
+          if (!e.active) return;
+          roster.push({ slot: i + 1, team: e.team, name: `Bot ${i + 1}`, kills: e.kills, deaths: e.deaths, alive: e.alive });
         });
       }
-      // Benched bots (the human's seat) are out of the roster.
-      enemies.forEach((e, i) => {
-        if (!e.active) return;
-        roster.push({ slot: i + 1, team: e.team, name: `Bot ${i + 1}`, kills: 0, deaths: 0, alive: e.alive });
-      });
       scoreboard.render(roster);
       const teamMenuShown = teamMenu.el.style.display !== 'none';
       if (teamMenuShown) {
