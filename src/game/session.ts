@@ -1383,11 +1383,8 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         });
       }
       scoreboard.render(roster);
-      const teamMenuShown = teamMenu.el.style.display !== 'none';
-      if (teamMenuShown) {
-        teamMenu.renderScoreboard(roster);
-      }
-      scoreboard.visible = input.state.scoreboard || teamMenuShown;
+      // Team select shows the overview camera, not a scoreboard — only Tab pulls it up.
+      scoreboard.visible = input.state.scoreboard && gameMode !== 'menu';
       renderCtx.stats.end();
     },
   });

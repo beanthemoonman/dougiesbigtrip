@@ -3523,3 +3523,12 @@ Wrote `docs/plan-modelview-cli.md` — detailed spec for a headless `pnpm view <
   updated on both ends. `EntityState` lost `Copy` (now holds a `String`).
 - Docs: `docs/netcode.md` §3.2 + `docs/connect-and-scoreboard.md` §3–4 updated.
 - Rust `cargo test` (49 tests) + `pnpm test` (252 tests) + `pnpm typecheck` green.
+
+## Team-select shows overview cam, not a spawned-in scoreboard view
+- The overview camera behind team select already existed (`gameMode === 'menu'`). Fixed the
+  state so it's actually what you see: removed the scoreboard clutter that made it read as
+  "spawned in with Tab up".
+- `src/ui/teammenu.ts`: dropped the embedded scoreboard (boardWrap + `renderScoreboard`).
+- `src/game/session.ts`: Tab scoreboard no longer force-shown while the team menu is open
+  (`scoreboard.visible = input.state.scoreboard && gameMode !== 'menu'`).
+- Player still spawns only on team pick (`enterGame`), unchanged.

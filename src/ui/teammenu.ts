@@ -8,16 +8,12 @@
  * (MP). Spectate starts free-fly with no body.
  */
 
-import { renderScoreboardContent, type PlayerScore } from './scoreboard';
-
 export type TeamChoice = 'T' | 'CT' | 'spec';
 
 export interface TeamMenu {
   readonly el: HTMLElement;
   /** Update which buttons are enabled based on team capacity info. */
   setCounts(players: number, maxPlayers: number, spectators: number, specCap: number): void;
-  /** Render the scoreboard roster inside the team menu overlay. */
-  renderScoreboard(players: PlayerScore[]): void;
   /** Called when Esc is pressed while the menu is visible. The caller should
    *  hide the menu and return to the previous game state. */
   onEsc: (() => void) | null;
@@ -39,10 +35,6 @@ export function createTeamMenu(
   sub.textContent = 'Choose Team';
   sub.style.cssText = 'font-size:13px;margin-bottom:24px;opacity:0.6;letter-spacing:1px';
   el.appendChild(sub);
-
-  const boardWrap = document.createElement('div');
-  boardWrap.style.cssText = 'margin-bottom:28px;';
-  el.appendChild(boardWrap);
 
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:12px';
@@ -120,9 +112,6 @@ export function createTeamMenu(
       tBtn.style.cssText += teamsFull ? dim : '';
       ctBtn.style.cssText += teamsFull ? dim : '';
       specBtn.style.cssText += specFull ? dim : '';
-    },
-    renderScoreboard(players: PlayerScore[]): void {
-      renderScoreboardContent(boardWrap, players);
     },
     get onEsc() {
       return escCb;
