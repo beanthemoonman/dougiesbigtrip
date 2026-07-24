@@ -51,6 +51,8 @@ services:
       KC_HTTP_RELATIVE_PATH: /auth
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     command:
@@ -66,9 +68,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      # Health lives on the management port (9000) since Keycloak 25, at the
-      # management root — KC_HTTP_RELATIVE_PATH does not move it.
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q 200"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
       interval: 5s
       timeout: 10s
       retries: 20
@@ -102,9 +102,11 @@ services:
       dockerfile: Dockerfile.client
     ports:
       - "8082:80"
-      - "8443:443"
     depends_on:
-      - server
+      server:
+        condition: service_started
+      auth:
+        condition: service_healthy
     restart: unless-stopped
     # Prod: mount real certs over the baked-in self-signed pair.
     # volumes:
