@@ -101,7 +101,7 @@ services:
       context: .
       dockerfile: Dockerfile.client
     ports:
-      - "8080:80"
+      - "8082:80"
       - "8443:443"
     depends_on:
       - server
