@@ -67,8 +67,8 @@
       "linkOnly": false,
       "firstBrokerLoginFlowAlias": "first broker login",
       "config": {
-        "clientId": "${env.GOOGLE_CLIENT_ID}",
-        "clientSecret": "${env.GOOGLE_CLIENT_SECRET}",
+        "clientId": "PLACEHOLDER_GOOGLE_CLIENT_ID",
+        "clientSecret": "PLACEHOLDER_GOOGLE_CLIENT_SECRET",
         "defaultScope": "openid profile email",
         "useJwksUrl": "true",
         "syncMode": "IMPORT",
@@ -126,9 +126,10 @@
       "redirectUris": [
         "http://localhost:8080/*",
         "http://localhost:5173/*",
-        "https://localhost:8443/*"
+        "https://localhost:8443/*",
+        "https://counterdouggo.yikersis.land/*"
       ],
-      "webOrigins": ["+", "http://localhost:5173"],
+      "webOrigins": ["+", "http://localhost:5173", "https://counterdouggo.yikersis.land"],
       "bearerOnly": false,
       "consentRequired": false,
       "standardFlowEnabled": true,

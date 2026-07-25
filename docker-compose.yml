@@ -74,6 +74,24 @@ services:
       retries: 20
       start_period: 30s
 
+  keycloak-init:
+    # One-shot — patches the Google IDP clientId / clientSecret via the
+    # Keycloak Admin API because `--import-realm` does not resolve
+    # ${env.GOOGLE_CLIENT_ID} placeholders nested in identity-provider config.
+    image: alpine:latest
+    command: >
+      sh -c "apk add --no-cache curl jq && /init-keycloak-idp.sh"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+    volumes:
+      - ./scripts/init-keycloak-idp.sh:/init-keycloak-idp.sh:ro
+    depends_on:
+      auth:
+        condition: service_healthy
+
   server:
     build:
       context: .
