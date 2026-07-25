@@ -3546,4 +3546,27 @@ Wrote `docs/plan-modelview-cli.md` — detailed spec for a headless `pnpm view <
   for 3rd party check iframe message" auth-init failure.
 - Note for deploy: the silent check-sso iframe (`/sso-silent.html`) is same-origin
   and still needs the host nginx to send `X-Frame-Options: SAMEORIGIN` (or
-  `frame-ancestors 'self'`) rather than `deny`, or reload-persisted sessions break.
+  `frame-ancestors 'self'`)   rather than `deny`, or reload-persisted sessions break.
+
+## 2026-07-25 — Fix Google OAuth IDP credentials via keycloak-init one-shot service
+
+### Bug
+
+Keycloak 26 `start-dev --import-realm` does not resolve `${env.GOOGLE_CLIENT_ID}`
+placeholders nested inside `identityProviders[].config`. The `clientId` value was
+literally stored as the string `${env.GOOGLE_CLIENT_ID}`, causing the Google IDP
+to fail with `Path parameter not provided env.GOOGLE_CLIENT_ID` when building the
+OAuth authorization URL.
+
+### Fix
+
+- `scripts/init-keycloak-idp.sh` — post-startup hook that fetches the Google IDP
+  config via the Keycloak Admin API, merges in the real `clientId`/`clientSecret`
+  from Docker Compose env vars, and PUTs the updated config back. No restart needed.
+- `docker-compose.yml` — new `keycloak-init` one-shot service (alpine + curl + jq)
+  that depends on `auth` being healthy and runs the script.
+- `auth/counter-douglas-realm.json` — changed idP placeholders from
+  `${env.GOOGLE_CLIENT_ID}` to `PLACEHOLDER_GOOGLE_CLIENT_ID` (the init script
+  overwrites them regardless); added production redirect URI and web origin
+  (`https://counterdouggo.yikersis.land/*`) so they survive a fresh realm import.
+
