@@ -78,6 +78,11 @@ export async function initAuth(): Promise<AuthState> {
       onLoad: 'check-sso',
       silentCheckSsoRedirectUri: `${location.origin}/sso-silent.html`,
       pkceMethod: 'S256',
+      // ponytail: no session-status iframe. It needs a 3rd-party-cookie probe
+      // iframe that dies behind an X-Frame-Options-hardened reverse proxy
+      // ("Timeout when waiting for 3rd party check iframe message"), and we
+      // don't act on remote logout anyway — token expiry is enough.
+      checkLoginIframe: false,
     });
   } catch (err) {
     console.warn('Auth init failed (Keycloak unreachable?):', err);

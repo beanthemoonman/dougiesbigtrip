@@ -3538,3 +3538,12 @@ Wrote `docs/plan-modelview-cli.md` — detailed spec for a headless `pnpm view <
   signed out. Singleplayer always opens the match popup. Multi-player, when not
   authenticated, redirects to Keycloak via `auth.login()` instead of opening the
   connect popup. Dropped the "Log in to play" gate note.
+
+## Keycloak 3rd-party-check iframe timeout in prod
+- `src/core/auth.ts`: `checkLoginIframe: false` in `kc.init()`. The session-status
+  iframe pulls in a 3p-cookie probe iframe that never posts back when the host
+  reverse proxy sends `X-Frame-Options: deny`, producing the "Timeout when waiting
+  for 3rd party check iframe message" auth-init failure.
+- Note for deploy: the silent check-sso iframe (`/sso-silent.html`) is same-origin
+  and still needs the host nginx to send `X-Frame-Options: SAMEORIGIN` (or
+  `frame-ancestors 'self'`) rather than `deny`, or reload-persisted sessions break.
