@@ -10,7 +10,7 @@
 import { resumeAudio, setMasterVolume } from './core/audio';
 import { initAuth, type AuthState } from './core/auth';
 import { createInputManager } from './core/input';
-import { DEFAULT_SERVER_ADDRESS, DEFAULT_SETTINGS } from './core/settings';
+import { DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PORT, DEFAULT_SETTINGS } from './core/settings';
 import { LIMITS } from './game/round';
 import { createRenderContext } from './render/renderer';
 import { createScreenManager } from './ui/screens';
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     },
     mp: {
       defaultAddress: DEFAULT_SERVER_ADDRESS,
-      defaultPort: '9876',
+      defaultPort: DEFAULT_SERVER_PORT,
       onConnect(url: string, name: string): void {
         mpConnect.fn?.(url, name);
       },

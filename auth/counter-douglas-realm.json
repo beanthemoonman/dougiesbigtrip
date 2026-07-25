@@ -59,7 +59,7 @@
       "displayName": "Google",
       "providerId": "google",
       "enabled": true,
-      "updateProfileFirstLoginMode": "on",
+      "updateProfileFirstLoginMode": "missing",
       "trustEmail": true,
       "storeToken": false,
       "addReadTokenRoleOnCreate": false,
@@ -77,26 +77,7 @@
       }
     }
   ],
-  "identityProviderMappers": [
-    {
-      "name": "google-email",
-      "identityProviderAlias": "google",
-      "identityProviderMapper": "hardcoded-attribute-idp-mapper",
-      "config": {
-        "attribute": "email",
-        "attribute.value": "email"
-      }
-    },
-    {
-      "name": "google-username",
-      "identityProviderAlias": "google",
-      "identityProviderMapper": "hardcoded-attribute-idp-mapper",
-      "config": {
-        "attribute": "username",
-        "attribute.value": "email"
-      }
-    }
-  ],
+  "identityProviderMappers": [],
   "roles": {
     "realm": [
       {

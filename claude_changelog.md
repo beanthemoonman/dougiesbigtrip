@@ -3582,3 +3582,25 @@ OAuth authorization URL.
 - Verified on the live box: Keycloak boots in ~8s in prod profile, realm import
   skipped (already present), healthy, `/.well-known/openid-configuration` → 200.
   Steady state: auth 403MiB/512MiB, db 40MiB/192MiB.
+
+## Fix "Update Account Information" prompt on Google login
+
+- `auth/counter-douglas-realm.json`: Google IDP `updateProfileFirstLoginMode`
+  `on` → `missing` (with `trustEmail: true` already set, Google's verified
+  email + given/family name leave nothing for the review-profile screen to ask).
+- Dropped the two `hardcoded-attribute-idp-mapper` entries that stamped the
+  *literal string* `"email"` onto every brokered user's `email` and `username` —
+  that invalid email is what forced the account-information form. Google's own
+  claims populate those fields.
+- `scripts/init-keycloak-idp.sh` re-applies both fixes against the live realm
+  (mode/trustEmail in the existing jq merge, plus a mapper sweep), because
+  `--import-realm` is a no-op once the realm exists.
+
+## Default multiplayer port follows the page's port
+
+- `src/core/settings.ts`: `DEFAULT_SERVER_PORT` is now `location.port` (falling
+  back to 443/80 when the origin has none) instead of a hardcoded `9876`/`443`.
+  Dev still dials the raw game port `9876` — the vite dev server proxies nothing.
+- Dropped the wss→443 special case in `createSettingsPanel`; the entry screen
+  (`src/main.ts`) now passes `DEFAULT_SERVER_PORT` instead of the literal `'9876'`.
+- `pnpm typecheck` green.

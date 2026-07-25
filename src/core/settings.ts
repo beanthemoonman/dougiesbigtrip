@@ -34,7 +34,12 @@ const _wsScheme = typeof location !== 'undefined' && location.protocol === 'http
 const _direct = import.meta.env.DEV || _host === '';
 
 export const DEFAULT_SERVER_ADDRESS = _direct ? '127.0.0.1' : `${_host}/ws`;
-export const DEFAULT_SERVER_PORT = '9876';
+// Default to the port the page itself was served over — behind the nginx ingress
+// the game is reachable on the same port as the site (implicit 443/80 when the
+// origin has none). Dev has no proxy, so it dials the raw game port.
+export const DEFAULT_SERVER_PORT = _direct
+  ? '9876'
+  : location.port || (_wsScheme === 'wss' ? '443' : '80');
 /** Fully-formed default WebSocket URL — the single source of truth. */
 export const DEFAULT_WS_URL = _direct
   ? `ws://${DEFAULT_SERVER_ADDRESS}:${DEFAULT_SERVER_PORT}`
@@ -110,9 +115,7 @@ export function createSettingsPanel(
   // wss:// from an https page, ws:// otherwise — a browser blocks ws:// from a
   // secure page as mixed content, so the scheme must follow the page.
   const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // Over TLS a bare host reaches the server through the :443 reverse proxy, not
-  // the raw game port — so default the port field to 443 on https.
-  const defaultPort = wsScheme === 'wss:' ? '443' : DEFAULT_SERVER_PORT;
+  const defaultPort = DEFAULT_SERVER_PORT;
 
   // Build the WebSocket URL from the address/port fields. Supports three forms:
   //   - full URL typed         → "wss://host/ws"      (used verbatim)

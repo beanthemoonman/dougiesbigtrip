@@ -57,8 +57,14 @@ if [ -z "$IDP_JSON" ]; then
 fi
 
 echo "[init-keycloak-idp] Merging OAuth credentials…"
+# updateProfileFirstLoginMode=missing + trustEmail: Google already gives us a
+# verified email, first and last name, so the "Update Account Information"
+# review screen has nothing to ask for. Re-applied here because --import-realm
+# is a no-op once the realm exists.
 UPDATED=$(echo "$IDP_JSON" | jq --arg cid "${GOOGLE_CLIENT_ID}" --arg cs "${GOOGLE_CLIENT_SECRET}" \
-  '.config.clientId = $cid | .config.clientSecret = $cs | del(.internalId)')
+  '.config.clientId = $cid | .config.clientSecret = $cs
+   | .updateProfileFirstLoginMode = "missing" | .trustEmail = true
+   | del(.internalId)')
 
 echo "[init-keycloak-idp] Pushing updated config…"
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
@@ -71,5 +77,19 @@ if [ "$HTTP_STATUS" != "204" ]; then
   echo "[init-keycloak-idp] ERROR: PUT returned HTTP ${HTTP_STATUS}" >&2
   exit 1
 fi
+
+# The old realm shipped two hardcoded-attribute mappers that stamped the
+# literal string "email" onto every brokered user's email/username, which is
+# what made Keycloak stop and demand valid account information. Google's own
+# claims already populate those fields.
+echo "[init-keycloak-idp] Removing legacy hardcoded IDP mappers…"
+curl -sf -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  "${KEYCLOAK_URL}/admin/realms/counter-douglas/identity-provider/instances/google/mappers" \
+  | jq -r '.[] | select(.identityProviderMapper == "hardcoded-attribute-idp-mapper") | .id' \
+  | while read -r MAPPER_ID; do
+      echo "[init-keycloak-idp]   deleting mapper ${MAPPER_ID}"
+      curl -sf -X DELETE -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/counter-douglas/identity-provider/instances/google/mappers/${MAPPER_ID}"
+    done
 
 echo "[init-keycloak-idp] Done — Google IDP credentials updated."
