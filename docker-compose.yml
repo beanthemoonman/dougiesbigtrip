@@ -13,6 +13,12 @@
 services:
   db:
     image: postgres:16
+    # ponytail: shared_buffers/max_connections dialled down to match — the
+    # stock 128MB + 100 conns is sized for a real workload, not one Keycloak
+    # and one game server.
+    mem_limit: 192m
+    shm_size: 64m
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=50"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -32,8 +38,19 @@ services:
       start_period: 3s
 
   auth:
-    image: quay.io/keycloak/keycloak:26.7
+    # Pre-built image (see Dockerfile.auth) so this runs `start --optimized`.
+    build:
+      context: .
+      dockerfile: Dockerfile.auth
+    # ponytail: a handful of players — Keycloak's default heap is 70% of host
+    # RAM, which is absurd here. 256M heap; the 512M container ceiling is heap
+    # plus the JVM's non-heap overhead (metaspace, code cache, direct buffers,
+    # Infinispan/JGroups), which runs ~150M — measured at ~380M RSS with a 320M
+    # heap, hence the gap. Raise both together if `docker stats` shows an
+    # OOMKill or steady-state usage near the limit.
+    mem_limit: 512m
     environment:
+      JAVA_OPTS_KC_HEAP: "-Xms64m -Xmx256m"
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
       KC_DB: postgres
@@ -56,7 +73,8 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     command:
-      - start-dev
+      - start
+      - --optimized
       - --import-realm
       - --http-port=8080
     expose:

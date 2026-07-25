@@ -3570,3 +3570,15 @@ OAuth authorization URL.
   overwrites them regardless); added production redirect URI and web origin
   (`https://counterdouggo.yikersis.land/*`) so they survive a fresh realm import.
 
+
+## Cap Keycloak/Postgres memory, run Keycloak optimized
+- `Dockerfile.auth` (new): pre-builds Keycloak (`kc.sh build` with the build-time
+  options KC_DB/KC_HEALTH_ENABLED/KC_HTTP_RELATIVE_PATH baked in) so compose can
+  run `start --optimized` instead of `start-dev` — no per-boot augmentation.
+  Changing any of those three options now means `docker compose build auth`.
+- `docker-compose.yml`: `auth` → `JAVA_OPTS_KC_HEAP: -Xms64m -Xmx256m`,
+  `mem_limit: 512m` (JVM default heap is 70% of *host* RAM). `db` → `mem_limit:
+  192m`, `shm_size: 64m`, `shared_buffers=32MB`, `max_connections=50`.
+- Verified on the live box: Keycloak boots in ~8s in prod profile, realm import
+  skipped (already present), healthy, `/.well-known/openid-configuration` → 200.
+  Steady state: auth 403MiB/512MiB, db 40MiB/192MiB.

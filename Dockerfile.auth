@@ -1,0 +1,13 @@
+# Keycloak, pre-built so the container runs `start --optimized` instead of
+# `start-dev`: no re-augmentation on every boot, no dev-mode caches, less RAM.
+#
+# Everything below is a *build-time* Keycloak option — changing one means
+# rebuilding this image (`docker compose build auth`). Runtime config (hostname,
+# db credentials, proxy headers) stays in docker-compose.yml.
+FROM quay.io/keycloak/keycloak:26.7
+
+ENV KC_DB=postgres \
+    KC_HEALTH_ENABLED=true \
+    KC_HTTP_RELATIVE_PATH=/auth
+
+RUN /opt/keycloak/bin/kc.sh build
