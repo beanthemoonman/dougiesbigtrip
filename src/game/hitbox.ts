@@ -51,17 +51,17 @@ const SRC: readonly [Hitbox, [number, number, number], [number, number, number]]
     ['chest', [0, 0.09, 1.33], [0.4, 0.1, 0.34]], // vest
     ['head', [0, -0.02, 1.53], [0.11, 0.11, 0.08]], // neck
     ['head', [0, -0.01, 1.64], [0.19, 0.21, 0.22]], // head
-    ['head', [0, -0.01, 1.74], [0.21, 0.23, 0.1]], // helmet
+    ['head', [0, -0.01, 1.71], [0.22, 0.24, 0.13]], // helmet
   ];
   for (const sx of [-1, 1]) {
-    const x = 0.11 * sx;
-    rows.push(['leg', [x, 0.05, 0.045], [0.11, 0.28, 0.09]]); // foot
+    const x = 0.13 * sx; // LEG_X
+    rows.push(['leg', [x, 0.05, 0.045], [0.12, 0.28, 0.09]]); // foot
     rows.push(['leg', [x, -0.02, 0.3], [0.13, 0.15, 0.45]]); // shin
-    rows.push(['leg', [x, -0.02, 0.72], [0.16, 0.18, 0.42]]); // thigh
-    rows.push(['chest', [0.24 * sx, -0.02, 1.44], [0.16, 0.2, 0.16]]); // shoulder
-    rows.push(['arm', [0.24 * sx, -0.02, 1.24], [0.13, 0.14, 0.3]]); // upper arm
-    rows.push(['arm', [0.2 * sx, -0.02, 0.99], [0.11, 0.12, 0.28]]); // lower arm
-    rows.push(['arm', [0.19 * sx, -0.02, 0.82], [0.1, 0.11, 0.12]]); // hand
+    rows.push(['leg', [x, -0.02, 0.72], [0.15, 0.18, 0.42]]); // thigh
+    rows.push(['chest', [0.27 * sx, -0.02, 1.44], [0.16, 0.2, 0.16]]); // shoulder
+    rows.push(['arm', [0.27 * sx, -0.02, 1.24], [0.13, 0.14, 0.3]]); // upper arm
+    rows.push(['arm', [0.265 * sx, -0.02, 0.99], [0.11, 0.12, 0.28]]); // lower arm
+    rows.push(['arm', [0.255 * sx, -0.02, 0.82], [0.1, 0.11, 0.12]]); // hand
   }
   return rows;
 })();

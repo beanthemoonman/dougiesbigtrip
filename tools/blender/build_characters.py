@@ -38,8 +38,10 @@ PALETTES = {
     "t": {  # militia — tan fatigues, olive vest, ski-mask
         "suit": (0.34, 0.27, 0.16),
         "vest": (0.16, 0.18, 0.10),
-        "gear": (0.03, 0.03, 0.035),
-        "skin": (0.03, 0.03, 0.035),
+        "gear": (0.02, 0.02, 0.025),
+        # Ski-mask, deliberately a shade off "gear" so the masked head still reads
+        # as a head against the black beanie instead of one solid block.
+        "skin": (0.055, 0.05, 0.06),
     },
 }
 
@@ -79,7 +81,8 @@ def _mat(name, color, rough=0.6):
     return m
 
 def _box(name, center, size, material):
-    bpy.ops.mesh.primitive_cube_add(size=1, location=center)
+    # size=2 cube (2 m across) so scale = size/2 yields exactly `size` metres.
+    bpy.ops.mesh.primitive_cube_add(size=2, location=center)
     o = bpy.context.active_object
     o.name = name
     o.scale = (size[0] / 2, size[1] / 2, size[2] / 2)
@@ -144,25 +147,25 @@ def _build_armature():
     neck   = add("mixamorig:Neck",           (0, 0, 1.49), (0, 0, 1.56), spine2)
     head   = add("mixamorig:Head",           (0, 0, 1.56), (0, 0, 1.74), neck)
 
-    l_shld = add("mixamorig:LeftShoulder",   (-0.22, 0, 1.44), (-0.24, 0, 1.30), spine2)
-    l_arm  = add("mixamorig:LeftArm",        (-0.24, 0, 1.30), (-0.22, 0, 0.95), l_shld)
-    l_farm = add("mixamorig:LeftForeArm",    (-0.22, 0, 0.95), (-0.20, 0, 0.78), l_arm)
-    l_hand = add("mixamorig:LeftHand",       (-0.20, 0, 0.78), (-0.19, 0, 0.68), l_farm)
+    l_shld = add("mixamorig:LeftShoulder",   (-0.20, 0, 1.44), (-0.27, 0, 1.30), spine2)
+    l_arm  = add("mixamorig:LeftArm",        (-0.27, 0, 1.30), (-0.265, 0, 0.95), l_shld)
+    l_farm = add("mixamorig:LeftForeArm",    (-0.265, 0, 0.95), (-0.26, 0, 0.78), l_arm)
+    l_hand = add("mixamorig:LeftHand",       (-0.26, 0, 0.78), (-0.255, 0, 0.68), l_farm)
 
-    r_shld = add("mixamorig:RightShoulder",  (0.22, 0, 1.44), (0.24, 0, 1.30), spine2)
-    r_arm  = add("mixamorig:RightArm",       (0.24, 0, 1.30), (0.22, 0, 0.95), r_shld)
-    r_farm = add("mixamorig:RightForeArm",   (0.22, 0, 0.95), (0.20, 0, 0.78), r_arm)
-    r_hand = add("mixamorig:RightHand",      (0.20, 0, 0.78), (0.19, 0, 0.68), r_farm)
+    r_shld = add("mixamorig:RightShoulder",  (0.20, 0, 1.44), (0.27, 0, 1.30), spine2)
+    r_arm  = add("mixamorig:RightArm",       (0.27, 0, 1.30), (0.265, 0, 0.95), r_shld)
+    r_farm = add("mixamorig:RightForeArm",   (0.265, 0, 0.95), (0.26, 0, 0.78), r_arm)
+    r_hand = add("mixamorig:RightHand",      (0.26, 0, 0.78), (0.255, 0, 0.68), r_farm)
 
-    l_uleg = add("mixamorig:LeftUpLeg",      (-0.10, 0, 0.95), (-0.10, 0, 0.52), hips)
-    l_leg  = add("mixamorig:LeftLeg",        (-0.10, 0, 0.52), (-0.10, 0.05, 0.08), l_uleg)
-    l_foot = add("mixamorig:LeftFoot",       (-0.10, 0.05, 0.08), (-0.10, 0.28, 0.04), l_leg)
-    l_toe  = add("mixamorig:LeftToeBase",    (-0.10, 0.28, 0.04), (-0.10, 0.34, 0.02), l_foot)
+    l_uleg = add("mixamorig:LeftUpLeg",      (-0.13, 0, 0.95), (-0.13, 0, 0.52), hips)
+    l_leg  = add("mixamorig:LeftLeg",        (-0.13, 0, 0.52), (-0.13, 0.05, 0.08), l_uleg)
+    l_foot = add("mixamorig:LeftFoot",       (-0.13, 0.05, 0.08), (-0.13, 0.28, 0.04), l_leg)
+    l_toe  = add("mixamorig:LeftToeBase",    (-0.13, 0.28, 0.04), (-0.13, 0.34, 0.02), l_foot)
 
-    r_uleg = add("mixamorig:RightUpLeg",     (0.10, 0, 0.95), (0.10, 0, 0.52), hips)
-    r_leg  = add("mixamorig:RightLeg",       (0.10, 0, 0.52), (0.10, 0.05, 0.08), r_uleg)
-    r_foot = add("mixamorig:RightFoot",      (0.10, 0.05, 0.08), (0.10, 0.28, 0.04), r_leg)
-    r_toe  = add("mixamorig:RightToeBase",   (0.10, 0.28, 0.04), (0.10, 0.34, 0.02), r_foot)
+    r_uleg = add("mixamorig:RightUpLeg",     (0.13, 0, 0.95), (0.13, 0, 0.52), hips)
+    r_leg  = add("mixamorig:RightLeg",       (0.13, 0, 0.52), (0.13, 0.05, 0.08), r_uleg)
+    r_foot = add("mixamorig:RightFoot",      (0.13, 0.05, 0.08), (0.13, 0.28, 0.04), r_leg)
+    r_toe  = add("mixamorig:RightToeBase",   (0.13, 0.28, 0.04), (0.13, 0.34, 0.02), r_foot)
 
     bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -185,14 +188,15 @@ def _build_mesh(arm_obj, team, pal):
         "skin": _mat(f"M_{team}_skin", pal["skin"], 0.7),
     }
     boxes = []
-    ARM_X = 0.24
+    ARM_X = 0.27
+    LEG_X = 0.13
 
     for sx in (-1, 1):
         label = f"{sx}"
-        x = 0.11 * sx
-        boxes.append(_box(f"foot{label}",  (x, 0.05, 0.045), (0.11, 0.28, 0.09), M["gear"]))
+        x = LEG_X * sx
+        boxes.append(_box(f"foot{label}",  (x, 0.05, 0.045), (0.12, 0.28, 0.09), M["gear"]))
         boxes.append(_box(f"shin{label}",  (x, -0.02, 0.30),  (0.13, 0.15, 0.45), M["suit"]))
-        boxes.append(_box(f"thigh{label}", (x, -0.02, 0.72),  (0.16, 0.18, 0.42), M["suit"]))
+        boxes.append(_box(f"thigh{label}", (x, -0.02, 0.72),  (0.15, 0.18, 0.42), M["suit"]))
 
     boxes.append(_box("pelvis",  (0, -0.02, 0.99),  (0.34, 0.20, 0.16), M["suit"]))
     boxes.append(_box("abdomen", (0, -0.02, 1.16),  (0.36, 0.21, 0.20), M["suit"]))
@@ -204,12 +208,14 @@ def _build_mesh(arm_obj, team, pal):
         x = ARM_X * sx
         boxes.append(_box(f"shoulder{label}", (x, -0.02, 1.44),      (0.16, 0.20, 0.16), M["vest"]))
         boxes.append(_box(f"uarm{label}",     (x, -0.02, 1.24),      (0.13, 0.14, 0.30), M["suit"]))
-        boxes.append(_box(f"larm{label}",     (0.20 * sx, -0.02, 0.99), (0.11, 0.12, 0.28), M["suit"]))
-        boxes.append(_box(f"hand{label}",     (0.19 * sx, -0.02, 0.82), (0.10, 0.11, 0.12), M["gear"]))
+        boxes.append(_box(f"larm{label}",     (0.265 * sx, -0.02, 0.99), (0.11, 0.12, 0.28), M["suit"]))
+        boxes.append(_box(f"hand{label}",     (0.255 * sx, -0.02, 0.82), (0.10, 0.11, 0.12), M["gear"]))
 
     boxes.append(_box("neck",   (0, -0.02, 1.53), (0.11, 0.11, 0.08), M["skin"]))
     boxes.append(_box("head",   (0, -0.01, 1.64), (0.19, 0.21, 0.22), M["skin"]))
-    boxes.append(_box("helmet", (0, -0.01, 1.74), (0.21, 0.23, 0.10), M["gear"]))
+    # Helmet sits *over* the top of the skull down to brow level, not stacked on
+    # top of it — otherwise it reads as a top hat rather than headgear.
+    boxes.append(_box("helmet", (0, -0.01, 1.71), (0.22, 0.24, 0.13), M["gear"]))
 
     # Joint spheres — bridge gaps between rigidly-rotated body-part boxes so
     # the character reads as one connected unit rather than floating segments.
@@ -224,13 +230,13 @@ def _build_mesh(arm_obj, team, pal):
                      (ARM_X * sx, -0.02, 1.30), JS, M["vest"]))
         # Elbow: sphere at forearm origin
         boxes.append(_joint_sphere(f"joint_elbow_{side}",
-                     (0.22 * sx, -0.02, 0.95), JS, M["suit"]))
+                     (0.265 * sx, -0.02, 0.95), JS, M["suit"]))
         # Hip: sphere at thigh origin
         boxes.append(_joint_sphere(f"joint_hip_{side}",
-                     (0.10 * sx, -0.02, 0.95), JS * 1.1, M["suit"]))
+                     (LEG_X * sx, -0.02, 0.95), JS * 1.1, M["suit"]))
         # Knee: sphere at shin origin
         boxes.append(_joint_sphere(f"joint_knee_{side}",
-                     (0.10 * sx, -0.02, 0.52), JS, M["suit"]))
+                     (LEG_X * sx, -0.02, 0.52), JS, M["suit"]))
 
     # Neck joint — bridges neck box to head box
     boxes.append(_joint_sphere("joint_neck", (0, -0.02, 1.56), 0.06, M["skin"]))

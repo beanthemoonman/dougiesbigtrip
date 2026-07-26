@@ -3699,3 +3699,27 @@ Tests + typecheck green.
 
 Skipped: props (`src/game/props.ts`) are still MeshBasic — not what was complained
 about; same one-line swap if they look flat too.
+
+## Player model refinement (2026-07-26)
+
+Rendered `ct_player.glb`/`t_player.glb` via `pnpm modelview` and fixed what the renders showed.
+
+- **Every body box was half its intended size.** `_box()` in `tools/blender/build_characters.py`
+  called `primitive_cube_add(size=1)` (a 1 m cube) then applied `scale = size/2`, yielding
+  `size/2` metres. Box *centres* were correct, so the character rendered as a cloud of
+  disconnected floating parts with no limb touching another. Switched to `size=2` so the
+  existing `size/2` scale is exact.
+- **Arms were buried inside the torso.** Moved the arm chain outboard (`ARM_X` 0.24 → 0.27,
+  forearm 0.20 → 0.265, hand 0.19 → 0.255) in both mesh and armature, so rigid-skin pivots
+  still match the geometry.
+- **Thighs met at the centreline** — the legs read as one slab to the knee. Widened the stance
+  (`LEG_X` 0.11 → 0.13) and narrowed the thigh (0.16 → 0.15) for a visible gap.
+- **Helmet sat on top of the skull like a top hat.** Lowered to z 1.71 and deepened to 0.13 so
+  it covers the crown down to brow level. Model crown is now 1.775 m (collider
+  `STANDING_HEIGHT` 1.8288 m, eye 1.6256 m — both still inside the head box).
+- **T's ski-mask and beanie were the same colour**, collapsing the head into one black block.
+  Split the T `skin` value a shade off `gear`.
+- `src/game/hitbox.ts` mirrors these boxes 1:1 — updated `SRC` to match, otherwise shots at the
+  new arm/leg positions would miss every bone box and fall through to the height band.
+
+`pnpm typecheck` and `pnpm test` (41 files, 259 tests) green. Tri count unchanged at 1566.
