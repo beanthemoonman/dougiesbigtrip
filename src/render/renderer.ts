@@ -123,10 +123,13 @@ export function createRenderContext(canvas: HTMLCanvasElement): RenderContext {
   viewmodelScene.environmentIntensity = 0.35;
 
   // key + fill (docs/weapon-feel.md §1), low and hand-placed, both on layer 1.
-  const key = new DirectionalLight(0xfff2e0, 2.2);
+  // ponytail: hand-tuned calibration. Key was 2.2 / fill 0.7, which clipped the
+  // gun to white through ACES + bloom — "low" in the doc means low. Turn the key
+  // up only if the viewmodel reads muddy against a bright skybox.
+  const key = new DirectionalLight(0xfff2e0, 1.2);
   key.position.set(-0.6, 0.8, 0.4);
   key.layers.set(1);
-  const fill = new DirectionalLight(0x9fb4cc, 0.7);
+  const fill = new DirectionalLight(0x9fb4cc, 0.35);
   fill.position.set(0.7, -0.2, 0.5);
   fill.layers.set(1);
   viewmodelScene.add(key, fill);

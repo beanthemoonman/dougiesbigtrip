@@ -3685,3 +3685,17 @@ Wall/floor textures were tiling ~8x per wall panel. UV0 is a 1 m cube projection
 (`build_map.py`), so `SurfaceDef.repeat` is tiles-per-metre; it was set to 2 (a tile
 every 50 cm). Dropped to 0.5 for concrete/sandstone (2 m tile) and 0.65 for wood.
 Tests + typecheck green.
+
+## Lighting: characters + weapons no longer wash out
+
+- `src/render/matcap.ts` (new): one cached procedural matcap (canvas radial gradient,
+  key upper-left, dark rim). No lights, no asset, no licence row.
+- `src/game/characters.ts`: character rigs and hand-held world-model guns flatten to
+  `MeshMatcapMaterial` instead of `MeshBasicMaterial` — same zero realtime lights, but
+  they now have form instead of reading as flat single-colour silhouettes. Team tint
+  still works (matcap `color` multiplies).
+- `src/render/renderer.ts`: viewmodel key 2.2 → 1.2, fill 0.7 → 0.35. The old values
+  clipped the gun to white once ACES + bloom ran on top.
+
+Skipped: props (`src/game/props.ts`) are still MeshBasic — not what was complained
+about; same one-line swap if they look flat too.

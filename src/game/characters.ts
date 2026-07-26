@@ -6,8 +6,9 @@
  * shell + session.
  */
 
-import { type AnimationClip, Color, Mesh, MeshBasicMaterial, type MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three';
+import { type AnimationClip, Color, Mesh, MeshMatcapMaterial, type MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { characterMatcap } from '../render/matcap';
 import ctPlayerUrl from '../../assets/characters/ct_player.glb?url';
 import rifleUrl from '../../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../../assets/weapons/pistol_viewmodel.glb?url';
@@ -16,19 +17,22 @@ import pistolUrl from '../../assets/weapons/pistol_viewmodel.glb?url';
 // model). CT keep their baked colour; T get a warm tan.
 export const T_TINT = new Color(0xc8a06a);
 
-// Baked-lighting world has no realtime lights, so flatten the glb's
-// MeshStandardMaterials to unlit MeshBasicMaterial.
-// MeshBasicMaterial skins automatically for a SkinnedMesh in three r170 (no
-// `skinning` flag). Keep single materials single: each bot submesh is one
-// primitive with zero geometry groups, so a 1-element material *array* would
-// draw nothing (the renderer iterates groups) — the model goes invisible.
-const toBasic = (m: MeshStandardMaterial): MeshBasicMaterial => new MeshBasicMaterial({ color: m.color });
+// Baked-lighting world has no realtime lights, so the glb's MeshStandardMaterials
+// are flattened to a lightless material. MeshBasicMaterial made characters read
+// as flat silhouettes; MeshMatcapMaterial shades them from the view-space normal
+// instead — same zero lights, but with form. (See src/render/matcap.ts.)
+// Matcap skins automatically for a SkinnedMesh in three r170 (no `skinning`
+// flag). Keep single materials single: each bot submesh is one primitive with
+// zero geometry groups, so a 1-element material *array* would draw nothing (the
+// renderer iterates groups) — the model goes invisible.
+const toMatcap = (m: MeshStandardMaterial): MeshMatcapMaterial =>
+  new MeshMatcapMaterial({ color: m.color, matcap: characterMatcap() });
 export function flattenMaterials(root: Object3D): void {
   root.traverse((o) => {
     if (o instanceof SkinnedMesh) {
       o.material = Array.isArray(o.material)
-        ? o.material.map((m) => toBasic(m as MeshStandardMaterial))
-        : toBasic(o.material as MeshStandardMaterial);
+        ? o.material.map((m) => toMatcap(m as MeshStandardMaterial))
+        : toMatcap(o.material as MeshStandardMaterial);
     }
   });
 }
@@ -38,8 +42,8 @@ export function tintCharacter(root: Object3D, color: Color): void {
   root.traverse((o) => {
     if (o instanceof SkinnedMesh) {
       const m = o.material;
-      if (Array.isArray(m)) m.forEach((mm) => (mm as MeshBasicMaterial).color.copy(color));
-      else (m as MeshBasicMaterial).color.copy(color);
+      if (Array.isArray(m)) m.forEach((mm) => (mm as MeshMatcapMaterial).color.copy(color));
+      else (m as MeshMatcapMaterial).color.copy(color);
     }
   });
 }
@@ -50,7 +54,7 @@ export function baseCharacterColor(root: Object3D): Color {
   root.traverse((o) => {
     if (o instanceof SkinnedMesh) {
       const m = o.material;
-      out.copy(((Array.isArray(m) ? m[0] : m) as MeshBasicMaterial).color);
+      out.copy(((Array.isArray(m) ? m[0] : m) as MeshMatcapMaterial).color);
     }
   });
   return out;
@@ -108,7 +112,7 @@ export async function loadCharacterAssets(scene: Object3D): Promise<CharacterAss
       o.layers.set(0); // world layer (viewmodel is layer 1)
       if (o instanceof Mesh) {
         const src = o.material as MeshStandardMaterial;
-        o.material = new MeshBasicMaterial({ map: src.map, color: src.color });
+        o.material = new MeshMatcapMaterial({ map: src.map, color: src.color, matcap: characterMatcap() });
       }
     });
     gun.position.copy(BOT_GUN_POS);
