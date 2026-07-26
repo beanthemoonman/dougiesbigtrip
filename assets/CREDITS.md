@@ -23,3 +23,4 @@ One row per asset, added at the moment the asset is added. See `docs/licensing-a
 | assets/tex/concrete_diff.jpg | Poly Haven (concrete_wall_003) | Poly Haven | CC0-1.0 | https://polyhaven.com/a/concrete_wall_003 | 2026-07-22 |
 | assets/tex/sandstone_diff.jpg | Poly Haven (large_sandstone_blocks), brightness/levels adjusted toward beach-sand | Poly Haven | CC0-1.0 | https://polyhaven.com/a/large_sandstone_blocks | 2026-07-22 |
 | assets/tex/wood_diff.jpg | Poly Haven (brown_planks_05) | Poly Haven | CC0-1.0 | https://polyhaven.com/a/brown_planks_05 | 2026-07-22 |
+| src/ui/entry.ts (inline GitHub mark SVG) | GitHub Octicons `mark-github` | GitHub, Inc. | MIT | https://github.com/primer/octicons | 2026-07-26 |

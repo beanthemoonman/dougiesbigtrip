@@ -3972,3 +3972,13 @@ and 2.5 m along the spine wall (opposite lateral direction), landing the 4th bot
 Root cause of missing it twice: the new test only checked props. Added a second case asserting no
 spawn is within 0.6 m of any axis-aligned wall box in `MAP_BOXES` — the spawn pocket is small
 (|z| 22.2–28.3, x -21.8 to -10) and every future row tweak now gets checked against it. 271 green.
+
+## GitHub source link on the entry screen
+
+Bottom-right anchor on the mode-selection screen → `https://github.com/beanthemoonman/dougiesbigtrip`.
+Inline Octicons `mark-github` SVG (MIT) plus a "Source" label, 0.6 opacity brightening to 1 on
+hover, matching the entry screen's muted palette. Inline rather than an asset file: no network
+fetch, no payload, nothing to load. `target=_blank` with `rel="noopener noreferrer"`.
+
+New `src/ui/entry.test.ts` (jsdom) asserts the href, the noopener rel and the presence of the SVG.
+Verified rendered in Chrome at 1568×783. `CREDITS.md` row added for the Octicons mark.
