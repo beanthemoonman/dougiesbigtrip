@@ -3678,3 +3678,10 @@ Deliberately skipped: a real crouch animation clip (uniform Y squash instead, ma
 and any change to the bot→player shot model (angular cone at the eye, not a hull test).
 Test: `src/game/hitbox.test.ts` gains a crouched-profile case. `pnpm typecheck` + `pnpm test`
 green (259 tests).
+
+## Texture tiling density
+
+Wall/floor textures were tiling ~8x per wall panel. UV0 is a 1 m cube projection
+(`build_map.py`), so `SurfaceDef.repeat` is tiles-per-metre; it was set to 2 (a tile
+every 50 cm). Dropped to 0.5 for concrete/sandstone (2 m tile) and 0.65 for wood.
+Tests + typecheck green.

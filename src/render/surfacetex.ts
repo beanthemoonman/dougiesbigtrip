@@ -86,10 +86,13 @@ interface SurfaceDef {
   texPath: string;
 }
 
+// UV0 is a 1-metre cube projection (build_map.py `cube_project(cube_size=1.0)`),
+// so `repeat` is literally tiles-per-metre. Anything >= 1 gives the sub-metre
+// texture chatter that reads as noise on a 4 m wall.
 const SURFACES: readonly SurfaceDef[] = [
-  { name: 'Concrete', gen: concreteGen, repeat: 2, texPath: concreteUrl },
-  { name: 'Sandstone', gen: sandstoneGen, repeat: 2, texPath: sandstoneUrl },
-  { name: 'Wood', gen: woodGen, repeat: 1.5, texPath: woodUrl },
+  { name: 'Concrete', gen: concreteGen, repeat: 0.5, texPath: concreteUrl },
+  { name: 'Sandstone', gen: sandstoneGen, repeat: 0.5, texPath: sandstoneUrl },
+  { name: 'Wood', gen: woodGen, repeat: 0.65, texPath: woodUrl },
 ];
 
 function makeProcedural(gen: Gen, repeat: number, seed: number): CanvasTexture {
