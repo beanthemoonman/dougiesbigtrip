@@ -837,12 +837,6 @@ change persists and takes effect; a non-admin cannot see or reach the screen.
 
 ---
 
-## Explicitly out of scope
-
-- Buy menu / economy
-- Bomb plant/defuse (add in ~a day once rounds work, if you want it)
-- Multiple maps
-
 ## Risk register
 
 | Risk | Mitigation |
