@@ -50,8 +50,10 @@ disposable inspection tool.
 
 ```
 tools/modelview/
-  view.ts        # the whole tool — arg parse, render, save (~150 lines)
+  view.ts        # the whole tool — arg parse, render, save
   view.test.ts   # one self-check (crate renders non-blank)
+  solvepose.ts   # added 2026-07-26: solves the third-person weapon hold by IK
+                 # and prints the constants for src/ai/thirdperson.ts
 ```
 
 - `package.json`: add `"modelview": "tsx tools/modelview/view.ts"`.
@@ -70,7 +72,14 @@ Options:
   --size <px>       Square render size. Default: 1024.
   --out <dir>       Output directory. Default: .modelview/
   --bg <hex>        Background colour. Default: 808080 (neutral mid-grey).
+  --weapon <glb>    Attach a weapon to the rig's right-hand bone.
+  --pose <rifle|pistol>  Apply the game's third-person hold pose.
+  --solve           Pose from tools/modelview/solvepose.ts's live solve instead
+                    of the baked constants — the loop for tuning a hold.
 ```
+
+Angles: `front,back,left,right,top,iso,hero`. Models face −Z, so `front` and `iso` look at the
+model's **back**; `hero` is the 3/4 view of face and chest.
 
 Output filenames: `<out>/<basename>__<angle>.png`
 e.g. `.modelview/crate_wood__iso.png`.

@@ -44,7 +44,7 @@ import { hitboxAt, hitboxRay } from './hitbox';
 import { buildMapColliders, CT_SPAWN, MAP_BOXES, MAP_RAMPS, T_SPAWN, mapCuboids } from './map_douglas';
 import { createRoundState, DEFAULT_MATCH, isMatchOver, tickRound, validateMatchConfig, type MatchConfig } from './round';
 import { spawnRing } from './spawning';
-import { baseCharacterColor, loadCharacterAssets, flattenMaterials, T_TINT, tintCharacter } from './characters';
+import { loadCharacterAssets, flattenMaterials } from './characters';
 import { BREAKABLE_HP, PROP_PLACEMENTS, buildBreakables, buildPropMesh, makeSign, placeProps, propBoxAt, propSurface } from './props';
 import { duckHalfHeight, duckScaleY, EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from '../player/constants';
 import { updateViewCamera, type ViewState } from '../player/camera';
@@ -330,7 +330,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         if (ev.tag === EV_KILL && predictor && ev.slot === predictor.ownSlot) {
           playerAlive = false;
           specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
-          tintPlayerBody(playerTeam === 'CT');
+          showPlayerBodyTeam(playerTeam === 'CT');
           playerRagdoll = spawnRagdollBody(ragdollWorld, player.position, player.velocity, simTime);
         }
         if (ev.tag === EV_FIRE) pendingFireSlots.add(ev.slot);
@@ -528,9 +528,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     deaths: number;
   }
 
-  // CT rig template + world-model weapons (game/characters.ts). The template is
-  // added (hidden) to the scene so cloning can resolve the skeleton.
-  const { ctTemplateScene, ctTemplateClips, attachBotWeapon } = await loadCharacterAssets(renderCtx.scene);
+  // Per-team rig templates + world-model weapons (game/characters.ts). Templates
+  // are added (hidden) to the scene so cloning can resolve the skeleton.
+  const { templateFor, ctTemplateClips, attachBotWeapon } = await loadCharacterAssets(renderCtx.scene);
   loading.step('Loading weapons…');
 
   // Three CT bots spawn behind the CT spawn wall (west spine, +z end) and patrol
@@ -548,10 +548,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   const enemies: Enemy[] = botDefs.map(({ team, s }) => {
     const wasmIndex = sim_add_player(s.x, s.y, s.z);
     const bot = createBot(world, s, wasmIndex);
-    const clone = cloneSkeleton(ctTemplateScene);
+    const clone = cloneSkeleton(templateFor(team));
     clone.visible = true; // template is hidden; clones must be visible
     flattenMaterials(clone);
-    if (team === 'T') tintCharacter(clone, T_TINT);
     attachBotWeapon(clone); // Bug 2: rifle in the bot's right hand
     const root = new Group();
     root.add(clone);
@@ -580,22 +579,27 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   // so the only time you see your own avatar is the death cam: on death this CT
   // clone gets a ragdoll (same path as the bots) and the free-fly spectator watches
   // the corpse tumble. While alive it stays hidden — the FP camera sits inside it.
-  const playerBodyClone = cloneSkeleton(ctTemplateScene);
-  playerBodyClone.visible = true; // template is hidden; the clone must be visible
-  flattenMaterials(playerBodyClone);
-  attachBotWeapon(playerBodyClone, 'rifle');
-  applyWeaponPose(playerBodyClone, 'rifle'); // static hold; no mixer drives this body
+  // One clone per team, both parented to playerBody (the ragdoll drives the
+  // Group, not the clone). You can switch sides between lives, so the team is
+  // resolved at death by showing one and hiding the other.
+  const playerBodyClones: Record<Team, Object3D> = { CT: null!, T: null! };
+  for (const team of ['CT', 'T'] as Team[]) {
+    const clone = cloneSkeleton(templateFor(team));
+    flattenMaterials(clone);
+    attachBotWeapon(clone, 'rifle');
+    applyWeaponPose(clone, 'rifle'); // static hold; no mixer drives this body
+    playerBodyClones[team] = clone;
+  }
   const playerBody = new Group();
-  playerBody.add(playerBodyClone);
+  playerBody.add(playerBodyClones.CT, playerBodyClones.T);
   playerBody.visible = false;
   renderCtx.scene.add(playerBody);
   let playerRagdoll: RagdollBody | null = null;
-  // CT keeps the baked colour; T gets the same tan tint as the bots. Applied at
-  // death from the live playerTeam (you can switch sides between lives).
-  const CT_BASE = baseCharacterColor(playerBodyClone);
-  function tintPlayerBody(ct: boolean): void {
-    tintCharacter(playerBodyClone, ct ? CT_BASE : T_TINT);
+  function showPlayerBodyTeam(ct: boolean): void {
+    playerBodyClones.CT.visible = ct;
+    playerBodyClones.T.visible = !ct;
   }
+  showPlayerBodyTeam(true);
 
   // --- Remote entities (Phase 6.4): networked players rendered from snapshot
   // interpolation. Each remote gets its own character mesh clone, created lazily
@@ -607,10 +611,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   function remoteRootFor(slot: number, teamCt: boolean): Group {
     let root = remoteRoots.get(slot);
     if (!root) {
-      const clone = cloneSkeleton(ctTemplateScene);
+      const clone = cloneSkeleton(templateFor(teamCt ? 'CT' : 'T'));
       clone.visible = true;
       flattenMaterials(clone);
-      if (!teamCt) tintCharacter(clone, T_TINT);
       attachBotWeapon(clone, 'rifle');
       root = new Group();
       root.add(clone);
@@ -1048,7 +1051,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                   // Bug 3: enter free-fly spectator from the death eye position.
                   specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
                   // Phase 12: ragdoll the player body so the spectator cam sees the corpse.
-                  tintPlayerBody(playerTeam === 'CT');
+                  showPlayerBodyTeam(playerTeam === 'CT');
                   playerRagdoll = spawnRagdollBody(ragdollWorld, player.position, player.velocity, simTime);
                 }
               } else {

@@ -35,13 +35,11 @@ PALETTES = {
         "gear": (0.015, 0.015, 0.02),
         "skin": (0.62, 0.46, 0.36),
     },
-    "t": {  # militia — tan fatigues, olive vest, ski-mask
+    "t": {  # militia — tan fatigues, olive vest, bare face
         "suit": (0.34, 0.27, 0.16),
         "vest": (0.16, 0.18, 0.10),
         "gear": (0.02, 0.02, 0.025),
-        # Ski-mask, deliberately a shade off "gear" so the masked head still reads
-        # as a head against the black beanie instead of one solid block.
-        "skin": (0.055, 0.05, 0.06),
+        "skin": (0.62, 0.46, 0.36),  # same tan as CT
     },
 }
 
@@ -110,15 +108,17 @@ def _find_bone(name):
             return bone_name
     if "vest" in name:
         return "mixamorig:Spine2"
-    # Joint spheres: map to the parent bone (the bone whose head is the pivot)
+    # Joint spheres: map to the parent bone (the bone whose head is the pivot).
+    # Side comes from the *suffix* — `"l" in name` also matched the "l" in
+    # "shoulder"/"elbow", which skinned both right-side spheres to the left arm
+    # and flung them off the body as soon as the arms were posed apart.
+    side = "Left" if name.endswith("_l") else "Right"
     if "joint_shoulder" in name:
-        return "mixamorig:LeftShoulder" if "l" in name else "mixamorig:RightShoulder"
+        return f"mixamorig:{side}Shoulder"
     if "joint_elbow" in name:
-        return "mixamorig:LeftArm" if "l" in name else "mixamorig:RightArm"
-    if "joint_hip" in name:
-        return "mixamorig:LeftUpLeg" if "l" in name else "mixamorig:RightUpLeg"
-    if "joint_knee" in name:
-        return "mixamorig:LeftUpLeg" if "l" in name else "mixamorig:RightUpLeg"
+        return f"mixamorig:{side}Arm"
+    if "joint_hip" in name or "joint_knee" in name:
+        return f"mixamorig:{side}UpLeg"
     if "joint_neck" in name:
         return "mixamorig:Neck"
     return "mixamorig:Hips"

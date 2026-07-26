@@ -3723,3 +3723,117 @@ Rendered `ct_player.glb`/`t_player.glb` via `pnpm modelview` and fixed what the 
   new arm/leg positions would miss every bone box and fall through to the height band.
 
 `pnpm typecheck` and `pnpm test` (41 files, 259 tests) green. Tri count unchanged at 1566.
+
+### Follow-up: T bots rendered uniformly beige
+
+`t_player.glb` was a dead asset — the game loaded only `ct_player.glb` and called
+`tintCharacter(clone, T_TINT)`, which **overwrote all four material slots with one flat colour**
+(`0xc8a06a`). Every T therefore lost its olive vest, black gear and mask and became a single
+beige mass. The half-size box bug had hidden this: the models were unreadable anyway.
+
+- `src/game/characters.ts`: load both team `.glb`s and expose `templateFor(team)` instead of
+  `ctTemplateScene`. Deleted `tintCharacter`, `T_TINT` and `baseCharacterColor` — with real
+  per-team assets there is nothing left to recolour. The rigs are identical, so the CT clips
+  still drive both.
+- `src/game/session.ts`: bots, remote players and the death-cam body clone the right template.
+  The death-cam body holds one clone per team under the `playerBody` Group (the ragdoll drives
+  the Group, not the clone), so `showPlayerBodyTeam` — was `tintPlayerBody` — is now a
+  visibility swap; you can still switch sides between lives.
+
+Verified in the running game. `pnpm typecheck` and `pnpm test` (259 tests) green.
+Payload cost: one extra ~404 KB `.glb`, well inside the 48 MB initial budget.
+
+## 2026-07-26 — Rifle hold: stock to the shoulder, support hand on the handguard
+
+The third-person hold was wrong: the gun hung off the right hand with the stock nowhere near the
+shoulder and the left hand 0.82 m from the handguard (measured, see below). The six arm
+quaternions had been hand-tuned, which is not a workable way to author a two-handed pose.
+
+**Solver instead of eyeballing — `tools/modelview/solvepose.ts` (new).** States the hold as
+landmarks you can reason about — butt pad in the right shoulder pocket, right hand on the pistol
+grip, left hand on the handguard, weapon yaw, elbow poles — loads the real rig, runs two-bone IK
+per arm, and prints the constants for `src/ai/thirdperson.ts`. Landmark coordinates come from
+`tools/blender/build_weapons.py` and the rig's bind pose, not from guessing.
+
+Two rig facts forced the shape of the hold: the arms are short (0.52 m shoulder-to-wrist) and the
+shoulders wide (±0.27 m), so a straight-ahead carry puts the handguard ~0.70 m from the left
+shoulder — unreachable. The rifle is therefore carried angled 26° across the chest (what CS
+models do anyway) and the world model is scaled to 0.72 — the `.glb` is a *viewmodel*,
+deliberately oversized for first-person FOV. The solver prints reach vs. arm length and flags
+out-of-reach targets.
+
+**`modelview` gained the flags needed to debug this** (`tools/modelview/view.ts`):
+- `--weapon <glb>` attaches a weapon to the rig's right-hand bone,
+- `--pose <rifle|pistol>` applies the game's real pose constants (imported from
+  `src/ai/thirdperson.ts`, so the tool shows what the game renders),
+- `--solve` poses from the solver's *live* output instead of the baked constants, which is the
+  edit-landmarks → re-render loop,
+- new `hero` angle: models face −Z, so the existing `front`/`iso` look at their **back**; `hero`
+  is the 3/4 view of face and chest, where a weapon hold actually reads,
+- the page now defines `window.__name` — esbuild compiles named arrow functions with a `__name()`
+  helper and `page.evaluate` ships only the function source, so it must exist in the page.
+
+**`src/ai/thirdperson.ts`:** re-solved `POSE_RIFLE`; `WEAPON_POS`/`WEAPON_QUAT`/`WEAPON_SCALE`
+moved here from `characters.ts` — the attach transform and the arm pose are one calibration, not
+two, and were previously drifting apart. `getWeaponMuzzle` now takes the muzzle *position* from
+the weapon's world matrix (local −Z tip, so the scale is accounted for) and the *direction* from
+the character root: with the rifle carried 26° across the chest, a tracer down the barrel would
+visibly miss the target it was fired at.
+
+**Rig bug fixed — `tools/blender/build_characters.py`:** `_find_bone` picked the side of the joint
+spheres with `"l" in name`, which also matched the "l" in "shoulder" and "elbow". Both *right*
+side spheres were skinned to the **left** arm and flew off the body the moment the arms were
+posed apart — a blue ball floating beside the shoulder in every posed render. Now keyed off the
+`_l`/`_r` suffix. Both character `.glb`s regenerated; bind-pose renders are pixel-identical to
+before, tri count unchanged at 1566.
+
+**Test:** `src/ai/thirdperson.test.ts` gained a geometry check against the real `.glb` — butt pad
+nearer the right shoulder than the left and within 0.2 m of it, right hand within 0.07 m of the
+grip, left hand within 0.09 m of the handguard. It imports the landmarks from the solver, so
+editing them without re-baking the constants fails the build. Observed failing on the old pose
+first (left hand 0.821 m from the handguard, right hand 0.113 m from the grip).
+
+`pnpm typecheck` and `pnpm test` (41 files, 262 tests) green. `ACC-014` step 2 rewritten around
+the shouldered hold, a muzzle/tracer step added, and the script marked for re-run.
+
+**Fixup (same day):** the Docker client build (`tsc && vite build`) failed — `src/ai/thirdperson.test.ts` imported the landmark constants from `tools/modelview/solvepose.ts`, and `Dockerfile.client` only copies `src/`, `assets/` and `public/`. Moved `BUTT`/`GRIP`/`FORE` into `src/ai/thirdperson.ts` (they belong with the pose they produced anyway) and made the solver import them. Solver output byte-identical; `pnpm build` now green.
+
+## Skin tone unified across teams
+
+T palette `skin` was a near-black ski-mask colour (0.055, 0.05, 0.06); set it to the CT
+tan (0.62, 0.46, 0.36) so both models share one skin tone. Rebuilt `ct_player.glb` /
+`t_player.glb` via `blender -b -P tools/blender/build_characters.py` (1566 tris each,
+unchanged).
+
+## Rifle hold re-solved square to the body
+
+The hold was still canted 26° across the chest, so from behind the bot the barrel pointed off to
+one side and the left hand sat on the *rear* of the handguard rather than over it. Re-solved
+against the stated intent: barrel dead down −Z, left hand over the foregrip, right over the
+trigger.
+
+The 26° cant existed because the reach didn't work square-on: the rig's arms are 0.52 m
+shoulder-to-wrist with shoulders at ±0.27, which puts the handguard ~0.65 m from the left shoulder
+joint. The fix is what a real shooter does — **protract the shoulder**. `solvepose.ts` gained
+`swingShoulder()`, which rolls each shoulder bone a tunable fraction (`SWING_R` 0.12, `SWING_L`
+0.40) of the way toward its hand target *before* the arm IK runs, moving the arm's root instead of
+cheating the weapon sideways. `POSE_RIFLE` is now eight quaternions (both shoulders included).
+
+Other landmark changes: `GUN_YAW` 26° → 0, `SHOULDER_POCKET` → `(0.10, 1.36, 0.03)`, `FORE`
+`-0.17` → `-0.27` (mid `AK_hg_low`, which spans −0.23…−0.45 — the old value was behind the
+handguard entirely), `GUN_SCALE` 0.72 → 0.66, and the elbow poles pulled in from a chicken-wing to
+tucked (`POLE_R` `(0.25,-0.96,0.1)`, `POLE_L` `(-0.2,-0.97,0.05)`). Solved reach: right wrist
+0.258 m, left 0.417 m, both of 0.520 m available.
+
+Stale comments corrected in `src/ai/thirdperson.ts`: the "angled across the chest" rationale in
+the module header, the "shoulders keep animating normally" note in `applyWeaponPose` (they don't
+any more — they're posed), and `getWeaponMuzzle`'s claim that the bore is ~26° off the facing.
+Direction still comes from the root, but now because it's the authoritative aim, not because the
+barrel disagrees.
+
+**Test:** `src/ai/thirdperson.test.ts` gained "points the barrel where the actor is facing" —
+transforms the gun's local −Z through the posed rig and asserts < 3° of yaw and near-zero pitch.
+This is the assertion whose absence let the cant survive two rounds of tuning; it fails by
+construction on the old 26° pose. `pnpm typecheck` and `pnpm test` (41 files, 263 tests) green.
+`ACC-014` steps 2 and 4 rewritten around the square hold (step 2 now calls for a *back* view) and
+marked for re-run.

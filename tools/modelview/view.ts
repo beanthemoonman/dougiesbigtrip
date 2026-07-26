@@ -16,6 +16,9 @@ const ANGLES: Record<string, readonly [number, number, number]> = {
   right: [1, 0, 0],
   top: [0, 1, 0.001],
   iso: [1, 0.8, 1],
+  // Models face -Z, so `front`/`iso` look at their back. This is the 3/4 view
+  // of the face and chest — where a weapon hold actually reads.
+  hero: [-0.8, 0.35, -1],
 };
 
 const DEFAULT_SIZE = 1024;
@@ -28,8 +31,38 @@ export interface RenderOptions {
   size: number;
   bg: string;
   outDir: string;
+  /** Weapon .glb to attach to the model's right-hand bone. */
+  weaponPath?: string;
+  /** Apply the game's third-person hold pose (src/ai/thirdperson.ts). */
+  pose?: 'rifle' | 'pistol';
+  /** Pose from solvepose.ts's live solve instead of the baked constants. */
+  solve?: boolean;
   /** If true, return raw RGBA buffers instead of writing files. For testing. */
   returnBuffers?: boolean;
+}
+
+/** Pose + attach transform, flattened to page-transferable plain data. */
+interface PoseData {
+  bones: { re: string; quat: [number, number, number, number] }[];
+  pos: [number, number, number];
+  quat: [number, number, number, number];
+  scale: number;
+}
+
+/** Read the real game constants so the tool shows what the game renders. */
+async function loadPose(weapon: 'rifle' | 'pistol', solve = false): Promise<PoseData> {
+  if (solve) {
+    const hold = await (await import('./solvepose.js')).solveHold();
+    for (const n of hold.notes) console.log('# ' + n);
+    return hold;
+  }
+  const tp = await import('../../src/ai/thirdperson.js');
+  return {
+    bones: tp.POSES[weapon]!.map((b) => ({ re: b.re.source, quat: b.quat })),
+    pos: tp.WEAPON_POS.toArray() as [number, number, number],
+    quat: tp.WEAPON_QUAT.toArray() as [number, number, number, number],
+    scale: tp.WEAPON_SCALE,
+  };
 }
 
 export interface AngleBuffer {
@@ -102,6 +135,11 @@ function pageHtml(serverUrl: string, size: number, bg: string): string {
   }
 }
 </script>
+<script>
+// esbuild (via tsx) compiles named arrow functions with a __name() helper, and
+// page.evaluate ships the function source only — so the helper must exist here.
+window.__name = (fn) => fn;
+</script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -144,11 +182,13 @@ window.__ready = true;
 }
 
 export async function renderModel(options: RenderOptions): Promise<AngleBuffer[]> {
-  const { glbPath, angles, size, bg, outDir, returnBuffers } = options;
+  const { glbPath, angles, size, bg, outDir, returnBuffers, weaponPath, pose, solve } = options;
 
   const server = await startServer();
   const glbFullPath = resolve(glbPath);
   const glbBase64 = readFileSync(glbFullPath).toString('base64');
+  const weaponBase64 = weaponPath ? readFileSync(resolve(weaponPath)).toString('base64') : null;
+  const poseData = pose ? await loadPose(pose, solve) : null;
 
   let browser: Browser | null = null;
   try {
@@ -164,7 +204,7 @@ export async function renderModel(options: RenderOptions): Promise<AngleBuffer[]
     await page.waitForFunction('window.__ready === true');
 
     const loaderResult = await page.evaluate(
-      (b64: string) => {
+      async (args: { b64: string; gunB64: string | null; pose: PoseData | null }) => {
         const THREE = (window as unknown as Record<string, unknown>)
           .__THREE as typeof import('three');
         const GLTFLoaderCtor = (window as unknown as Record<string, unknown>)
@@ -172,25 +212,57 @@ export async function renderModel(options: RenderOptions): Promise<AngleBuffer[]
         const scene = (window as unknown as Record<string, unknown>)
           .__scene as import('three').Scene;
 
-        return new Promise<{ cx: number; cy: number; cz: number; r: number }>(
-          (resolvePromise, reject) => {
-            const loader = new GLTFLoaderCtor();
+        const loader = new GLTFLoaderCtor();
+        const load = (b64: string): Promise<import('three').Group> =>
+          new Promise((res, rej) =>
             loader.load(
               'data:application/octet-stream;base64,' + b64,
-              (gltf) => {
-                scene.add(gltf.scene);
-                const box = new THREE.Box3().setFromObject(gltf.scene);
-                const center = box.getCenter(new THREE.Vector3());
-                const r = box.getBoundingSphere(new THREE.Sphere()).radius as number;
-                resolvePromise({ cx: center.x, cy: center.y, cz: center.z, r });
-              },
+              (gltf) => res(gltf.scene),
               undefined,
-              (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
-            );
-          },
-        );
+              (err: unknown) => rej(err instanceof Error ? err : new Error(String(err))),
+            ),
+          );
+
+        const root = await load(args.b64);
+        scene.add(root);
+        root.traverse((o) => {
+          const sk = o as unknown as { isSkinnedMesh?: boolean; frustumCulled: boolean };
+          if (sk.isSkinnedMesh) sk.frustumCulled = false;
+        });
+
+        const findBone = (re: RegExp): import('three').Object3D | undefined => {
+          let hit: import('three').Object3D | undefined;
+          root.traverse((o) => { if (!hit && re.test(o.name)) hit = o; });
+          return hit;
+        };
+
+        if (args.gunB64) {
+          const hand = findBone(/righthand/i);
+          const gun = await load(args.gunB64);
+          if (hand) {
+            if (args.pose) {
+              gun.position.fromArray(args.pose.pos);
+              gun.quaternion.fromArray(args.pose.quat);
+              gun.scale.setScalar(args.pose.scale);
+            }
+            hand.add(gun);
+          } else {
+            scene.add(gun); // no rig — just show the weapon
+          }
+        }
+
+        // Same absolute-override the game applies after mixer.update().
+        for (const b of args.pose?.bones ?? []) {
+          findBone(new RegExp(b.re, 'i'))?.quaternion.fromArray(b.quat);
+        }
+
+        root.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(root);
+        const center = box.getCenter(new THREE.Vector3());
+        const r = box.getBoundingSphere(new THREE.Sphere()).radius as number;
+        return { cx: center.x, cy: center.y, cz: center.z, r };
       },
-      glbBase64,
+      { b64: glbBase64, gunB64: weaponBase64, pose: poseData },
     );
 
     const { cx, cy, cz, r } = loaderResult;
@@ -327,7 +399,11 @@ function parseArgs(): RenderOptions | null {
         '  --angles <list>   Comma-separated: front,back,left,right,top,iso (default: all)\n' +
         '  --size <px>       Square render size (default: 1024)\n' +
         '  --out <dir>       Output directory (default: .modelview/)\n' +
-        '  --bg <hex>        Background colour (default: 808080)\n',
+        '  --bg <hex>        Background colour (default: 808080)\n' +
+        '  --weapon <glb>    Attach a weapon to the rig\'s right-hand bone\n' +
+        '  --pose <rifle|pistol>  Apply the game\'s third-person hold pose\n' +
+        '  --solve           Pose from tools/modelview/solvepose.ts live, not the\n' +
+        '                    baked constants — for iterating on the hold\n',
     );
     return null;
   }
@@ -337,6 +413,9 @@ function parseArgs(): RenderOptions | null {
   let size = DEFAULT_SIZE;
   let outDir = DEFAULT_OUT;
   let bg = DEFAULT_BG;
+  let weaponPath: string | undefined;
+  let pose: 'rifle' | 'pistol' | undefined;
+  let solve = false;
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -348,10 +427,16 @@ function parseArgs(): RenderOptions | null {
       outDir = args[++i]!;
     } else if (arg === '--bg' && args[i + 1]) {
       bg = args[++i]!;
+    } else if (arg === '--weapon' && args[i + 1]) {
+      weaponPath = args[++i]!;
+    } else if (arg === '--pose' && args[i + 1]) {
+      pose = args[++i]! as 'rifle' | 'pistol';
+    } else if (arg === '--solve') {
+      solve = true;
     }
   }
 
-  return { glbPath, angles, size, bg, outDir };
+  return { glbPath, angles, size, bg, outDir, weaponPath, pose, solve };
 }
 
 async function main(): Promise<void> {

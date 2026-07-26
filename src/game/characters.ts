@@ -6,16 +6,15 @@
  * shell + session.
  */
 
-import { type AnimationClip, Color, Mesh, MeshMatcapMaterial, type MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three';
+import { type AnimationClip, Mesh, MeshMatcapMaterial, type MeshStandardMaterial, Object3D, SkinnedMesh } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { WEAPON_POS, WEAPON_QUAT, WEAPON_SCALE } from '../ai/thirdperson';
 import { characterMatcap } from '../render/matcap';
+import type { TeamSide as Team } from './spawning';
 import ctPlayerUrl from '../../assets/characters/ct_player.glb?url';
+import tPlayerUrl from '../../assets/characters/t_player.glb?url';
 import rifleUrl from '../../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../../assets/weapons/pistol_viewmodel.glb?url';
-
-// Tint teammates so they read apart from enemies at a glance (one shared CT
-// model). CT keep their baked colour; T get a warm tan.
-export const T_TINT = new Color(0xc8a06a);
 
 // Baked-lighting world has no realtime lights, so the glb's MeshStandardMaterials
 // are flattened to a lightless material. MeshBasicMaterial made characters read
@@ -37,68 +36,38 @@ export function flattenMaterials(root: Object3D): void {
   });
 }
 
-/** Recolour every skinned submesh (team tint / death-cam body). */
-export function tintCharacter(root: Object3D, color: Color): void {
-  root.traverse((o) => {
-    if (o instanceof SkinnedMesh) {
-      const m = o.material;
-      if (Array.isArray(m)) m.forEach((mm) => (mm as MeshMatcapMaterial).color.copy(color));
-      else (m as MeshMatcapMaterial).color.copy(color);
-    }
-  });
-}
-
-/** The baked base colour of the first skinned submesh (the CT uniform). */
-export function baseCharacterColor(root: Object3D): Color {
-  const out = new Color();
-  root.traverse((o) => {
-    if (o instanceof SkinnedMesh) {
-      const m = o.material;
-      out.copy(((Array.isArray(m) ? m[0] : m) as MeshMatcapMaterial).color);
-    }
-  });
-  return out;
-}
-
 // Bug 2: bots hold a rifle world-model. No dedicated world-model asset exists,
 // so reuse the rifle viewmodel glb, parented to each bot's right-hand bone so
 // it tracks the animation. Loaded as its OWN instance because the viewmodel
 // rifleScene (session.ts) gets reparented onto the layer-1 viewmodel scene.
-// ponytail: grip offset is a hand-tuned calibration knob, not derivable — nudge
-// these if the gun clips the hand or points wrong. Add a real low-poly
-// world-model + per-bot weapon matching when art budget allows.
-// The viewmodel barrel runs along +X (away from camera); yaw -π/2 rotates it
-// down the arm so the barrel points forward out of the bot's chest. Verify with
-// ACC-014 step 2 after any change.
-const BOT_GUN_POS = new Vector3(0, 0.02, 0.08); // metres, in hand-bone space
-// Gun orientation in hand-bone space. SOLVED (not eyeballed): measured live in
-// the running scene so the barrel (weapon local −Z) points along the model's
-// forward (−Z) and the sights stay up (+Y). Value = inv(handWorld) · rootWorld
-// for the weapon-hold hand pose; the bot yaw cancels, so it's a constant.
-// ponytail: coupled to the RightHand pose quat in src/ai/thirdperson.ts — if
-// that hand rotation changes, re-measure this (barrel points down otherwise).
-const BOT_GUN_QUAT = new Quaternion(-0.998, 0.0385, 0.0492, 0.0074);
+// The attach transform lives next to the arm pose it was solved with
+// (src/ai/thirdperson.ts) — the two are one calibration, not two.
+// ponytail: add a real low-poly world-model + per-bot weapon matching when art
+// budget allows.
 
 export interface CharacterAssets {
-  /** Hidden template added to the scene so cloning can resolve the skeleton. */
-  ctTemplateScene: Object3D;
+  /** Hidden per-team template added to the scene so cloning can resolve the
+   *  skeleton. Clone `templateFor(team)`, never recolour — the two .glbs carry
+   *  their own four-material team palettes (see tools/blender/build_characters.py). */
+  templateFor(team: Team): Object3D;
   ctTemplateClips: AnimationClip[];
   /** Parent a rifle/pistol world-model to the rig's right-hand bone. */
   attachBotWeapon(character: Object3D, weapon?: 'rifle' | 'pistol'): void;
 }
 
 /**
- * Load the CT rig + world-model weapon templates. The .glb carries a skinned
- * armature + three animation clips (idle/walk/death). Loaded once; each bot
- * clones the full skeleton+mesh hierarchy and gets its own AnimationMixer.
- * Template clips are shared across all mixers.
+ * Load both team rigs + world-model weapon templates. Each .glb carries a
+ * skinned armature + three animation clips (idle/walk/death); the rigs are
+ * identical, so the CT clips drive both. Loaded once; each bot clones the full
+ * skeleton+mesh hierarchy and gets its own AnimationMixer.
  */
 export async function loadCharacterAssets(scene: Object3D): Promise<CharacterAssets> {
   const loader = new GLTFLoader();
-  const [rifleWorldTemplate, pistolWorldTemplate, ctGltf] = await Promise.all([
+  const [rifleWorldTemplate, pistolWorldTemplate, ctGltf, tGltf] = await Promise.all([
     loader.loadAsync(rifleUrl).then((g) => g.scene),
     loader.loadAsync(pistolUrl).then((g) => g.scene),
     loader.loadAsync(ctPlayerUrl),
+    loader.loadAsync(tPlayerUrl),
   ]);
 
   function attachBotWeapon(character: Object3D, weapon: 'rifle' | 'pistol' = 'rifle'): void {
@@ -115,23 +84,30 @@ export async function loadCharacterAssets(scene: Object3D): Promise<CharacterAss
         o.material = new MeshMatcapMaterial({ map: src.map, color: src.color, matcap: characterMatcap() });
       }
     });
-    gun.position.copy(BOT_GUN_POS);
-    gun.quaternion.copy(BOT_GUN_QUAT);
+    gun.position.copy(WEAPON_POS);
+    gun.quaternion.copy(WEAPON_QUAT);
+    gun.scale.setScalar(WEAPON_SCALE);
     hand.add(gun);
   }
 
-  const ctTemplateScene = ctGltf.scene;
-  // We need the skinned mesh's skeleton alive on the loaded template so cloning
-  // can bind the clone's SkinnedMesh to the clone's own Bone tree. The template
-  // itself is never rendered; only its clones are.
-  ctTemplateScene.traverse((o) => {
-    if (o instanceof SkinnedMesh) o.frustumCulled = false;
-  });
-  flattenMaterials(ctTemplateScene);
-  // Hide the template — it only exists so three.js can resolve the skeleton
-  // reference during clone.
-  ctTemplateScene.visible = false;
-  scene.add(ctTemplateScene);
+  const templates: Record<Team, Object3D> = { CT: ctGltf.scene, T: tGltf.scene };
+  for (const template of Object.values(templates)) {
+    // We need the skinned mesh's skeleton alive on the loaded template so cloning
+    // can bind the clone's SkinnedMesh to the clone's own Bone tree. The template
+    // itself is never rendered; only its clones are.
+    template.traverse((o) => {
+      if (o instanceof SkinnedMesh) o.frustumCulled = false;
+    });
+    flattenMaterials(template);
+    // Hide the template — it only exists so three.js can resolve the skeleton
+    // reference during clone.
+    template.visible = false;
+    scene.add(template);
+  }
 
-  return { ctTemplateScene, ctTemplateClips: ctGltf.animations, attachBotWeapon };
+  return {
+    templateFor: (team) => templates[team],
+    ctTemplateClips: ctGltf.animations,
+    attachBotWeapon,
+  };
 }
