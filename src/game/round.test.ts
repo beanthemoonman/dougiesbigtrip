@@ -154,11 +154,11 @@ describe('validateMatchConfig', () => {
     if (!r.ok) expect(r.errors.some((e) => e.includes('botCount'))).toBe(true);
   });
 
-  // The server's slot array is MAX_SLOTS = 6 (server/src/main.rs); a config the
+  // The server's slot array is MAX_SLOTS = 10 (server/src/main.rs); a config the
   // client accepts but the server exits(1) on is worse than a lower ceiling.
   it('caps botCount at the server slot capacity', () => {
-    expect(LIMITS.botCount[1]).toBe(6);
-    expect(validateMatchConfig({ botCount: 7 }).ok).toBe(false);
+    expect(LIMITS.botCount[1]).toBe(10);
+    expect(validateMatchConfig({ botCount: 11 }).ok).toBe(false);
   });
 });
 

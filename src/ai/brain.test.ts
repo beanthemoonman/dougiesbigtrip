@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Vector3 } from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { Buttons } from '../core/input';
 import { makeRng } from '../core/rng';
 import { addStaticBox, createWorld, initPhysics } from '../physics/world';
 import { createBot } from './bot';
@@ -97,6 +98,24 @@ describe('brain FSM', () => {
     hearSound(brain, new Vector3(0, 0.05, -5));
     expect(brain.mode).toBe('reposition');
     expect(brain.lastKnown).not.toBeNull();
+  });
+
+  it('sidesteps when it stops making ground (props are not in the navmesh)', () => {
+    const world = worldWithFloor();
+    world.step();
+    const bot = createBot(world, new Vector3(0, 0.05, 0), 1);
+    const brain = createBrain(bot, DIFFICULTIES.normal);
+    const rng = makeRng(5);
+    const target = new Vector3(0, 0.05, -5);
+
+    // Nothing moves the bot here (no sim step), so it reads as walled-in by a
+    // crate: it must eventually strafe instead of grinding forward forever.
+    let sawStrafe = false;
+    for (let t = 0; t < 256 && !sawStrafe; t++) {
+      const { buttons } = tickBrain(brain, world, nav, rng, target, false, DT, undefined, [], t);
+      if (buttons & (Buttons.LEFT | Buttons.RIGHT)) sawStrafe = true;
+    }
+    expect(sawStrafe).toBe(true);
   });
 
   it('Dead is terminal: no fire, no state change', () => {

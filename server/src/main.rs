@@ -50,7 +50,7 @@ struct BotSpawn {
 }
 
 const DEFAULT_BIND: &str = "127.0.0.1:9876";
-const MAX_SLOTS: usize = 6; // compile-time array capacity (3 T + 3 CT)
+const MAX_SLOTS: usize = 10; // slot capacity (5 T + 5 CT); keep in step with LIMITS.botCount
 const MAX_SPECTATORS: usize = 4;
 const SEED: u32 = 1;
 const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
@@ -80,7 +80,7 @@ fn build_config() -> ServerConfig {
     let bot_count: usize = std::env::var("BOT_COUNT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(6);
+        .unwrap_or(10);
     let rounds_to_win: u8 = std::env::var("ROUNDS_TO_WIN")
         .ok()
         .and_then(|v| v.parse().ok())

@@ -40,7 +40,7 @@ nav helper in 11.0 goes in `server`, not the shared WASM sim).
 |---|---|---|
 | **Server pathing** | **Static waypoint graph + greedy hop**, not a Rust recast port. Hand-place ~8–12 nodes across the map with adjacency (neighbours chosen to have clear LOS so straight-line + collide-slide between them never snags); bots path node-to-node. Seed it from the existing `PATROL_*` points. | A Rust recast runtime is weeks and needs the blob re-exported to a Rust-readable format. The map is one small fixed loop — a hand-authored graph is the classic small-map bot nav, is deterministic, and reuses data we already have. `ponytail: waypoint graph, upgrade to a real navmesh port only if a second map lands.` |
 | **Where the graph lives** | New `assets/maps/de_douglas.navnodes.json` (nodes + edges), loaded by **both** ports (Rust `serde` on the server, `import` in TS). Single source of truth. | No third divergent copy. TS keeps recast for *movement* quality but selects the *same* search node so behaviour matches. |
-| **Search goal selection (shared spec)** | Pick the graph node maximising `w1·(min distance to any teammate) + w2·(time since this node was last visited by anyone)`. Deterministic tie-break by node index. No RNG in selection (keeps T1 replays exact). | "Spread out + sweep unvisited" falls straight out of those two terms. No per-bot randomness → deterministic. |
+| **Search goal selection (shared spec)** | Pick the graph node maximising `-w1·Σ_teammates 1/(1+distance) + w2·(time since this node was last visited by anyone) + w3·tactical_weight - w4·(teammates already goaling it) + w5·hash01(bot_tick_offset + tick, node)`. Deterministic tie-break by node index. Still no RNG stream — the jitter is a pure hash, so T1 replays stay exact. | "Spread out + sweep unvisited" falls out of the first two terms. The repulsion is a *field* (every teammate pushes), not "distance to the nearest one" — the latter always crowned the single globally-farthest node so every bot ran the same route. The hash jitter is what makes routes differ run to run without breaking determinism. |
 | **TS pathing under the shared goal** | SP keeps recast `findPath` to the chosen node (better-looking); server uses the graph hop. Same node chosen → same behaviour, different smoothness. | Don't throw away the working recast path in SP; only the *goal* must match, not the interpolation. |
 | **Difficulty knobs** | Unchanged. Search/give-up timings reuse `LOSE_MEMORY` / `loseMemory`; no new difficulty fields unless a trace demands one. | YAGNI. |
 
@@ -159,11 +159,35 @@ behaviour read as "cautious sweep" rather than "speed-run the waypoint graph":
 | `CAUTION_JITTER` | 64 (±1 s) | Per-bot tick offset so they don't pause in lockstep |
 | `SCAN_RATE` | 1.0 rad/s | Yaw rotation speed during the pause scan |
 | `SEARCH_DUTY_ON` / `_PERIOD` | 3 / 4 | FORWARD pressed only 3 of every 4 ticks in search mode |
-| `W_TEAMMATE_DIST` | 3.0 (was 1.0) | Weight on teammate-spread in search-goal scoring |
+| `W_REPEL` | 60.0 (replaced `W_TEAMMATE_DIST` 3.0) | Same-pole repulsion from teammates, `1/(1+d)` per teammate |
 | `W_RECENCY` | 2.0 (unchanged) | Weight on avoiding recently-visited nodes |
+| `W_RANDOM` | 80.0 | Hash jitter on the goal score, ~3x the tactical spread |
 | `REACTION_TIME` | 0.5 s (was 0.35 s) | Server-side normal difficulty reaction time |
 | TS easy/normal reactionTime | 0.8 / 0.5 (was 0.6 / 0.35) | Matched to new server constant |
 
 The caution rhythm lives entirely in `ai.rs:search` and `brain.ts:search` — it does not affect
 Engage (stand + shoot) or Reposition (full-speed pursuit) modes. The stop-and-scan head turn uses
 `server_tick + tick_offset` to produce a deterministic left/right pan so replays stay identical.
+
+## Post-playtest tuning 2 — route variety and unsticking
+
+Two playtest complaints: bots ran near-identical routes every round, and they ground to a halt
+against breakable crates that sit on the walkable navmesh (props are placed at runtime and are not
+in the baked mesh or the waypoint graph).
+
+**Route variety.** The old score maximised distance to the *nearest* teammate, which is a global
+argmax: with all recency bonuses saturated at the cap, every bot scored the same far corner best.
+Replaced with a repulsion field (`-W_REPEL·Σ 1/(1+d)`) plus a deterministic hash jitter
+(`W_RANDOM·hash01(tick_offset + tick, node)`). `hash01` is a two-u32 mix implemented identically in
+`navnodes.ts` and `ai.rs`; it is a pure function of the tick and the bot's offset, so replays are
+still exact — this is *not* an RNG stream.
+
+**Unsticking.** Both ports track per-tick horizontal displacement while FORWARD is pressed. Below
+`STUCK_STEP` (0.015 m/tick) for `STUCK_TICKS` (24) the bot strafes for `SIDESTEP_TICKS` (32) —
+FORWARD+LEFT/RIGHT is a 45° wishdir that slides around a crate. Two failed sidesteps in a row
+(`STUCK_STRIKES`) and the goal is treated as unreachable: it is dropped, forcing a re-pick whose
+fresh jitter usually sends the bot somewhere else.
+
+`ponytail: reactive unsticking, not prop-aware nav. Baking runtime props into the navmesh or the
+waypoint graph is the real fix; do it if bots start needing to path *around* prop clusters rather
+than just off one crate.`

@@ -85,7 +85,7 @@ export function createAdminScreen(opts: {
     container.appendChild(row);
   }
 
-  mkNumField('Bot count', 'botCount', 2, 6);
+  mkNumField('Bot count', 'botCount', 2, 10);
   mkNumField('Rounds to win', 'roundsToWin', 1, 30);
 
   {

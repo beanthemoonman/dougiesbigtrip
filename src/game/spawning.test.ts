@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { spawnRing } from './spawning';
+import { PROP_PLACEMENTS } from './props';
+import { MAP_BOXES } from './map_douglas';
 
 describe('spawnRing', () => {
   it('produces correct count per side', () => {
@@ -32,6 +34,37 @@ describe('spawnRing', () => {
     expect(t1.z).toBe(-26);
     expect(t2.x).toBe(-10);
     expect(t2.z).toBe(-24);
+  });
+
+  // A bot spawned on top of a prop is wedged there for the whole round: the
+  // spawn is not nav-snapped and collide-and-slide has nowhere to push it.
+  // 1.2 m ≈ bot capsule radius + the widest prop's half-extent + slack.
+  it('no spawn at max count lands on a prop', () => {
+    for (const team of ['CT', 'T'] as const) {
+      for (const p of spawnRing(team, 5)) {
+        for (const [, px, pz] of PROP_PLACEMENTS) {
+          const d = Math.hypot(p.x - px, p.z - pz);
+          expect(d, `${team} spawn ${p.x},${p.z} vs prop ${px},${pz}`).toBeGreaterThan(1.2);
+        }
+      }
+    }
+  });
+
+  // Same failure mode as the prop case, and worse: a spawn inside a wall box
+  // leaves the bot permanently stuck. Axis-aligned test — the rotated (`ry`)
+  // curve segments are all in the east arc, nowhere near either spawn pocket.
+  it('no spawn at max count lands in a wall', () => {
+    const walls = MAP_BOXES.filter((b) => b.s[1] > 0.5 && b.ry === undefined);
+    for (const team of ['CT', 'T'] as const) {
+      for (const p of spawnRing(team, 5)) {
+        for (const b of walls) {
+          const dx = Math.max(Math.abs(p.x - b.c[0]) - b.s[0] / 2, 0);
+          const dz = Math.max(Math.abs(p.z - b.c[2]) - b.s[2] / 2, 0);
+          const where = `${team} spawn ${p.x},${p.z} vs wall ${b.c[0]},${b.c[2]}`;
+          expect(Math.hypot(dx, dz), where).toBeGreaterThan(0.6); // bot capsule radius + slack
+        }
+      }
+    }
   });
 
   it('all positions share the same Y (ground level)', () => {

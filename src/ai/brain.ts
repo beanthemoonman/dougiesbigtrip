@@ -22,7 +22,7 @@ import { botInput, type Bot } from './bot';
 import { Buttons } from '../core/input';
 import { findPath, type Nav } from './nav';
 import { canSee } from './perception';
-import { NAVNODES, nearestNode, atNode, SearchScore } from './navnodes';
+import { NAVNODES, nearestNode, atNode, hash01, SearchScore } from './navnodes';
 
 export type BotMode = 'search' | 'engage' | 'reposition' | 'dead';
 
@@ -50,6 +50,16 @@ const SCAN_RATE = 1.0;
 // of ground speed — matches the server's SEARCH_DUTY (ai.rs).
 const SEARCH_DUTY_ON = 3;
 const SEARCH_DUTY_PERIOD = 4;
+// --- Unsticking ---
+// Breakable props aren't in the baked navmesh, so a corridor can run straight
+// through a crate. Rather than teach the nav about props, detect "pressing
+// FORWARD, going nowhere" and strafe out of it — same thing a human does.
+/** Below this per-tick horizontal displacement (m) the bot counts as blocked. */
+const STUCK_STEP = 0.015;
+const STUCK_TICKS = 24;
+const SIDESTEP_TICKS = 32;
+/** Two failed sidesteps in a row → the goal itself is unreachable, re-pick it. */
+const STUCK_STRIKES = 2;
 
 export interface BotBrain {
   readonly bot: Bot;
@@ -64,6 +74,13 @@ export interface BotBrain {
   currentNode: number;
   cautionTimer: number;
   cautionPhase: CautionPhase;
+  /** Position at the previous tick, for the stuck detector. */
+  lastPos: Vector3;
+  stuckTicks: number;
+  sidestepTicks: number;
+  /** Buttons.LEFT or Buttons.RIGHT while sidestepping, 0 otherwise. */
+  sidestepDir: number;
+  stuckStrikes: number;
   /** Deterministic per-bot tick offset for de-synchronising caution timers. */
   readonly tickOffset: number;
 }
@@ -87,6 +104,11 @@ export function createBrain(bot: Bot, cfg: Difficulty): BotBrain {
     currentNode: startNode,
     cautionTimer: baseMove,
     cautionPhase: 'moving',
+    lastPos: bot.position.clone(),
+    stuckTicks: 0,
+    sidestepTicks: 0,
+    sidestepDir: 0,
+    stuckStrikes: 0,
     tickOffset,
   };
 }
@@ -238,8 +260,50 @@ export function tickBrain(
       ((serverTick ?? 0) + brain.tickOffset) % SEARCH_DUTY_PERIOD < SEARCH_DUTY_ON;
     if (!allowMove) buttons &= ~Buttons.FORWARD;
   }
+  buttons = unstick(brain, buttons, serverTick ?? 0);
   brain.aim.yaw = bot.yaw;
   return { fire: false, buttons, yaw: input.yaw };
+}
+
+/**
+ * Detect "walking into something the navmesh doesn't know about" and add a
+ * strafe so the bot slides around it (FORWARD+LEFT/RIGHT = a 45° wishdir).
+ * After two failed sidesteps the goal is treated as unreachable and dropped, so
+ * the search re-picks — a fresh jitter usually sends it somewhere else entirely.
+ */
+function unstick(brain: BotBrain, buttons: number, serverTick: number): number {
+  const { bot } = brain;
+  if (brain.sidestepTicks > 0) {
+    brain.sidestepTicks--;
+    brain.lastPos.copy(bot.position);
+    return buttons | Buttons.FORWARD | brain.sidestepDir;
+  }
+
+  if (buttons & Buttons.FORWARD) {
+    const dx = bot.position.x - brain.lastPos.x;
+    const dz = bot.position.z - brain.lastPos.z;
+    if (dx * dx + dz * dz < STUCK_STEP * STUCK_STEP) brain.stuckTicks++;
+    else brain.stuckTicks = 0;
+  }
+  brain.lastPos.copy(bot.position);
+
+  if (brain.stuckTicks >= STUCK_TICKS) {
+    brain.stuckTicks = 0;
+    brain.stuckStrikes++;
+    brain.sidestepTicks = SIDESTEP_TICKS;
+    brain.sidestepDir =
+      hash01(brain.tickOffset + serverTick, brain.stuckStrikes) < 0.5 ? Buttons.LEFT : Buttons.RIGHT;
+    bot.path = [];
+    bot.waypoint = 0;
+    if (brain.stuckStrikes >= STUCK_STRIKES) {
+      brain.stuckStrikes = 0;
+      brain.pathGoalNode = brain.currentNode; // forces a re-pick next tick
+      brain.lastKnown = null;
+      if (brain.mode === 'reposition') brain.mode = 'search';
+    }
+    return buttons | brain.sidestepDir;
+  }
+  return buttons;
 }
 
 function pickGoal(
@@ -280,6 +344,7 @@ function pickGoal(
         serverTick ?? 0,
         teammateCoords,
         teammateGoals,
+        brain.tickOffset,
       );
       // Claim the node so the next bot picks a different one.
       if (search) search.lastVisited[newGoal] = serverTick ?? 0;

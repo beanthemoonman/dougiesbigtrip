@@ -34,15 +34,16 @@ export const DEFAULT_ROUND: RoundConfig = { freezetime: 3, roundTime: 115, endDe
 export const DEFAULT_MATCH: MatchConfig = {
   ...DEFAULT_ROUND,
   map: 'de_douglas',
-  botCount: 6,
+  botCount: 10,
   roundsToWin: 16,
 };
 
 /** botCount floors at 2 so the count can always split one bot per side — at 0 or 1
  *  a team starts empty and `decideWinner` ends every round on its first tick.
- *  It ceilings at 6 = the server's slot capacity (`MAX_SLOTS` in server/src/main.rs);
- *  keep the two in step, or the panel offers counts the server exits on. */
-export const LIMITS = { botCount: [2, 6], roundsToWin: [1, 30] } as const;
+ *  It ceilings at 10 (five per side) = the server's slot capacity (`MAX_SLOTS` in
+ *  server/src/main.rs and server/src/http.rs); keep them in step, or the panel
+ *  offers counts the server exits on. */
+export const LIMITS = { botCount: [2, 10], roundsToWin: [1, 30] } as const;
 
 const VALID_MAPS: readonly MapId[] = ['de_douglas'];
 

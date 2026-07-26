@@ -27,9 +27,14 @@ export function spawnRing(team: TeamSide, count: number): Vector3[] {
       xOff = presetX[i]!;
       zOff = presetZ[i]!;
     } else {
-      // Extend beyond the presets: keep spreading rightward, zig-zag z.
-      xOff = 5 + (i - 2) * 3;
-      zOff = (i % 3) - 1;
+      // Beyond 3: repeat the preset row, stepped 1.5 m inward (toward mid) and
+      // 2.5 m toward the spine wall per row. The spawn pocket is small and
+      // fenced on every side — |z| 22.2 (spawn wall) to 28.3, x -21.8 (spine
+      // wall) to -10 — so rows step in small increments, and sideways along the
+      // spine wall rather than into the traffic cone at x=-18, |z|=23 (props.ts).
+      const row = Math.floor(i / presetX.length);
+      xOff = presetX[i % presetX.length]! - 2.5 * row;
+      zOff = presetZ[i % presetZ.length]! - 1.5 * row;
     }
     positions.push(new Vector3(anchor[0] + xOff, y, anchor[2] + zOff * zSign));
   }

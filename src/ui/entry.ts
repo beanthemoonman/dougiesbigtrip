@@ -84,7 +84,7 @@ export function createEntryScreen(opts: {
     h.style.cssText = 'font-size:16px;margin-bottom:16px;letter-spacing:1px;';
     box.appendChild(h);
 
-    let bots = 6;
+    let bots = 10;
     let rounds = 16;
 
     function mkSlider(label: string, min: number, max: number, val: number, cb: (v: number) => void): void {

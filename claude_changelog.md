@@ -3904,3 +3904,71 @@ Rebuilt `assets/characters/{ct,t}_player.glb` (`blender -b -P tools/blender/buil
 1566 tris, 405 KB each — unchanged), re-solved, re-baked `POSE_RIFLE`. Right wrist now reaches
 0.277 m of 0.440 m available and the left 0.369 m, so both elbows sit at a natural angle
 instead of folded double. 264 tests green, typecheck green.
+
+## Bot pathing: route variety + unsticking from breakables
+
+Two playtest complaints, both fixed in the TS brain and the Rust server together (the goal-selection
+formula is a shared spec — `docs/plan-phase11-bot-ai.md`).
+
+**#1 Predictable routes.** `pickSearchNode`/`pick_search_node` scored nodes by *distance to the
+nearest teammate*, which is a global argmax: once the recency bonuses saturate at their 8 s cap,
+every bot scores the same far corner best, so they all ran the same route every round. Replaced with
+a same-pole repulsion field (`-W_REPEL·Σ 1/(1+d)` over teammates, so each one pushes locally) plus a
+deterministic jitter term `W_RANDOM·hash01(tick_offset + tick, node)`. `hash01` is a two-u32 mix
+written identically in `navnodes.ts` and `ai.rs` — a pure function, not an RNG stream, so T1 replays
+stay bit-exact. With the 13-node graph, 24 consecutive picks now land on 8 distinct nodes instead of
+collapsing onto the weight-3 cluster.
+
+**#2 Stuck on breakable props.** Crates/barrels are placed at runtime and exist in neither the baked
+navmesh nor the waypoint graph, so a corridor can run straight through one and the bot grinds into
+it forever. Added `unstick()` to both ports: while FORWARD is pressed, track per-tick horizontal
+displacement; below 0.015 m/tick for 24 ticks the bot strafes for 32 ticks (FORWARD+LEFT/RIGHT is a
+45° wishdir that slides around the obstacle), side chosen by the same hash. Two failed sidesteps in a
+row and the goal is treated as unreachable — dropped, forcing a re-pick whose fresh jitter usually
+sends the bot elsewhere. Reactive, not prop-aware nav; the `ponytail:` note in the doc names the
+upgrade path.
+
+Tests first: new `src/ai/navnodes.test.ts` (determinism, spread, repulsion, hash range) and a
+sidestep case in `src/ai/brain.test.ts` — all observed failing before the change. 269 tests green,
+`pnpm typecheck` green, `cargo build`/`cargo clippy` clean (no new warnings).
+
+---
+
+## Bot roster: five per team (10 bots)
+
+Raised the bot ceiling from 6 to 10 (5 T + 5 CT) and made it the default.
+
+- `src/game/round.ts`: `LIMITS.botCount` `[2,6]` → `[2,10]`, `DEFAULT_MATCH.botCount` 6 → 10.
+- `server/src/main.rs` / `server/src/http.rs`: `MAX_SLOTS` 6 → 10, `BOT_COUNT` env default 10.
+  The slot array is already a `Vec`, so nothing else needed to change.
+- `src/ui/entry.ts` slider start value and `src/ui/admin.ts` bot-count field max bumped to 10.
+- `src/game/spawning.ts`: past 3 per side, `spawnRing` used to march sideways in 3 m steps —
+  at 5 that put a bot at x-offset +11, outside the ~13 m spawn corridor (walls at x=-22/-9 in
+  `de_douglas.json`) and likely inside geometry. Now it repeats the 3-wide preset row stepped
+  2.5 m inward per row, so all 5 land in the open spawn area. The count=3 layout is byte-identical.
+- `round.test.ts` slot-capacity assertion updated to 10/reject 11; stale "three CT bots" comment
+  in `session.ts` fixed.
+
+269 tests green, `pnpm typecheck` green, `cargo build` clean.
+
+### Fix: 4th bot per side spawned inside the spawn-approach cone
+
+Reported symptom: one bot on each side stuck between a traffic cone and the wall. Cause: the new
+second spawn row sat at (-18, ±22.5) and `props.ts` places a cone at (-18, ±23) — 0.5 m apart, so
+the bot spawned inside it. Spawns are not nav-snapped and collide-and-slide has nowhere to push a
+capsule that starts overlapping, so it stays wedged all round.
+
+Rows now brick-offset: 3 m inward and 1.5 m sideways per row, putting the 4th bot 1.8 m clear.
+New `spawning.test.ts` case asserts no spawn at max count is within 1.2 m of any `PROP_PLACEMENTS`
+entry — observed failing against the old math with exactly the reported 0.5 m gap. 270 green.
+
+### Fix (2): 4th bot was inside the spawn wall, not just the cone
+
+The previous row step (3 m inward) put the 4th bot at z=±22 — and `de_douglas.json` has the spawn
+wall at |z| ∈ [21.8, 22.2], x ∈ [-22,-10]. The bot spawned *inside* it. Rows now step 1.5 m inward
+and 2.5 m along the spine wall (opposite lateral direction), landing the 4th bot at (-20.5, ±23.5):
+1.3 m clear of both walls, 2.55 m clear of the cone.
+
+Root cause of missing it twice: the new test only checked props. Added a second case asserting no
+spawn is within 0.6 m of any axis-aligned wall box in `MAP_BOXES` — the spawn pocket is small
+(|z| 22.2–28.3, x -21.8 to -10) and every future row tweak now gets checked against it. 271 green.

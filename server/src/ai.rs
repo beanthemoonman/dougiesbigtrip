@@ -25,8 +25,14 @@ const VISIT_RECENCY_TICKS: u32 = 64 * 8; // ~8 s at 64 Hz
 
 /// Weights for the search-goal selection metric. Bots spread out from teammates
 /// and avoid nodes that were recently visited by anyone on the team.
-const W_TEAMMATE_DIST: f64 = 3.0;
+/// Same-pole repulsion: every teammate pushes on nearby nodes as 1/(1+d). Was a
+/// "distance to nearest teammate" bonus, which always crowned the one globally
+/// farthest node — every bot then ran the identical route to it.
+const W_REPEL: f64 = 60.0;
 const W_RECENCY: f64 = 2.0;
+/// Deterministic per-pick jitter, ~3x the tactical spread: tactical nodes stay
+/// favoured, but low-weight ones still come up so routes vary run to run.
+const W_RANDOM: f64 = 80.0;
 /// Per-node tactical weight multiplier. Curve/flank nodes are high, spine/killbox
 /// nodes are low.
 const W_TACTICAL: f64 = 10.0;
@@ -43,6 +49,16 @@ const CAUTION_JITTER: u32 = 64; // ±1 s variation
 
 /// Slow-scan yaw rate during caution pauses (rad/s).
 const SCAN_RATE: f64 = 1.0;
+
+/// Unsticking. Breakable props are not in the nav graph, so a hop can run
+/// straight through a crate. Rather than teach nav about props, detect
+/// "pressing FORWARD, going nowhere" and strafe out of it, like a human does.
+/// Below this per-tick horizontal displacement (m) the bot counts as blocked.
+const STUCK_STEP: f64 = 0.015;
+const STUCK_TICKS: u32 = 24;
+const SIDESTEP_TICKS: u32 = 32;
+/// Two failed sidesteps in a row → treat the goal as unreachable and re-pick.
+const STUCK_STRIKES: u32 = 2;
 
 /// In search mode, bots walk at a reduced duty cycle (press FORWARD only 3 of
 /// every 4 ticks) so they move at roughly 50-60% of their normal ground speed.
@@ -80,6 +96,14 @@ pub struct Bot {
     pub caution_phase: CautionPhase,
     /// Deterministic per-bot tick offset for de-synchronising caution timers.
     pub tick_offset: u32,
+    /// Stuck detector: position last tick + how long we've been going nowhere.
+    pub last_x: f64,
+    pub last_z: f64,
+    pub stuck_ticks: u32,
+    pub sidestep_ticks: u32,
+    /// Buttons::LEFT or Buttons::RIGHT while sidestepping, 0 otherwise.
+    pub sidestep_dir: u16,
+    pub stuck_strikes: u32,
 }
 
 impl Bot {
@@ -99,6 +123,12 @@ impl Bot {
             caution_timer: base_move,
             caution_phase: CautionPhase::Moving,
             tick_offset,
+            last_x: f64::MAX,
+            last_z: f64::MAX,
+            stuck_ticks: 0,
+            sidestep_ticks: 0,
+            sidestep_dir: 0,
+            stuck_strikes: 0,
         }
     }
 }
@@ -163,11 +193,23 @@ fn can_see(
     .is_none()
 }
 
+/// Deterministic [0,1) hash of two u32s. Must stay bit-identical to
+/// `navnodes.ts::hash01` — it is what lets both ports jitter their goal picks
+/// the same way. Not an RNG: no stream, no state, so replays stay exact.
+fn hash01(a: u32, b: u32) -> f64 {
+    let mut h = a.wrapping_mul(0x9e37_79b1) ^ b.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2545_f491);
+    h ^= h >> 13;
+    f64::from(h) / 4_294_967_296.0
+}
+
 /// Pick a search goal node using the shared spec:
-///   max over i of  w1·min_distance_to_any_teammate_at_node_i
+///   max over i of  -w1·Σ_teammates 1/(1 + distance_to_node_i)
 ///                 + w2·(ticks_since_node_i_was_last_visited)
 ///                 + w3·node_tactical_weight
 ///                 - w4·(count of teammates whose path_goal is i)
+///                 + w5·hash01(seed + tick, i)
 /// Tie-broken by smallest node index (deterministic).
 fn pick_search_node(
     bot_node: usize,
@@ -176,6 +218,7 @@ fn pick_search_node(
     teammate_positions: &[&Vector3<f64>],
     teammate_goals: &[usize],
     server_tick: u32,
+    seed: u32,
 ) -> usize {
     let mut best_node = bot_node;
     let mut best_score = f64::NEG_INFINITY;
@@ -183,14 +226,12 @@ fn pick_search_node(
     for i in 0..graph.node_count() {
         let Some(n) = graph.node(i) else { continue };
 
-        let mut min_dist = f64::MAX;
+        let mut repel = 0.0;
         for &pos in teammate_positions {
             let dx = n[0] - pos.x;
             let dz = n[2] - pos.z;
-            let dsq = dx * dx + dz * dz;
-            if dsq < min_dist { min_dist = dsq; }
+            repel += 1.0 / (1.0 + (dx * dx + dz * dz).sqrt());
         }
-        let min_dist = min_dist.sqrt().min(40.0); // cap at sight range
 
         let ticks_since = server_tick.saturating_sub(search.last_visited[i]);
         let recency_bonus = (ticks_since as f64).min(VISIT_RECENCY_TICKS as f64);
@@ -199,8 +240,9 @@ fn pick_search_node(
 
         let conflicts = teammate_goals.iter().filter(|&&g| g == i).count() as f64;
 
-        let score = W_TEAMMATE_DIST * min_dist + W_RECENCY * recency_bonus
-            + W_TACTICAL * tactical - W_GOAL_CONFLICT * conflicts;
+        let score = -W_REPEL * repel + W_RECENCY * recency_bonus
+            + W_TACTICAL * tactical - W_GOAL_CONFLICT * conflicts
+            + W_RANDOM * hash01(seed.wrapping_add(server_tick), i as u32);
 
         if score > best_score {
             best_score = score;
@@ -208,6 +250,52 @@ fn pick_search_node(
         }
     }
     best_node
+}
+
+/// Add a strafe when the bot is walking into something the nav graph doesn't
+/// know about (FORWARD+LEFT/RIGHT = a 45° wishdir, which slides around it).
+/// After two failed sidesteps the goal is treated as unreachable and dropped so
+/// the search re-picks — the fresh jitter usually sends it elsewhere entirely.
+fn unstick(bot: &mut Bot, buttons: u16, bot_feet: &Vector3<f64>, server_tick: u32) -> u16 {
+    if bot.sidestep_ticks > 0 {
+        bot.sidestep_ticks -= 1;
+        bot.last_x = bot_feet.x;
+        bot.last_z = bot_feet.z;
+        return buttons | Buttons::FORWARD | bot.sidestep_dir;
+    }
+
+    if buttons & Buttons::FORWARD != 0 {
+        let dx = bot_feet.x - bot.last_x;
+        let dz = bot_feet.z - bot.last_z;
+        if dx * dx + dz * dz < STUCK_STEP * STUCK_STEP {
+            bot.stuck_ticks += 1;
+        } else {
+            bot.stuck_ticks = 0;
+        }
+    }
+    bot.last_x = bot_feet.x;
+    bot.last_z = bot_feet.z;
+
+    if bot.stuck_ticks >= STUCK_TICKS {
+        bot.stuck_ticks = 0;
+        bot.stuck_strikes += 1;
+        bot.sidestep_ticks = SIDESTEP_TICKS;
+        bot.sidestep_dir = if hash01(bot.tick_offset.wrapping_add(server_tick), bot.stuck_strikes) < 0.5 {
+            Buttons::LEFT
+        } else {
+            Buttons::RIGHT
+        };
+        if bot.stuck_strikes >= STUCK_STRIKES {
+            bot.stuck_strikes = 0;
+            bot.path_goal_node = bot.current_node; // forces a re-pick next tick
+            bot.last_known = None;
+            if bot.mode == BotMode::Reposition {
+                bot.mode = BotMode::Search;
+            }
+        }
+        return buttons | bot.sidestep_dir;
+    }
+    buttons
 }
 
 /// Tick the bot's AI and return (buttons, yaw) for tick_movement.
@@ -350,7 +438,7 @@ pub fn tick_bot(
         if at_node || bot.path_goal_node == bot.current_node {
             let new_goal = pick_search_node(
                 bot.current_node, graph, search,
-                teammate_positions, teammate_goals, server_tick,
+                teammate_positions, teammate_goals, server_tick, bot.tick_offset,
             );
             // Claim the node so the next bot picks a different one.
             search.last_visited[new_goal] = server_tick;
@@ -384,5 +472,6 @@ pub fn tick_bot(
         }
     }
 
+    buttons = unstick(bot, buttons, bot_feet, server_tick);
     (buttons, bot.yaw)
 }

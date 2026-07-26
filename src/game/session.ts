@@ -533,10 +533,11 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   const { templateFor, ctTemplateClips, attachBotWeapon } = await loadCharacterAssets(renderCtx.scene);
   loading.step('Loading weapons…');
 
-  // Three CT bots spawn behind the CT spawn wall (west spine, +z end) and patrol
-  // out: one holds the dense spine chokepoints down toward T, one contests mid,
-  // one swings the sparse east curve flank. findPath snaps each waypoint to the
-  // navmesh and routes around cover, so bots roam instead of standing at spawn.
+  // Bots spawn in rows behind their team's spawn wall (CT at the west spine's +z
+  // end, T at -z) and patrol out: some hold the dense spine chokepoints, some
+  // contest mid, some swing the sparse east curve flank. findPath snaps each
+  // waypoint to the navmesh and routes around cover, so bots roam instead of
+  // standing at spawn.
 
   // Generate bot spawns from config. Splits count: half CT, rest T.
   const ctCount = Math.floor(currentMatchConfig.botCount / 2);

@@ -72,13 +72,30 @@ export function atNode(nodeIdx: number, x: number, _y: number, z: number): boole
   return dx * dx + dz * dz <= 0.6 * 0.6;
 }
 
+/**
+ * Deterministic [0,1) hash of two u32s. Must produce bit-identical results in
+ * `server/src/ai.rs::hash01` — it is what keeps the two ports picking the same
+ * goal node while still looking random. Not an RNG: no stream, no state, so T1
+ * replays stay exact.
+ */
+export function hash01(a: number, b: number): number {
+  let h = (Math.imul(a >>> 0, 0x9e3779b1) ^ Math.imul(b >>> 0, 0x85ebca6b)) >>> 0;
+  h = (h ^ (h >>> 15)) >>> 0;
+  h = Math.imul(h, 0x2545f491) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
+  return h / 4294967296;
+}
+
 /** Per-node last-visited ticks for the search-spread formula. */
 export class SearchScore {
   lastVisited: number[];
   visitRecencyTicks = 64 * 8;
-  wTeammateDist = 3.0;
+  /** Same-pole repulsion: each teammate pushes on nearby nodes as 1/(1+d). */
+  wRepel = 60.0;
   wRecency = 2.0;
   wTactical = 10.0;
+  /** Jitter weight — ~3x the tactical spread (10x0.3..3): tactical nodes stay favoured, but low-weight ones still come up. */
+  wRandom = 80.0;
 
   constructor() {
     this.lastVisited = new Array(NAVNODES.nodeCount).fill(0);
@@ -95,6 +112,7 @@ export class SearchScore {
     serverTick: number,
     teammatePositions: readonly (readonly [number, number, number])[],
     teammateGoals?: readonly number[],
+    seed = 0,
   ): number {
     const wGoalConflict = 20.0;
     let bestNode = botNode;
@@ -104,14 +122,15 @@ export class SearchScore {
       const n = NAVNODES.nodes[i];
       if (!n) continue;
 
-      let minDistSq = Infinity;
+      // Repulsion field rather than "distance to the nearest teammate": the old
+      // min-distance term always crowned the single globally-farthest node, so
+      // every bot ran the same route to the same corner.
+      let repel = 0;
       for (const tp of teammatePositions) {
         const dx = n[0] - tp[0];
         const dz = n[2] - tp[2];
-        const dsq = dx * dx + dz * dz;
-        if (dsq < minDistSq) minDistSq = dsq;
+        repel += 1 / (1 + Math.sqrt(dx * dx + dz * dz));
       }
-      const minDistVal = Math.min(Math.sqrt(minDistSq), 40);
 
       const ticksSince = serverTick - (this.lastVisited[i] ?? 0);
       const recencyBonus = Math.min(ticksSince, this.visitRecencyTicks);
@@ -125,8 +144,9 @@ export class SearchScore {
         }
       }
 
-      const score = this.wTeammateDist * minDistVal + this.wRecency * recencyBonus
-        + this.wTactical * tactical - wGoalConflict * conflicts;
+      const score = -this.wRepel * repel + this.wRecency * recencyBonus
+        + this.wTactical * tactical - wGoalConflict * conflicts
+        + this.wRandom * hash01(seed + serverTick, i);
 
       if (score > bestScore) {
         bestScore = score;

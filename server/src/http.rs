@@ -23,7 +23,7 @@ use crate::db;
 use crate::ServerConfig;
 use crate::{ACTIVE_HUMANS, SPECTATOR_COUNT};
 
-const MAX_SLOTS: usize = 6;
+const MAX_SLOTS: usize = 10;
 const MAX_SPECTATORS: usize = 4;
 
 /// The subset of config exposed over the API.
