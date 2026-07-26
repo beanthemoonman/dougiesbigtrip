@@ -3625,3 +3625,34 @@ OAuth authorization URL.
 - Test: `sim/src/world.rs::disabled_prop_stops_blocking` — overlap before disable,
   none after, overlap again after round-reset. Verified failing before the fix.
 - `cargo test -p sim` 42 passed, `pnpm test` 252 passed, `pnpm typecheck` green.
+
+## Spatial audio + other actors' footsteps
+
+Made every world sound positional and gave bots/networked players audible footsteps.
+
+- `src/game/footsteps.ts` (new) — `advanceStride(dist, groundSpeed, dt)`, the distance-paced
+  footstep accumulator shared by the player, bots, and networked remotes. Pure; 6 T0 tests in
+  `footsteps.test.ts` (written first). Extracted from the inline block in `session.ts`, so the
+  player's own footsteps are a behaviour-preserving refactor — golden/T1 snapshots unchanged.
+- `src/core/audio.ts` — world sounds now take an optional `AudioPos` and route through an HRTF
+  `PannerNode` with a linear distance model (`GUNSHOT_RANGE` 40 m, `FOOTSTEP_RANGE` 14 m);
+  omitting the position keeps a voice at the ear (your own gun/reload/hurt). Added
+  `setListener(pos, forward)`. The manual `falloff()`/`AUDIBLE_RANGE` gain scaling in
+  `session.ts` is deleted — the distance model replaces it.
+- **Not Howler.js**, despite the CLAUDE.md stack note. Howler plays *sources* (files) and every
+  voice here is a synthesised oscillator/noise graph with no file behind it; its spatial support
+  is a thin wrapper over the same `PannerNode`. Zero new dependencies. Stack table in
+  `CLAUDE.md`/`AGENTS.md` updated to say so, plus `plan_to_implement.md` (Phase 2 audio bullet
+  flipped to `[x]`), `docs/weapon-feel.md` §7, and `docs/plan-bugfixes-round2.md`.
+- `src/game/session.ts` — per-bot `stepDist` on `Enemy` (reset on respawn), footsteps emitted
+  from the bot tick at the bot's position; bot gunshots and bullet impacts now pass positions;
+  listener follows the camera each frame (FP eye / spectator free-fly / overview). Networked
+  remotes derive ground speed from the interpolated position delta (snapshots carry no
+  velocity) and clear their stride state on death/disconnect so a respawn can't fire a
+  teleport-step.
+- `tests/acceptance/ACC-023-spatial-audio.md` — T3 script, written before any range/gain tuning.
+  Not yet run.
+
+Deliberately skipped: per-surface footsteps for bots (greybox floor is concrete throughout, same
+assumption the player's steps already make), shift-walk footstep silencing, and distinct FP/TP
+gunshot variants. `pnpm lint`/`typecheck`/`test` green (258 tests).

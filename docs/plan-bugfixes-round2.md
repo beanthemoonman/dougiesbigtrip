@@ -72,7 +72,8 @@ so no true spatialisation — just scale gain by bot→player distance:
   `AUDIBLE_RANGE = 40` m (matches `SIGHT_RANGE`). Only bots the player can
   roughly see/hear register.
 - ponytail: linear rolloff, mono, no per-ear panning. Real positional/distance-
-  tail audio is the Howler job the stack notes still defer (`CLAUDE.md`); add it
+  tail audio now rides the Web Audio `PannerNode` path in `core/audio.ts` (the stack
+  notes no longer defer this to Howler); add it
   when there are enough simultaneous sources for panning to matter.
 
 Play it for **every** bot shot the player is in range of, not only landed shots

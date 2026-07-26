@@ -154,8 +154,15 @@ Static crosshair as an option, dynamic as default.
 
 ## 7. Audio
 
-- Firing sound must be **sample-accurate to the shot**, not scheduled a frame later. Preload
-  and use Howler sprites; do not `new Howl()` per shot.
+- Firing sound must be **sample-accurate to the shot**, not scheduled a frame later. The
+  current synth voices in `src/core/audio.ts` schedule off `ctx.currentTime` at the tick that
+  fired, which satisfies this. *If* real audio files ever land: preload into sprites, one
+  decode, offset playback — never construct a player object per shot.
+- **Positional:** a sound that happens somewhere in the world (someone else's gun, an impact,
+  another actor's footsteps) is passed an `AudioPos` and panned through a `PannerNode` with a
+  linear distance model. A sound that happens *to you* (your own gun, reload, hurt) is passed
+  no position and stays centred. Do not pan the player's own audio — at zero distance the
+  panner amplifies the listener's own rounding error into a wandering image.
 - Distinct **first-person** and **third-person** variants of every gunshot. The FP one is
   punchier and drier; the TP one has a tail.
 - **Distance tail:** beyond ~25 m, layer in a delayed crack/reverb. Cheap, and it's most of

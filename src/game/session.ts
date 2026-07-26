@@ -30,7 +30,8 @@ import { loadNav } from '../ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from '../ai/anim';
 import { applyWeaponPose, getWeaponMuzzle } from '../ai/thirdperson';
 import { createRagdollWorld, despawnRagdollBody, ragdollExpired, spawnRagdollBody, type RagdollBody } from '../ai/ragdoll';
-import { playFootstep, playGunshot, playHurt, playImpact, playReload } from '../core/audio';
+import { playFootstep, playGunshot, playHurt, playImpact, playReload, setListener } from '../core/audio';
+import { advanceStride } from './footsteps';
 import { type AuthState } from '../core/auth';
 import { Buttons, type InputManager } from '../core/input';
 import { createTeamMenu, type TeamChoice } from '../ui/teammenu';
@@ -110,12 +111,9 @@ function stanceOf(player: PlayerState): Stance {
   return speed < 3.5 ? 'walking' : 'running';
 }
 
-// Bot gunshot audibility: linear falloff from full volume at 0 m to silence at
-// this range. Mono Web Audio, no spatial panning — distance tail only.
-const AUDIBLE_RANGE = 40; // m, matches SIGHT_RANGE
-function falloff(dist: number): number {
-  return MathUtils.clamp(1 - dist / AUDIBLE_RANGE, 0, 1);
-}
+// Audibility is now the PannerNode's job — every world sound is passed a
+// position and the linear distance model silences it past its own range
+// (core/audio.ts: GUNSHOT_RANGE / FOOTSTEP_RANGE). No manual falloff here.
 
 export async function startGameSession(ctx: SessionContext): Promise<void> {
   const { canvas, renderCtx, input, screens, auth, validatedBootUrl } = ctx;
@@ -497,7 +495,6 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   // in docs/weapon-feel.md §6 as explicitly optional for the demo — add it when
   // there are walls thin enough for it to matter (Phase 3).
   const MAX_SHOT_DISTANCE = 100; // m; the greybox is 20 m across
-  const STEP_STRIDE = 1.9; // m between footstep sounds at a walk/run
 
   // --- Bots. 3 per team by default; one is benched when the human picks that side. ---
   // Placeholder capsule bodies until the character rig lands (Phase 5); each bot
@@ -524,6 +521,8 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     alive: boolean;
     hp: number;
     fireCooldown: number;
+    /** Metres walked since this bot's last footstep (see game/footsteps.ts). */
+    stepDist: number;
     // Single-player scoreboard tally (multiplayer K/D is server-authoritative).
     kills: number;
     deaths: number;
@@ -569,6 +568,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       alive: true,
       hp: BOT_MAX_HP,
       fireCooldown: 0,
+      stepDist: 0,
       kills: 0,
       deaths: 0,
     };
@@ -601,6 +601,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   // interpolation. Each remote gets its own character mesh clone, created lazily
   // when a new slot appears and hidden when gone.
   const remoteRoots = new Map<number, Group>(); // slot → Group
+  // slot → last interpolated ground position + stride accumulator, for the
+  // footsteps of networked players (see game/footsteps.ts).
+  const remoteSteps = new Map<number, { x: number; z: number; dist: number }>();
   function remoteRootFor(slot: number, teamCt: boolean): Group {
     let root = remoteRoots.get(slot);
     if (!root) {
@@ -653,7 +656,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   let playerAlive = false; // Phase 9: not alive until a team is chosen
   let health = 100;
   let armor = 100;
-  let stepDist = 0; // metres walked since the last footstep (see STEP_STRIDE)
+  let stepDist = 0; // metres walked since the last footstep (see game/footsteps.ts)
   // Bug 3: free-fly spectator position while dead. Seeded from the death eye.
   const specPos = new Vector3().copy(OVERVIEW_POS); // start at overview; moves during spectating
 
@@ -668,6 +671,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
 
   const playerFeet = new Vector3(); // scratch: player feet, the bots' target
   const impact = new Vector3();
+  const listenerFwd = new Vector3(); // scratch: camera forward, fed to the audio listener
 
   /** Round-reset: re-create broken props from their cached templates so the
    *  map resets clean. Restores bottom-up (bases before stacked items) so
@@ -734,6 +738,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       e.alive = true;
       e.hp = BOT_MAX_HP;
       e.fireCooldown = 0;
+      e.stepDist = 0;
       e.root.visible = true;
       // Phase 12.3: discard any lingering ragdoll body from the previous death.
       const oldRagdoll = ragdolls.get(e);
@@ -943,17 +948,13 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           player.position.z,
         );
         movementCtx.body.setTranslation(bodyCenterScratch, true);
-        // Footsteps: a step every STEP_STRIDE metres of ground travel. Distance-
-        // paced (not time-paced) so it speeds up when you run. The greybox floor
-        // is concrete throughout — sample a real surface here if the map varies.
+        // Footsteps: see game/footsteps.ts. Unpanned — your own boots are at the
+        // ear. The greybox floor is concrete throughout; sample a real surface
+        // here if the map ever varies.
         const groundSpeed = player.onGround ? Math.hypot(player.velocity.x, player.velocity.z) : 0;
-        stepDist += groundSpeed * fixedDt;
-        if (groundSpeed > 0.5 && stepDist >= STEP_STRIDE) {
-          stepDist = 0;
-          playFootstep('concrete');
-        } else if (groundSpeed <= 0.5) {
-          stepDist = 0; // reset so the first step after stopping isn't instant
-        }
+        const step = advanceStride(stepDist, groundSpeed, fixedDt);
+        stepDist = step.dist;
+        if (step.stepped) playFootstep('concrete');
       }
       world.updateSceneQueries(); // bot perception: human body at current tick position
 
@@ -1001,6 +1002,13 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           b.body.setTranslation(bodyCenterScratch, true);
           const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
           driveBotAnim(e.anim, botSpeed, b.onGround, e.brain.mode, fixedDt);
+          // Audible footsteps (positional). Same stride pacing as the player;
+          // the panner handles distance + direction, so no gating here beyond
+          // "there is an ear to hear it" — a spectator hears them too, from the
+          // free-fly camera, which is where the listener sits while dead.
+          const botStep = advanceStride(e.stepDist, b.onGround ? botSpeed : 0, fixedDt);
+          e.stepDist = botStep.dist;
+          if (botStep.stepped) playFootstep('concrete', b.position);
           applyWeaponPose(e.root, 'rifle');
           if (fire && e.fireCooldown === 0 && target !== null && targetAlive) {
             e.fireCooldown = BOT_WEAPON.fireInterval;
@@ -1054,10 +1062,10 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 }
               }
             }
-            // Bot gunshot audio: distance-attenuated mono. A whiff is still a
-            // bang — play for every shot, not only landed hits. Gate on
-            // AUDIBLE_RANGE so the far side of the map stays quiet.
-            if (dist < AUDIBLE_RANGE) playGunshot('rifle', falloff(dist));
+            // Bot gunshot audio: positional. A whiff is still a bang — play for
+            // every shot, not only landed hits. The panner's linear distance
+            // model keeps the far side of the map quiet (GUNSHOT_RANGE).
+            playGunshot('rifle', botEye);
           }
         }
       }
@@ -1139,7 +1147,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 ) ?? hitboxAt(bp.y, impact.y);
                 enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
                 vfx.impact(impact, hitNormal, 'flesh'); // blood puff, no bullet hole
-                playImpact('flesh');
+                playImpact('flesh', impact);
                 if (enemy.hp <= 0) {
                   enemy.alive = false;
                   enemy.deaths += 1;
@@ -1176,7 +1184,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 // collider→surface entry, so it falls back to concrete.
                 const surface = (rayHit.collider ? surfaceByCollider.get(rayHit.collider.handle) : undefined) ?? 'concrete';
                 vfx.impact(impact, hitNormal, surface);
-                playImpact(surface);
+                playImpact(surface, impact);
                 if (broke.length === 0 && SURFACE_FX[surface].decal) {
                   decals.add(hitPoint.copy(impact), hitNormal); // bullet mark
                 }
@@ -1238,6 +1246,12 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           renderCtx.camera.position.y += prevShakeY + (shakeY - prevShakeY) * alpha;
         }
       }
+      // Spatial audio listener follows the camera — first-person eye while alive,
+      // the free-fly spectator while dead, the overview cam at team select. Done
+      // here so it picks up whichever branch above posed the camera.
+      renderCtx.camera.getWorldDirection(listenerFwd);
+      setListener(renderCtx.camera.position, listenerFwd);
+
       vfx.update(frameDt); // age muzzle flash / tracers / impact puffs off real time
 
       // Apply the viewmodel anim pose on top of the active weapon's rest pose.
@@ -1314,6 +1328,21 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           const root = remoteRootFor(r.slot, r.teamCt);
           if (r.alive) {
             root.visible = true;
+            // Footsteps for networked players. Snapshots carry no velocity, so
+            // speed is the interpolated horizontal delta since the last frame.
+            // ponytail: this runs on the render frame, not the 64 Hz tick — a
+            // cosmetic cue, and pacing is distance-based so a variable dt only
+            // shifts *when* within a stride the step lands, never how many.
+            const prev = remoteSteps.get(r.slot);
+            if (prev) {
+              const dx = r.pos[0] - prev.x;
+              const dz = r.pos[2] - prev.z;
+              const speed = frameDt > 0 ? Math.hypot(dx, dz) / frameDt : 0;
+              const rs = advanceStride(prev.dist, speed, frameDt);
+              prev.dist = rs.dist;
+              if (rs.stepped) playFootstep('concrete', root.position);
+            }
+            remoteSteps.set(r.slot, { x: r.pos[0], z: r.pos[2], dist: prev?.dist ?? 0 });
             root.position.set(r.pos[0], r.pos[1], r.pos[2]);
             root.rotation.y = r.yaw;
             // Phase 12.1: apply weapon-hold pose to remote models.
@@ -1328,12 +1357,16 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
             }
           } else {
             root.visible = false;
+            remoteSteps.delete(r.slot); // dead: no teleport-step on respawn
           }
         }
         // Hide roots for slots no longer in the snapshot (disconnected).
         const activeSlots = new Set(remotes.map((r) => r.slot));
         for (const [slot, root] of remoteRoots) {
-          if (!activeSlots.has(slot)) root.visible = false;
+          if (!activeSlots.has(slot)) {
+            root.visible = false;
+            remoteSteps.delete(slot); // dead/disconnected: drop the stride state
+          }
         }
       }
       // Clear any fire events we couldn't deliver (e.g. slot not in this snapshot

@@ -131,12 +131,16 @@ Read `docs/weapon-feel.md`.
       full-auto stays smooth and you can kick mid-anything). Pure + clock-free, ticked at the
       fixed rate; 6 T0 tests in `viewmodel.test.ts`. `main.ts` gates fire/reload/switch on the
       idle state and applies the pose over each weapon's rest offset. T3: ACC-006.)
-- [~] Audio: positional gunshots, distance-based tail, first-person vs. third-person variants.
-      (First-person weapon sfx done: `src/core/audio.ts` synthesises the gunshot + reload with
-      the **Web Audio API** — no sound files, so no licence. Deliberately not Howler.js (see the
-      CLAUDE.md stack note): positional / distance-tail / TP variants only matter with other
-      sound sources, so they land with bots in Phase 4. The rest of this bullet is that Phase 4
-      work.)
+- [x] Audio: positional gunshots, distance-based tail, first-person vs. third-person variants.
+      (All sfx are synthesised in `src/core/audio.ts` with the **Web Audio API** — no sound
+      files, so no licence. Spatialisation landed with the actor-footsteps work: world sounds
+      take an `AudioPos` and route through an HRTF `PannerNode` with a linear distance model
+      (`GUNSHOT_RANGE` 40 m, `FOOTSTEP_RANGE` 14 m); first-person sounds pass no position and
+      stay at the ear. `setListener()` tracks the camera — FP eye, spectator free-fly, or the
+      overview cam. Still **not Howler.js**: it plays files, and this game has none; its
+      spatial layer is a `PannerNode` wrapper. Other actors' footsteps (bots + networked
+      remotes) are paced by the shared `src/game/footsteps.ts` helper. T0: `footsteps.test.ts`.
+      T3: ACC-023.)
 - [x] HUD: health, armour, ammo, crosshair (dynamic gap driven by current inaccuracy).
       (`src/ui/hud.ts` — DOM overlay, no React. The crosshair gap is the *same*
       `computeSpread()` value the bullet's spread disc uses, projected to px:
@@ -249,8 +253,8 @@ Read `docs/navmesh-pipeline.md`.
 lose you when you break LOS, and are beatable but not free.
 
 Status: all code written, `pnpm typecheck`/`pnpm lint`/`pnpm test` green. ACC-008 (bots)
-recorded PASS. **Phase 4 is complete.** Positional/third-person audio is the one deferred
-item (Howler.js not wired; first-person Web Audio synth remains the only audio system).
+recorded PASS. **Phase 4 is complete.** The formerly-deferred positional/third-person audio
+has since landed — see the Phase 2 audio bullet above (Web Audio `PannerNode`, not Howler).
 
 ---
 
