@@ -46,7 +46,7 @@ import { createRoundState, DEFAULT_MATCH, isMatchOver, tickRound, validateMatchC
 import { spawnRing } from './spawning';
 import { baseCharacterColor, loadCharacterAssets, flattenMaterials, T_TINT, tintCharacter } from './characters';
 import { BREAKABLE_HP, PROP_PLACEMENTS, buildBreakables, buildPropMesh, makeSign, placeProps, propBoxAt, propSurface } from './props';
-import { EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from '../player/constants';
+import { duckHalfHeight, duckScaleY, EYE_HEIGHT_STANDING, PLAYER_RADIUS, STANDING_HALF_HEIGHT } from '../player/constants';
 import { updateViewCamera, type ViewState } from '../player/camera';
 import { createMovementContext, createPlayerState, type PlayerState } from '../player/movement';
 import { moveSpectator } from '../player/spectator';
@@ -941,10 +941,14 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         player.viewPunch = s[8]!;
         player.duckAmount = s[9]!;
         player.ducked = player.duckAmount > 0.5;
-        // Sync kinematic body so bots can hit-detect the player.
+        // Sync kinematic body so bots can hit-detect the player. The capsule
+        // shrinks with the duck so a crouching player is genuinely smaller —
+        // same as the server does (sim/src/world.rs).
+        const playerHalf = duckHalfHeight(player.duckAmount);
+        movementCtx.collider.setHalfHeight(playerHalf);
         bodyCenterScratch.set(
           player.position.x,
-          player.position.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS,
+          player.position.y + playerHalf + PLAYER_RADIUS,
           player.position.z,
         );
         movementCtx.body.setTranslation(bodyCenterScratch, true);
@@ -997,7 +1001,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           b.onGround = bs[6]! === 1;
           b.eyeHeight = bs[7]!;
           b.duckAmount = bs[9]!;
-          bodyCenterScratch.set(b.position.x, b.position.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, b.position.z);
+          const botHalf = duckHalfHeight(b.duckAmount);
+          b.collider.setHalfHeight(botHalf);
+          bodyCenterScratch.set(b.position.x, b.position.y + botHalf + PLAYER_RADIUS, b.position.z);
           b.collider.setTranslation(bodyCenterScratch);
           b.body.setTranslation(bodyCenterScratch, true);
           const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
@@ -1140,11 +1146,12 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 // fall back to the height band if it grazed the collider but
                 // missed every bone box (an edge clip that still counts).
                 const bp = enemy.brain.bot.position;
+                const bscale = duckScaleY(enemy.brain.bot.duckAmount);
                 const hitbox = hitboxRay(
                   shotOrigin.x, shotOrigin.y, shotOrigin.z,
                   shot.direction.x, shot.direction.y, shot.direction.z,
-                  bp.x, bp.y, bp.z, enemy.brain.aim.yaw,
-                ) ?? hitboxAt(bp.y, impact.y);
+                  bp.x, bp.y, bp.z, enemy.brain.aim.yaw, bscale,
+                ) ?? hitboxAt(bp.y, impact.y, bscale);
                 enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
                 vfx.impact(impact, hitNormal, 'flesh'); // blood puff, no bullet hole
                 playImpact('flesh', impact);
@@ -1277,6 +1284,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           if (e.alive) {
             const p = e.brain.bot.position;
             e.root.position.set(p.x, p.y, p.z);
+            e.root.scale.y = duckScaleY(e.brain.bot.duckAmount);
             // Full reset, not just .y: a prior death drives e.root.quaternion from
             // the ragdoll (tumbled), leaving nonzero X/Z Euler. Setting only .y on
             // respawn keeps that tilt — the bot stands upright only if we clear it.
@@ -1293,6 +1301,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                 continue;
               }
               e.root.visible = true;
+              e.root.scale.y = 1; // a corpse isn't crouching
               const t = r.body.translation();
               e.root.position.set(t.x, t.y - PLAYER_RADIUS * 0.5, t.z);
               const q = r.body.rotation();
@@ -1345,6 +1354,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
             remoteSteps.set(r.slot, { x: r.pos[0], z: r.pos[2], dist: prev?.dist ?? 0 });
             root.position.set(r.pos[0], r.pos[1], r.pos[2]);
             root.rotation.y = r.yaw;
+            root.scale.y = duckScaleY(r.ducked ? 1 : 0);
             // Phase 12.1: apply weapon-hold pose to remote models.
             applyWeaponPose(root, 'rifle');
             // Phase 12.2: spawn muzzle FX from pending EV_FIRE events.

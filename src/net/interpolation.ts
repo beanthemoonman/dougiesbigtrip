@@ -8,7 +8,7 @@
  * Our own slot is never interpolated — the local player drives from prediction.
  */
 
-import { F_ALIVE, type EntityState, type Snapshot } from './protocol';
+import { F_ALIVE, F_DUCKED, type EntityState, type Snapshot } from './protocol';
 
 const INTERP_DELAY_TICKS = 6; // ~94 ms
 const MAX_SNAPSHOTS = 128; // ~2 s of history
@@ -44,6 +44,9 @@ export interface RemoteEntity {
   alive: boolean;
   /** True if this entity is on team CT (for tinting/identification). */
   teamCt: boolean;
+  /** True while crouched — the model squashes to the ducked profile.
+   *  ponytail: binary, not the smooth duckAmount; the wire only carries a flag. */
+  ducked: boolean;
 }
 
 interface Buffered {
@@ -111,6 +114,7 @@ export function createInterpolationBuffer() {
         teamCt: hiEnt
           ? (hiEnt.flags & (1 << 2)) !== 0
           : (e.flags & (1 << 2)) !== 0,
+        ducked: ((hiEnt ?? e).flags & F_DUCKED) !== 0,
       });
     }
     return result;
@@ -127,6 +131,7 @@ export function createInterpolationBuffer() {
         pitch: e.pitch,
         alive: (e.flags & F_ALIVE) !== 0,
         teamCt: (e.flags & (1 << 2)) !== 0,
+        ducked: (e.flags & F_DUCKED) !== 0,
       });
     }
     return out;

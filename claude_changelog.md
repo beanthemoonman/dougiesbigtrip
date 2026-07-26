@@ -3656,3 +3656,25 @@ Made every world sound positional and gave bots/networked players audible footst
 Deliberately skipped: per-surface footsteps for bots (greybox floor is concrete throughout, same
 assumption the player's steps already make), shift-walk footstep silencing, and distinct FP/TP
 gunshot variants. `pnpm lint`/`typecheck`/`test` green (258 tests).
+
+## Crouch changes the visible and hittable profile
+
+Ducking only ever moved the eye height — the TS-side capsule stayed standing-sized and the
+world-models never shrank (the Rust server already swapped hulls; the client didn't).
+
+- `src/player/constants.ts`: `duckScaleY(duckAmount)` (model squash, DUCKED/STANDING height)
+  and `duckHalfHeight(duckAmount)` (capsule half-height).
+- `src/game/session.ts`: player + bot kinematic capsules now `setHalfHeight()` and re-centre
+  from `duckAmount` each tick; bot `root.scale.y` and remote-player roots squash to match
+  (corpses reset to 1).
+- `src/game/hitbox.ts`: `hitboxRay`/`hitboxAt` take an optional `scaleY` — the bone boxes are
+  static, so the ray's Y is divided back into un-squashed model space. Player hitscan passes
+  the target's duck scale, so a crouched bot's head is where the model's head is.
+- `src/net/interpolation.ts`: `RemoteEntity.ducked`, read from the `F_DUCKED` flag the wire
+  format already carried but the client ignored.
+
+Deliberately skipped: a real crouch animation clip (uniform Y squash instead, marked
+`ponytail:`), smooth duck interpolation for remotes (wire carries a bool, not `duckAmount`),
+and any change to the bot→player shot model (angular cone at the eye, not a hull test).
+Test: `src/game/hitbox.test.ts` gains a crouched-profile case. `pnpm typecheck` + `pnpm test`
+green (259 tests).

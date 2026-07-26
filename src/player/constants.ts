@@ -37,6 +37,18 @@ export const DUCKED_HEIGHT = 0.9144; // m
 export const STANDING_HALF_HEIGHT = (STANDING_HEIGHT - 2 * PLAYER_RADIUS) / 2;
 export const DUCKED_HALF_HEIGHT = (DUCKED_HEIGHT - 2 * PLAYER_RADIUS) / 2;
 
+/** Vertical squash of the body (model + capsule) at `duckAmount` 0..1.
+ *  ponytail: one uniform Y scale, not a crouch animation clip — replace with a
+ *  real crouch pose if/when the rig gets one; hitboxRay's scaleY goes away then. */
+export function duckScaleY(duckAmount: number): number {
+  return 1 + (DUCKED_HEIGHT / STANDING_HEIGHT - 1) * duckAmount;
+}
+
+/** Capsule half-height (cylindrical section) at `duckAmount` 0..1. */
+export function duckHalfHeight(duckAmount: number): number {
+  return STANDING_HALF_HEIGHT + (DUCKED_HALF_HEIGHT - STANDING_HALF_HEIGHT) * duckAmount;
+}
+
 export const EYE_HEIGHT_STANDING = 1.6256; // m, from feet
 export const EYE_HEIGHT_DUCKED = 0.7112; // m, from feet
 

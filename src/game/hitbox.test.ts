@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STANDING_HEIGHT } from '../player/constants';
+import { DUCKED_HEIGHT, STANDING_HEIGHT } from '../player/constants';
 import { BONES_Y_SPAN, hitboxAt, hitboxRay } from './hitbox';
 
 describe('hitboxAt', () => {
@@ -49,6 +49,15 @@ describe('hitboxRay (per-bone)', () => {
   it('accounts for bot position', () => {
     expect(shoot(3, 1.64, 0, 3, 0)).toBe('head'); // bot moved to x=3
     expect(shoot(0, 1.64, 0, 3, 0)).toBeNull(); // old spot now misses
+  });
+
+  it('a crouched body is half as tall: the standing head line whiffs, half of it hits', () => {
+    const crouched = DUCKED_HEIGHT / STANDING_HEIGHT; // 0.5
+    const at = (y: number) => hitboxRay(0, y, 5, 0, 0, -1, 0, 0, 0, 0, crouched);
+    expect(at(1.64)).toBeNull(); // standing head height is now over the crown
+    expect(at(1.64 * crouched)).toBe('head');
+    expect(at(1.37 * crouched)).toBe('chest');
+    expect(hitboxAt(0, 1.64 * crouched, crouched)).toBe('head'); // band scales too
   });
 
   it('a shot below the feet or above the crown misses', () => {

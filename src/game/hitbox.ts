@@ -24,8 +24,8 @@ import type { Hitbox } from './damage';
 /** Zone of a hit `hitY` metres in world space, given the target's `feetY`.
  *  Height-band fallback for when the precise ray test grazes the collider but
  *  misses every bone box (an edge clip that still counts as a hit). */
-export function hitboxAt(feetY: number, hitY: number): Hitbox {
-  const frac = (hitY - feetY) / STANDING_HEIGHT; // 0 = feet, 1 = crown
+export function hitboxAt(feetY: number, hitY: number, scaleY = 1): Hitbox {
+  const frac = (hitY - feetY) / (STANDING_HEIGHT * scaleY); // 0 = feet, 1 = crown
   if (frac >= 0.88) return 'head';
   if (frac >= 0.66) return 'chest';
   if (frac >= 0.45) return 'stomach';
@@ -92,12 +92,18 @@ export const BONES_Y_SPAN: readonly [number, number] = [
  * yaw `yaw`. Transforms the ray into body-local space and slab-tests every bone
  * box, returning the zone of the nearest one entered, or null if the ray misses
  * all bones (caller falls back to the height band). Pure scalar math, no alloc.
+ *
+ * `scaleY` is the target's vertical squash (crouch, see duckScaleY): the bone
+ * boxes are fixed, so the ray's Y is divided back into un-squashed model space.
+ * Distances stay comparable between bones (same ray, same reparameterisation),
+ * which is all the nearest-bone pick needs.
  */
 export function hitboxRay(
   ox: number, oy: number, oz: number,
   dx: number, dy: number, dz: number,
   px: number, py: number, pz: number,
   yaw: number,
+  scaleY = 1,
 ): Hitbox | null {
   // World -> body-local: subtract feet, rotate by -yaw about Y.
   const rx = ox - px;
@@ -106,10 +112,10 @@ export function hitboxRay(
   const c = Math.cos(-yaw);
   const s = Math.sin(-yaw);
   const lox = rx * c + rz * s;
-  const loy = ry;
+  const loy = ry / scaleY;
   const loz = -rx * s + rz * c;
   const ldx = dx * c + dz * s;
-  const ldy = dy;
+  const ldy = dy / scaleY;
   const ldz = -dx * s + dz * c;
 
   let bestT = Infinity;
