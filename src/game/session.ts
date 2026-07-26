@@ -688,6 +688,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       const collider = addStaticBox(world, box.center, box.half, quat);
       placedProps[i] = { mesh: prop, collider };
       propByCollider.set(collider.handle, i);
+      surfaceByCollider.set(collider.handle, propSurface(PROP_PLACEMENTS[i]?.[0]));
       // Re-enable the matching sim-world collider so players/bots collide
       // against the restored prop again.
       sim_add_prop_box(
@@ -1160,7 +1161,15 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                   const pp = placedProps[bi];
                   if (!pp) continue;
                   renderCtx.scene.remove(pp.mesh);
-                  pp.collider.setEnabled(false); // gone: no invisible box to bump/stand on
+                  // Actually remove it: setEnabled(false) does NOT take the collider
+                  // out of the query pipeline, so bullets and bot LOS kept hitting the
+                  // invisible box. restoreBreakables() builds a fresh one each round.
+                  const oldHandle = pp.collider.handle;
+                  const parentBody = pp.collider.parent();
+                  if (parentBody) world.removeRigidBody(parentBody);
+                  else world.removeCollider(pp.collider, false);
+                  propByCollider.delete(oldHandle);
+                  surfaceByCollider.delete(oldHandle);
                   sim_disable_prop_box(bi); // also remove from sim movement collision
                 }
                 // Surface drives the puff colour + impact tick; the map has no

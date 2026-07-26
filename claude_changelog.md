@@ -3604,3 +3604,24 @@ OAuth authorization URL.
 - Dropped the wss→443 special case in `createSettingsPanel`; the entry screen
   (`src/main.ts`) now passes `DEFAULT_SERVER_PORT` instead of the literal `'9876'`.
 - `pnpm typecheck` green.
+
+## Destroyed breakables still collided with player and bots
+
+- Root cause (two places, same class of bug): disabling a Rapier collider does not
+  remove it from the structure queries actually search.
+  - `sim/src/world.rs` — `disable_prop_body()` set the body disabled, but a disabled
+    collider only leaves the broad-phase BVH during a `step()`, and `step()` ran exactly
+    once (`ensure_broad_phase_ready`). Now both `disable_prop_body()` and the re-enable
+    path in `add_prop_body()` clear `broad_phase_ready`, so the next `tick_movement`
+    re-steps and the BVH matches reality. This is the fix for movement collision —
+    player and bots both shapecast against the sim world.
+  - `src/game/session.ts` — `collider.setEnabled(false)` likewise left the box in the
+    JS query pipeline (rapier 0.14's `QueryPipeline::update` iterates all colliders),
+    so hitscan and bot LOS kept hitting the invisible crate. Now the prop's rigid body
+    is removed outright; `restoreBreakables()` already builds a fresh one each round.
+    Stale `propByCollider` / `surfaceByCollider` entries are deleted on removal, and
+    `surfaceByCollider` is re-populated on restore (restored crates were falling back
+    to concrete impact FX).
+- Test: `sim/src/world.rs::disabled_prop_stops_blocking` — overlap before disable,
+  none after, overlap again after round-reset. Verified failing before the fix.
+- `cargo test -p sim` 42 passed, `pnpm test` 252 passed, `pnpm typecheck` green.

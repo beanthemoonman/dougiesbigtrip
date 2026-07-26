@@ -164,6 +164,7 @@ impl SimWorld {
         if let Some(Some(handle)) = self.prop_body_handles.get(index) {
             if let Some(body) = self.physics.bodies.get_mut(*handle) {
                 body.set_enabled(true);
+                self.broad_phase_ready = false; // enable only reaches the BVH via step()
                 return;
             }
         }
@@ -188,10 +189,16 @@ impl SimWorld {
     /// Disable a prop's body so it stops blocking movement (e.g. crate destroyed).
     /// The body + collider stay in the world (no Rapier removal API) but are
     /// invisible to all queries until re-enabled.
+    ///
+    /// Disabling only reaches the broad-phase BVH — which is what shapecasts
+    /// query — during a step(), so mark the BVH dirty; the next tick_movement
+    /// re-steps and the crate stops blocking. Without this the destroyed crate
+    /// still collides with players and bots.
     pub fn disable_prop_body(&mut self, index: usize) {
         if let Some(Some(handle)) = self.prop_body_handles.get(index) {
             if let Some(body) = self.physics.bodies.get_mut(*handle) {
                 body.set_enabled(false);
+                self.broad_phase_ready = false;
             }
         }
     }
@@ -284,3 +291,31 @@ impl Default for SimWorld {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shapecast::capsule_overlaps_anything;
+
+    /// A destroyed breakable must stop blocking players/bots. Regression: the
+    /// disable only reached the BVH on the next step(), so the invisible crate
+    /// kept colliding forever.
+    #[test]
+    fn disabled_prop_stops_blocking() {
+        let mut w = SimWorld::new();
+        w.add_prop_body(0, 0.0, 1.0, 0.0, 0.5, 0.5, 0.5, 0.0);
+        w.ensure_broad_phase_ready();
+        let shape = w.standing_shape.clone();
+        let me = Some(w.player_collider_handle(0));
+        assert!(capsule_overlaps_anything(&w.physics, &*shape, 0.0, 1.0, 0.0, me));
+
+        w.disable_prop_body(0);
+        w.ensure_broad_phase_ready();
+        assert!(!capsule_overlaps_anything(&w.physics, &*shape, 0.0, 1.0, 0.0, me));
+
+        w.add_prop_body(0, 0.0, 1.0, 0.0, 0.5, 0.5, 0.5, 0.0); // round reset
+        w.ensure_broad_phase_ready();
+        assert!(capsule_overlaps_anything(&w.physics, &*shape, 0.0, 1.0, 0.0, me));
+    }
+}
+
