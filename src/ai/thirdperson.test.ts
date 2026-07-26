@@ -43,7 +43,9 @@ describe('applyWeaponPose', () => {
     for (let i = 0; i < 200; i++) {
       arm.quaternion.set(Math.sin(i), Math.cos(i * 1.7), Math.sin(i * 0.3), 1).normalize(); // mixer noise
       applyWeaponPose(root, 'rifle');
-      expect(arm.quaternion.angleTo(target)).toBeLessThan(1e-6);
+      // Exact, not angleTo: the constants are 4-dp and so not quite unit, and
+      // angleTo (2·acos|dot|) reads that rounding as ~0.008 rad of phantom drift.
+      expect(arm.quaternion.toArray()).toEqual(target.toArray());
     }
   });
 });
@@ -89,8 +91,16 @@ describe('rifle hold geometry (ct_player.glb)', () => {
     const butt = world(BUTT);
     const right = at(bone(/rightarm$/i));
     const left = at(bone(/leftarm$/i));
-    expect(butt.distanceTo(right)).toBeLessThan(0.2);
+    // 0.12 m, not the 0.2 this used to allow: at 0.18 the stock renders as
+    // floating a hand's width in front of the chest and the test still passed.
+    expect(butt.distanceTo(right)).toBeLessThan(0.13);
     expect(butt.distanceTo(right)).toBeLessThan(butt.distanceTo(left));
+  });
+
+  it('carries the gun on the right shoulder, not down the centreline', () => {
+    // A shouldered rifle is offset to the firing side. Bore on the spine means
+    // the hold has drifted back to "held out in front with both hands".
+    expect(world(GRIP).x).toBeGreaterThan(0.08);
   });
 
   it('puts the right hand on the pistol grip', () => {

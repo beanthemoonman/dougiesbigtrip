@@ -15,12 +15,13 @@
  * the animation): the arms hold still while the mixer keeps driving spine and
  * legs, and the pose can't drift when a clip doesn't re-key a bone.
  *
- * The hold is a shouldered rifle, square to the body: butt pad in the right
- * shoulder pocket, right hand on the pistol grip, left hand on the handguard,
- * and the barrel pointing dead down −Z — the gun is aimed where the actor is
- * aimed. The rig's arms are short (0.52 m shoulder-to-wrist) and its shoulders
- * wide (±0.27), so that's only reachable because the solver also protracts the
- * shoulder bones toward the hand targets, as a real shooter does.
+ * The hold is a shouldered rifle: butt pad in the right shoulder pocket, right
+ * hand on the pistol grip, left hand on the handguard, and the barrel pointing
+ * dead down −Z — the gun is aimed where the actor is aimed. The rig's arms are
+ * short (0.44 m shoulder-to-wrist) and its shoulders wide (±0.27), so that's
+ * only reachable because the pose also BLADES THE TORSO ~36° right (Spine1 +
+ * Spine2), bringing the support shoulder forward and across — what a shooter
+ * actually does. Neck and Head counter-yaw so the actor still faces the target.
  *
  * ponytail: solved for this specific mixamorig bind pose. Model-forward is −Z
  * (confirmed from aim.yaw = atan2(-dir.x,-dir.z) with root.rotation.y = yaw).
@@ -63,14 +64,16 @@ export interface BonePose {
 }
 
 const POSE_RIFLE: BonePose[] = [
-  { re: /rightshoulder/i, quat: [0.9573, 0.1645, 0.208, -0.1149] },
-  { re: /rightarm$/i,     quat: [0.3476, -0.0659, 0.5613, 0.7482] },
-  { re: /rightforearm/i,  quat: [0.7154, 0.0024, 0.5862, 0.3802] },
-  { re: /righthand/i,     quat: [-0.6849, 0.1782, -0.5863, -0.3943] },
-  { re: /leftshoulder/i, quat: [0.9533, 0.0183, -0.1644, -0.2526] },
-  { re: /leftarm$/i,     quat: [0.212, 0.1452, -0.3685, 0.8934] },
-  { re: /leftforearm/i,  quat: [0.5352, 0.0018, -0.3473, 0.77] },
-  { re: /lefthand/i,     quat: [-0.3653, -0.7011, 0.082, 0.6069] },
+  { re: /spine1$/i,       quat: [0.0173, -0.1392, 0.0024, 0.9901] },
+  { re: /spine2$/i,       quat: [0.026, -0.1736, 0.0033, 0.9845] },
+  { re: /neck$/i,         quat: [-0.002, 0.1387, -0.0118, 0.9903] },
+  { re: /head$/i,         quat: [0.0428, 0.1712, -0.0409, 0.9835] },
+  { re: /rightarm$/i,     quat: [0.4384, -0.0769, 0.3458, 0.826] },
+  { re: /rightforearm/i,  quat: [0.5102, 0.0004, 0.5965, 0.6196] },
+  { re: /righthand/i,     quat: [-0.927, 0.2711, -0.2209, 0.1357] },
+  { re: /leftarm$/i,      quat: [0.3186, 0.0885, -0.516, 0.7902] },
+  { re: /leftforearm/i,   quat: [0.4223, -0.0013, -0.3511, 0.8357] },
+  { re: /lefthand/i,      quat: [-0.1257, -0.5841, 0.0651, 0.7992] },
 ];
 
 // Weapon transform in RIGHT-HAND-BONE space — solved alongside the pose above
@@ -100,8 +103,10 @@ export const POSES: Record<string, BonePose[]> = { rifle: POSE_RIFLE, pistol: PO
  * Overwrite the arm bones with the fixed weapon-hold pose. Call after
  * mixer.update() and before the scene renders, so it wins over the clip.
  *
- * Absolute (not composed on the animation): the arms hold still. Bones not in
- * the pose list (spine, legs) keep animating normally.
+ * Absolute (not composed on the animation): the upper body holds still. Bones
+ * not in the pose list — Hips, Spine, and the legs — keep animating normally,
+ * so the walk cycle still reads. (Spine1/Spine2/Neck/Head ARE in the list now:
+ * the blade is what makes the hold reachable, so it can't be left to the clip.)
  */
 export function applyWeaponPose(root: Object3D, weapon: 'rifle' | 'pistol'): void {
   const poses = POSES[weapon]!;

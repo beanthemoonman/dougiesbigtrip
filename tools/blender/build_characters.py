@@ -147,15 +147,20 @@ def _build_armature():
     neck   = add("mixamorig:Neck",           (0, 0, 1.49), (0, 0, 1.56), spine2)
     head   = add("mixamorig:Head",           (0, 0, 1.56), (0, 0, 1.74), neck)
 
+    # Elbow at 1.11 and wrist at 0.86 — these track the *mesh*, not a nice round
+    # number. The larm box spans z 0.85..1.13 and the hand box 0.76..0.88, but
+    # the bones used to put the elbow at 0.95 and the wrist at 0.78, so the
+    # forearm box pivoted about a point near its own middle and every bend read
+    # as broken. Move a box below, move its joint here to match.
     l_shld = add("mixamorig:LeftShoulder",   (-0.20, 0, 1.44), (-0.27, 0, 1.30), spine2)
-    l_arm  = add("mixamorig:LeftArm",        (-0.27, 0, 1.30), (-0.265, 0, 0.95), l_shld)
-    l_farm = add("mixamorig:LeftForeArm",    (-0.265, 0, 0.95), (-0.26, 0, 0.78), l_arm)
-    l_hand = add("mixamorig:LeftHand",       (-0.26, 0, 0.78), (-0.255, 0, 0.68), l_farm)
+    l_arm  = add("mixamorig:LeftArm",        (-0.27, 0, 1.30), (-0.265, 0, 1.11), l_shld)
+    l_farm = add("mixamorig:LeftForeArm",    (-0.265, 0, 1.11), (-0.26, 0, 0.86), l_arm)
+    l_hand = add("mixamorig:LeftHand",       (-0.26, 0, 0.86), (-0.255, 0, 0.76), l_farm)
 
     r_shld = add("mixamorig:RightShoulder",  (0.20, 0, 1.44), (0.27, 0, 1.30), spine2)
-    r_arm  = add("mixamorig:RightArm",       (0.27, 0, 1.30), (0.265, 0, 0.95), r_shld)
-    r_farm = add("mixamorig:RightForeArm",   (0.265, 0, 0.95), (0.26, 0, 0.78), r_arm)
-    r_hand = add("mixamorig:RightHand",      (0.26, 0, 0.78), (0.255, 0, 0.68), r_farm)
+    r_arm  = add("mixamorig:RightArm",       (0.27, 0, 1.30), (0.265, 0, 1.11), r_shld)
+    r_farm = add("mixamorig:RightForeArm",   (0.265, 0, 1.11), (0.26, 0, 0.86), r_arm)
+    r_hand = add("mixamorig:RightHand",      (0.26, 0, 0.86), (0.255, 0, 0.76), r_farm)
 
     l_uleg = add("mixamorig:LeftUpLeg",      (-0.13, 0, 0.95), (-0.13, 0, 0.52), hips)
     l_leg  = add("mixamorig:LeftLeg",        (-0.13, 0, 0.52), (-0.13, 0.05, 0.08), l_uleg)
@@ -230,7 +235,7 @@ def _build_mesh(arm_obj, team, pal):
                      (ARM_X * sx, -0.02, 1.30), JS, M["vest"]))
         # Elbow: sphere at forearm origin
         boxes.append(_joint_sphere(f"joint_elbow_{side}",
-                     (0.265 * sx, -0.02, 0.95), JS, M["suit"]))
+                     (0.265 * sx, -0.02, 1.11), JS, M["suit"]))
         # Hip: sphere at thigh origin
         boxes.append(_joint_sphere(f"joint_hip_{side}",
                      (LEG_X * sx, -0.02, 0.95), JS * 1.1, M["suit"]))

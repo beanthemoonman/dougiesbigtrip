@@ -19,7 +19,7 @@
  * All coordinates are three.js space (Y up, model faces -Z), metres.
  */
 import { readFileSync } from 'node:fs';
-import { Matrix4, Object3D, Quaternion, Vector3 } from 'three';
+import { Euler, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 // The weapon-local contact points (BUTT/GRIP/FORE — from tools/blender/build_weapons.py,
 // Blender xyz → three `(x, z, -y)`) live in src/ so the geometry test can reach
@@ -37,29 +37,46 @@ const GRIP_AXIS = new Vector3(0, -1, 0.35);
 /** Support hand's fingers wrap across the handguard, left side → right. */
 const FORE_AXIS = new Vector3(0.9, 0.4, 0);
 
-/** Where the butt pad lands: right shoulder pocket, in character-root space. */
-const SHOULDER_POCKET = new Vector3(0.10, 1.36, 0.03);
+/**
+ * The torso, bladed. Per-bone deltas in ROOT space (x = pitch, y = yaw,
+ * z = roll, radians), applied down the chain before the arms are solved.
+ *
+ * This is the load-bearing tunable. The rig's shoulders are wide (±0.27) and
+ * its arms short (0.52 shoulder-to-wrist), so with the chest square-on the
+ * handguard sits ~0.63 from the left shoulder joint — out of reach. Turning the
+ * chest right brings the support shoulder forward and across, which is what a
+ * shooter actually does and what CS players look like. The previous fix rolled
+ * the shoulder BONES instead, which tore the rigid-skinned shoulder pads off
+ * the torso; the spine carries its boxes with it.
+ *
+ * The neck and head counter-yaw so the actor still looks down the barrel.
+ */
+const deg = (d: number) => (d * Math.PI) / 180;
+const TORSO: [RegExp, Vector3][] = [
+  [/Spine1$/i, new Vector3(deg(2), deg(-16), 0)],
+  [/Spine2$/i, new Vector3(deg(3), deg(-20), 0)],
+  [/Neck$/i, new Vector3(0, deg(16), 0)],
+  [/Head$/i, new Vector3(deg(6), deg(20), 0)],
+];
+
+/** Butt pad offset from the POSED right shoulder joint — inboard and up, i.e.
+ *  the pocket. Relative to the joint so it follows the torso instead of
+ *  drifting off the chest when TORSO changes. */
+const POCKET_OFF = new Vector3(-0.05, 0.11, 0.0);
+
 /** Yaw of the weapon about +Y. ZERO: viewed from behind, the barrel points
  *  dead down −Z, which is the whole point of a shooting stance — the gun is
- *  aimed where the actor is aimed. Reach is bought back by the shoulder swing
- *  below, not by cheating the weapon sideways. */
+ *  aimed where the actor is aimed. The torso blades, the gun doesn't. */
 const GUN_YAW = 0;
 
 /** Wrist-to-palm: the IK targets the wrist, the landmarks are palm contacts. */
 const PALM = 0.045;
 
-/** How far each shoulder blade rolls toward its hand target, 0..1.
- *  The rig's shoulders are wide (±0.27) and its arms short (0.52
- *  shoulder-to-wrist), so with the gun square to the body the handguard is
- *  ~0.65 from the left shoulder joint — out of reach. A real shooter fixes
- *  this by protracting the support shoulder across the chest; so does this.
- *  The right shoulder barely moves (the stock is already at it). */
-const SWING_R = 0.12;
-const SWING_L = 0.40;
-
-/** Elbow direction hints (character-root space): out, down and back. */
-const POLE_R = new Vector3(0.25, -0.96, 0.1);
-const POLE_L = new Vector3(-0.2, -0.97, 0.05);
+/** Elbow direction hints (character-root space). The trigger elbow rides out
+ *  and back (the classic flared firing elbow); the support elbow tucks down and
+ *  slightly forward, under the handguard. Straight-down poles read as limp. */
+const POLE_R = new Vector3(0.6, -0.75, 0.3);
+const POLE_L = new Vector3(-0.25, -0.94, -0.15);
 
 // ── Rig plumbing ───────────────────────────────────────────────────────────
 
@@ -91,20 +108,12 @@ function basisQuat(fingers: Vector3, forward: Vector3): Quaternion {
   );
 }
 
-/**
- * Roll a shoulder bone `w` of the way from its bind direction toward `target`,
- * writing the result onto the bone. Moves the arm's root, which is the only
- * thing that makes a square-on rifle hold reachable on this rig.
- */
-function swingShoulder(sh: Object3D, arm: Object3D, target: Vector3, w: number): Quaternion {
-  const S = wPos(sh);
-  const full = new Quaternion().setFromUnitVectors(
-    wPos(arm).sub(S).normalize(), target.clone().sub(S).normalize(),
-  );
-  const d = new Quaternion().slerp(full, w);
-  const local = wQuat(sh.parent!).invert().multiply(d).multiply(wQuat(sh));
-  sh.quaternion.copy(local);
-  sh.updateMatrixWorld(true);
+/** Turn a bone by `e` (root-space euler) on top of where it already is. */
+function turn(b: Object3D, e: Vector3): Quaternion {
+  const d = new Quaternion().setFromEuler(new Euler(e.x, e.y, e.z, 'YXZ'));
+  const local = wQuat(b.parent!).invert().multiply(d).multiply(wQuat(b));
+  b.quaternion.copy(local);
+  b.updateMatrixWorld(true);
   return local;
 }
 
@@ -169,18 +178,29 @@ export async function solveHold(): Promise<Hold> {
   const char = await loadGlb('assets/characters/ct_player.glb');
   char.updateMatrixWorld(true);
 
-  // Weapon placement in character-root space.
+  const out: string[] = [];
+  const bones: Hold['bones'] = [];
+
+  // Blade the torso first — the arms are solved against the posed shoulders.
+  for (const [re, e] of TORSO) {
+    const b = bone(char, re);
+    const q = turn(b, e);
+    const name = b.name.replace(/^mixamorig:?/i, '').toLowerCase();
+    out.push(`  { re: /${name}$/i,${' '.repeat(Math.max(0, 9 - name.length))} quat: ${fmt(q)} },`);
+    bones.push({ re: `${name}$`, quat: [q.x, q.y, q.z, q.w] });
+  }
+
+  // Weapon placement in character-root space, hung off the posed shoulder.
   const G = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), GUN_YAW);
   const at = (local: Vector3) =>
     local.clone().multiplyScalar(GUN_SCALE).applyQuaternion(G);
-  const gunPos = SHOULDER_POCKET.clone().sub(at(BUTT));
+  const pocket = wPos(bone(char, /RightArm$/i)).add(POCKET_OFF);
+  const gunPos = pocket.clone().sub(at(BUTT));
   const gripW = gunPos.clone().add(at(GRIP));
   const foreW = gunPos.clone().add(at(FORE));
   const barrel = new Vector3(0, 0, -1).applyQuaternion(G);
 
-  const out: string[] = [];
   const notes: string[] = [];
-  const bones: Hold['bones'] = [];
   let attach = '';
   let pos: [number, number, number] = [0, 0, 0];
   let quat: [number, number, number, number] = [0, 0, 0, 1];
@@ -192,26 +212,22 @@ export async function solveHold(): Promise<Hold> {
     const palm = isRight ? gripW : foreW;
     const wrist = palm.clone().addScaledVector(fingers, -PALM);
 
-    const shoulder = bone(char, new RegExp(`${side}Shoulder`, 'i'));
     const arm = bone(char, new RegExp(`${side}Arm$`, 'i'));
     const forearm = bone(char, new RegExp(`${side}ForeArm`, 'i'));
     const hand = bone(char, new RegExp(`${side}Hand`, 'i'));
 
-    const shQuat = swingShoulder(shoulder, arm, wrist, isRight ? SWING_R : SWING_L);
     const ik = solveArm(arm, forearm, hand, wrist, isRight ? POLE_R : POLE_L);
     const handWorld = basisQuat(fingers, barrel);
     const handLocal = ik.lowerWorld.clone().invert().multiply(handWorld);
 
     const lower = side.toLowerCase();
     out.push(
-      `  { re: /${lower}shoulder/i, quat: ${fmt(shQuat)} },`,
       `  { re: /${lower}arm$/i,     quat: ${fmt(ik.upper)} },`,
       `  { re: /${lower}forearm/i,  quat: ${fmt(ik.lower)} },`,
       `  { re: /${lower}hand/i,     quat: ${fmt(handLocal)} },`,
     );
     const asArray = (q: Quaternion) => [q.x, q.y, q.z, q.w] as [number, number, number, number];
     bones.push(
-      { re: `${lower}shoulder`, quat: asArray(shQuat) },
       { re: `${lower}arm$`, quat: asArray(ik.upper) },
       { re: `${lower}forearm`, quat: asArray(ik.lower) },
       { re: `${lower}hand`, quat: asArray(handLocal) },

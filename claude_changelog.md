@@ -3837,3 +3837,70 @@ This is the assertion whose absence let the cant survive two rounds of tuning; i
 construction on the old 26° pose. `pnpm typecheck` and `pnpm test` (41 files, 263 tests) green.
 `ACC-014` steps 2 and 4 rewritten around the square hold (step 2 now calls for a *back* view) and
 marked for re-run.
+
+## Rifle hold re-solved as a bladed stance
+
+Rendered the CT to `.modelview/` and reviewed it instead of trusting the numbers. The
+"square to the body" hold from last turn passed all four geometry tests and still looked
+wrong: stock floating a hand's width in front of the chest, both shoulder pads torn off the
+torso, barrel running down the spine, elbows hanging limp.
+
+Root cause of the pads: the previous fix bought arm reach by rolling the *shoulder bones*
+(`SWING_L = 0.40`), and the pad boxes are rigid-skinned weight 1.0 to those bones, so the
+pads swung off with them.
+
+**Fix — blade the torso instead.** `tools/modelview/solvepose.ts`:
+
+- Deleted `swingShoulder` / `SWING_R` / `SWING_L`. Added `TORSO`: root-space euler deltas
+  applied down the chain before the arms solve — Spine1 −16° yaw, Spine2 −20°, with Neck
+  +16° and Head +20° counter-yaw so the actor still faces the target. The spine carries its
+  boxes, so nothing detaches. Left wrist reach 0.63 m → 0.369 m of 0.520 m available.
+- `SHOULDER_POCKET` (absolute root-space point) → `POCKET_OFF = (-0.05, 0.11, 0)`, an offset
+  from the **posed** right shoulder joint, so the stock follows the torso instead of drifting
+  off the chest whenever `TORSO` changes. Butt-to-joint 0.178 m → 0.121 m.
+- Poles off straight-down: `POLE_R (0.6, -0.75, 0.3)` flares the trigger elbow out and back,
+  `POLE_L (-0.25, -0.94, -0.15)` tucks the support elbow under the handguard.
+
+`src/ai/thirdperson.ts`: `POSE_RIFLE` is now 10 bones — Spine1/Spine2/Neck/Head plus the six
+arm bones; the two shoulder entries are gone. `WEAPON_POS/QUAT/SCALE` unchanged (the hold is
+defined in hand space and the hand's world orientation didn't move). Corrected the two module
+comments that described the deleted shoulder protraction and claimed the spine still animates.
+
+**Tests** (`src/ai/thirdperson.test.ts`):
+- Butt-to-shoulder threshold 0.2 m → 0.13 m. At 0.18 the stock rendered as floating and the
+  test passed anyway — the threshold was the bug.
+- New: `carries the gun on the right shoulder, not down the centreline` (`GRIP.x > 0.08`).
+- The stability test was comparing with `Quaternion.angleTo`, which is `2·acos(|dot|)` and so
+  reports ~0.008 rad of phantom drift for 4-dp constants that aren't exactly unit. Swapped to
+  exact component equality, which is the invariant actually being guarded.
+
+264 tests green, `pnpm typecheck` green.
+
+**Known, not fixed:** no cheek weld — the gun rides at shoulder height, not against the face.
+This rig's head is a box on a stub neck and a higher carry clips it.
+
+## Fixed the elbow: the rig's arm bones didn't match its arm mesh
+
+Follow-up — the forearms still bent wrong, and it wasn't the pose. In
+`tools/blender/build_characters.py` the arm *boxes* and the arm *bones* disagreed by ~15 cm:
+
+| | mesh box spans z | bone spans z |
+|---|---|---|
+| upper arm | 1.09 – 1.39 | 1.30 – **0.95** |
+| forearm | 0.85 – 1.13 | 0.95 – **0.78** |
+| hand | 0.76 – 0.88 | 0.78 – 0.68 |
+
+So the forearm box pivoted about a point near its own middle, and the upper arm read 0.35 m
+against a 0.17 m forearm — a 2:1 ratio where a human is about 1:1. Any IK target inside
+~0.35 m then forced a near-doubled fold with the elbow swung far off the shoulder→wrist line.
+That's structural: no pole vector or landmark tweak reaches it, and it was wrong in the walk
+and idle clips too, not just the weapon hold.
+
+Moved the bones onto the mesh (not the mesh onto the bones — the silhouette was already
+tuned in 83e0a28): elbow 0.95 → **1.11**, wrist 0.78 → **0.86**, hand tail 0.68 → 0.76, and
+the elbow joint sphere with it. Shoulder-to-wrist 0.52 → 0.44 m, split 0.19 / 0.25.
+
+Rebuilt `assets/characters/{ct,t}_player.glb` (`blender -b -P tools/blender/build_characters.py`,
+1566 tris, 405 KB each — unchanged), re-solved, re-baked `POSE_RIFLE`. Right wrist now reaches
+0.277 m of 0.440 m available and the left 0.369 m, so both elbows sit at a natural angle
+instead of folded double. 264 tests green, typecheck green.
