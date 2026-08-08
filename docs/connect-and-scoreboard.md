@@ -9,7 +9,7 @@ is netcode mechanics — it's the join surface and the K/D readout. The connecti
 1. **Connect overlay** — a text input prefilled with the default server URL, a Connect button,
    and a status line. Shown on load, hidden once connected.
 2. **Scoreboard** — held-Tab shows a two-column (T | CT) table of players with kills/deaths,
-   3 per side by default.
+   5 per side by default.
 
 Depends on 6.6: per-player K/D accumulates from the `kill(slot, by)` snapshot events. Until
 those decode, the board renders zeros — the UI is still "done" and demoable against a default
@@ -43,8 +43,9 @@ interface PlayerScore {
 }
 ```
 
-- **Default roster:** 6 entries, `team = slot < 3 ? 'T' : 'CT'`, names `"Bot 1".."Bot 6"`.
-  This is what makes it 3v3 on screen without any server change.
+- **Default roster:** 10 entries, `team = slot < 5 ? 'T' : 'CT'`, names `"Bot 1".."Bot 10"`.
+  This is what makes it 5v5 on screen without any server change (`MAX_SLOTS = 10`,
+  `BOT_COUNT = 10` in `server/src/main.rs`).
 - **Render:** pure `render(el: HTMLElement, players: PlayerScore[])` — two columns, 3 rows each,
   sorted by kills descending. Idempotent; called whenever the roster changes.
 - **Hold-to-show:** `keydown Tab` → show + `preventDefault()`; `keyup Tab` → hide. CS behaviour.
@@ -78,7 +79,7 @@ interface PlayerScore {
 - [ ] **T2:** overlays are DOM only — no draw calls, no scene/asset budget impact. Assert no new
       `renderer.info.render.calls`.
 - [ ] **T3:** `tests/acceptance/ACC-011-connect-scoreboard.md`, written before tuning: page loads
-      to the connect overlay → default URL connects → overlay hides → hold Tab shows 3v3 with
+      to the connect overlay → default URL connects → overlay hides → hold Tab shows 5v5 with
       names and K/D → release hides it.
 - [ ] `pnpm typecheck` green, no new `any`.
 

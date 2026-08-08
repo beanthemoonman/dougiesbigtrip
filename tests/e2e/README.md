@@ -16,6 +16,11 @@ cargo build --manifest-path server/Cargo.toml   # build the server binary first
 pnpm test:e2e                                    # runs tests/e2e/**/*.e2e.ts
 ```
 
+> On Windows the binary is `target/debug/server.exe`. `harness.ts` appends the
+> `.exe` — without it `existsSync(SERVER_BIN)` misses, `SERVER_AVAILABLE` is
+> false, and **every suite silently `skipIf`s itself**. A green run with zero
+> tests executed is the symptom; check the reported test count.
+
 **B) Against a dockerized dev server** — no host Rust toolchain, "more complete
 tests against the dev server". The `docker-compose.e2e.yml` service runs the
 server alone (no db/auth), published on `:9876`, with the same fast-round env as
@@ -53,17 +58,19 @@ The round clock is sped up via env (`SERVER_FREEZE_MS`/`ROUND_MS`/`END_MS` in
 | `harness.ts` | Server spawn (or external via `E2E_SERVER_URL`), a promise-queue WebSocket `Client`, two-phase `joinTeam`. |
 | `server-loop.e2e.ts` | Slot-0 assignment, movement→snapshot, per-round player reset (Phase 9.5 hygiene). |
 | `combat.e2e.ts` | Server-side hitreg: one client's shot kills another player (`EV_KILL{by: shooter}`) — the cross-client combat that was silently client-local. |
-| `roster.e2e.ts` | 3v3 default, instant mid-round join, leave→bot-next-round, team-full→spectate, Welcome capacity (6 players / 4 spectators), server-full refusal. |
+| `roster.e2e.ts` | 5v5 default, instant mid-round join, leave→bot-next-round, team-full→spectate, Welcome capacity (10 players / 4 spectators), server-full refusal. |
+| `two-clients.e2e.ts` | Two clients see each other, and a client joining mid-round adopts the round in progress. Feeds the raw stream through the REAL client modules (`decodeSnapshot` + `createInterpolationBuffer`) — the same code `session.ts` uses to drive remote player meshes. |
 
 ## Roster rules under test (Phase 9)
 
-- Each team has **3 bots by default** (3v3, all 6 player slots bot-filled).
+- Every slot is **bot-filled by default** — 5v5 (`MAX_SLOTS = 10`, `BOT_COUNT = 10`
+  in `server/src/main.rs`).
 - A joining player **replaces a bot instantly**, mid-round or not.
 - A player who leaves is replaced by a bot **only next round** — never mid-round
   (the slot sits dead/empty until the reset backfills it).
-- Teams are hard-capped at 3; the 4th on a full team is forced to spectate.
-- Capacity = **6 players + 4 spectators** (`specCap = ceil(2/3 · 6)`); beyond
-  that the server refuses the connection with a `Bye{reason:"full"}`.
+- Teams are hard-capped at half the slots (5); the 6th on a full team spectates.
+- Capacity = **10 players + 4 spectators** (`MAX_SPECTATORS`); beyond that the
+  server refuses the connection with a `Bye{reason:"full"}`.
 
 > Note: the server also exposes a `GET /status` HTTP endpoint for the pre-dial
 > capacity gate, which now returns a well-formed JSON response

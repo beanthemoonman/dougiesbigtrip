@@ -277,9 +277,15 @@ A T1 flake here is a **P0 determinism bug**, not a retry.
   `src/net/prediction.ts` (predict + reconcile, unit-tested); `sim_set_player` WASM binding;
   `main.ts` `?connect=ws://…` branch. T1: `tests/harness/server.test.ts` drives commands →
   snapshot reflects real server-side movement. T3: `tests/acceptance/ACC-012-server-movement.md`
-  (human gate — automated pointer-lock is invalid, see ACC-007 note). Remote players / server
-  round+bots deliberately deferred to 6.4–6.6, so a networked client still runs its local round
-  and bots for now.
+  (human gate — automated pointer-lock is invalid, see ACC-007 note).
+
+  **Superseded:** this increment shipped with the client still running its local round and bots,
+  deferring the switch-over to 6.4–6.6. That is no longer true and was itself the bug behind
+  "multiplayer doesn't work". A networked client now runs **no local sim at all**: `session.ts`
+  gates on `netMode` (`validatedBootUrl !== null`, known at boot) rather than on `predictor`
+  (which only exists after the *second* Welcome, i.e. after the team pick). In net mode no local
+  bots are constructed, `tickRound` never runs, and the round phase/timer/score come only from
+  `Snapshot.round`. Regression cover: `tests/e2e/two-clients.e2e.ts`.
 - **6.4 — Remote entities + slots.** Second connection; interpolate remote player; slot manager
   (join / evict-bot / spectator / disconnect).
   *Check: two browsers see each other move smoothly; 11th spectates.*

@@ -4080,3 +4080,65 @@ dropped → intermittent "message timeout". Listener now registers before the op
 Note: server bots still rarely kill each other within a fast round (they path from opposite spawns
 and often don't close + acquire LOS in 10 s) — that's bot engagement tuning (6.5), separate from the
 hitreg mechanism this fixes; the deterministic combat e2e proves PvP hit registration works.
+
+## 2026-08-08 — Multiplayer: two-client visibility test, and the phantom local match removed
+
+Two reported symptoms: two clients couldn't see each other, and connecting to the server started a
+fresh round on the client instead of joining the round in progress.
+
+**Test first (`tests/e2e/two-clients.e2e.ts`, new).** Two real WS clients against the real Rust
+server, feeding every raw snapshot through the REAL client modules — `decodeSnapshot`
+(`src/net/protocol.ts`) and `createInterpolationBuffer()` (`src/net/interpolation.ts`), the same
+code `session.ts` calls to drive remote meshes. Case 1: each client's interpolation resolves the
+other as a live, moving, correctly-teamed entity. Case 2: a client joining mid-round gets a first
+snapshot already in phase Live with the clock run down and the same score.
+
+Result: **both passed on the unmodified code.** Server, wire, decode and interpolation were never
+broken — which localised both symptoms to `src/game/session.ts`. (Case 2 initially compared A's and
+B's `timeLeftMs` directly; that failed by ~1.4 s because a ws client's queue lags the 64 Hz stream
+by seconds. Rewritten to the queue-independent mid-round claim.)
+
+**First, a much bigger find: the e2e suite had been silently skipping on Windows.**
+`harness.ts` looked for `target/debug/server`, but the binary is `server.exe`, so
+`existsSync` missed, `SERVER_AVAILABLE` was false and every suite `skipIf`'d itself — a green run
+with zero tests executed. With the `.exe` suffix added, `roster.e2e.ts` turned out to be **red**:
+it still asserted the Phase 9 3v3 / 6-player roster while `server/src/main.rs` now ships
+`MAX_SLOTS = 10` / `BOT_COUNT = 10`. The server is right (`docs/netcode.md` §4 says 10 slots), so
+the suite and docs were updated to 5v5 / 10 players + 4 spectators.
+
+**The fix — `src/game/session.ts` no longer runs a local match in net mode.** Every "am I
+networked?" gate tested `predictor`, which only exists after the *second* Welcome (i.e. after the
+team pick). A `?connect=` boot therefore built the entire single-player match first and ran it
+throughout the handshake. Replaced with `const netMode = validatedBootUrl !== null`, known at boot:
+
+- Local bots are no longer constructed at all in net mode (previously created unconditionally; the
+  loop merely stopped *updating* them, leaving 10 frozen bodies visible at both spawn rows whose
+  Rapier capsules still blocked movement and swallowed local tracer raycasts).
+- `tickRound` / `respawn` / the `live` gate / local bot AI / local bot posing / local hitreg all
+  gate on `netMode`.
+- `bannerText()` returns empty while `serverPhase === -1` instead of falling through to a local
+  round that never ticks.
+- **The camera was never placed.** The MP team-menu branch hand-rolled a partial entry that skipped
+  `enterGame()`, so `player.position` was never seeded and the kinematic body stayed disabled; and
+  the sim→`player` read-back lived inside `if (live && playerAlive)`, so during server freezetime
+  nothing moved the camera off world origin. Now the MP branch calls the existing `enterGame()`,
+  and a new `syncPlayerFromSim()` (hoisted out of the live branch) also runs in the not-live
+  net-mode arm, where `reconcile()` has already written the authoritative position into the sim.
+- `remoteRootFor()` cached the remote model with its team baked in, so a slot that switched team
+  kept the wrong side's model forever; it now rebuilds on team change.
+
+**Harness robustness** (all three were load artifacts, not logic): `joinTeam` waits 15 s rather than
+the 5 s default (Join is serviced by the 64 Hz loop, which with 10 bots and a dozen clients can take
+seconds); `Client.close()` now returns a promise that resolves on the socket's `close` event so
+capacity tests stop racing their own leftovers; the round-cycle backfill case got an explicit 45 s
+timeout.
+
+Verification: `pnpm test:e2e` **13/13 green** (was 5 failing / 8 passing once un-skipped).
+`pnpm typecheck` clean, `eslint` clean on the changed files. Unit suite 272/273 — the one failure,
+`tools/modelview/view.test.ts`, is the same pre-existing headless-GL render timeout noted in the
+previous entry, untouched by this work.
+
+Not done: the browser-level check. Both symptoms are now argued to be fixed by reasoning about
+`session.ts`, but nothing executes `session.ts` in CI — a two-page puppeteer test (deferred by
+decision this turn) is what would actually prove the meshes render. The manual two-window check in
+`tests/acceptance/ACC-010-netcode.md` remains the gate.

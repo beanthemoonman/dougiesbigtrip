@@ -21,7 +21,12 @@ export function tagOf(bytes: Uint8Array): number {
   return bytes[0] ?? -1;
 }
 
-export const SERVER_BIN = resolve(import.meta.dirname, '../../target/debug/server');
+// `.exe` on Windows, or existsSync() misses the binary and every suite silently
+// skipIf()s itself — which is exactly how the e2e suite went unnoticed-red.
+export const SERVER_BIN = resolve(
+  import.meta.dirname,
+  `../../target/debug/server${process.platform === 'win32' ? '.exe' : ''}`,
+);
 /** True when the Rust server has been built; e2e tests `skipIf` this is false. */
 export const SERVER_BUILT = existsSync(SERVER_BIN);
 
@@ -99,7 +104,10 @@ export interface Client {
   ws: WebSocket;
   /** Resolves with the next raw message, or rejects after `ms`. */
   next(ms?: number): Promise<Uint8Array>;
-  close(): void;
+  /** Close the socket. Resolves once it has actually closed — await it when the
+   *  next assertion depends on the server having freed the slot, or capacity
+   *  tests race their own leftovers. */
+  close(): Promise<void>;
 }
 
 /** Open a websocket to `url` and wrap it with a promise-based message queue. */
@@ -134,8 +142,11 @@ export async function connect(url: string): Promise<Client> {
         });
       });
     },
-    close(): void {
+    close(): Promise<void> {
+      if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+      const closed = new Promise<void>((res) => ws.once('close', () => res()));
       ws.close();
+      return closed;
     },
   };
 }
@@ -157,10 +168,13 @@ export interface JoinResult {
  * message NOT being a Welcome.
  */
 export async function joinTeam(client: Client, team: number): Promise<JoinResult> {
-  const connectWelcome = decodeWelcome(await client.next());
+  // 15 s, not the 5 s default: Join is serviced by the 64 Hz game loop, which with
+  // a full 10-bot roster and a dozen concurrent test clients can take seconds to
+  // get to it. A short timeout here just turns load into a spurious failure.
+  const connectWelcome = decodeWelcome(await client.next(15000));
   if (!connectWelcome) throw new Error('no initial Welcome');
   client.ws.send(Buffer.from(encodeJoin({ team })));
-  const next = await client.next();
+  const next = await client.next(15000);
   if (tagOf(next) === TAG_WELCOME) {
     const welcome = decodeWelcome(next);
     if (welcome && welcome.yourSlot !== SPECTATOR_SLOT) {
