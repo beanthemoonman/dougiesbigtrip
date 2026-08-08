@@ -233,6 +233,7 @@ export function decodeCommand(data: Uint8Array): CommandFrame | null {
 export const F_ALIVE = 1 << 0;
 export const F_DUCKED = 1 << 1;
 export const F_TEAM_CT = 1 << 2;
+export const F_ONGROUND = 1 << 3;
 
 export interface EntityState {
   slot: number;
@@ -245,10 +246,8 @@ export interface EntityState {
   armor: number;
   weapon: number;
   ammo: number;
-  /** Phase 21: server-authoritative match tally + display name (see protocol.rs). */
   kills: number;
   deaths: number;
-  name: string;
 }
 
 export interface RoundState {
@@ -266,12 +265,27 @@ export interface GameEvent {
 
 export const EV_KILL = 1;
 export const EV_FIRE = 2;
+export const EV_IMPACT = 3;
+
+export interface ImpactEvent {
+  slot: number;
+  pos: [number, number, number];
+  normal: [number, number, number];
+  surface: number; // 0=concrete, 1=flesh, 2=wood, 3=metal
+}
+
+export interface RosterEntry {
+  slot: number;
+  name: string;
+}
 
 export interface Snapshot {
   serverTick: number;
   ackSeq: number;
   entities: EntityState[];
   events: GameEvent[];
+  impactEvents: ImpactEvent[];
+  roster: RosterEntry[];
   round: RoundState;
 }
 
@@ -284,7 +298,7 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
   const count = v.getUint8(o); o += 1;
   const entities: EntityState[] = [];
   for (let i = 0; i < count; i++) {
-    if (data.length < o + 43) return null;
+    if (data.length < o + 39) return null;
     const slot = v.getUint8(o); o += 1;
     const flags = v.getUint8(o); o += 1;
     const f = (): number => { const n = v.getFloat32(o, true); o += 4; return n; };
@@ -298,10 +312,7 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
     const ammo = v.getUint8(o); o += 1;
     const kills = v.getUint16(o, true); o += 2;
     const deaths = v.getUint16(o, true); o += 2;
-    const nameLen = v.getUint8(o); o += 1;
-    if (data.length < o + nameLen) return null;
-    const name = new TextDecoder().decode(data.slice(o, o + nameLen)); o += nameLen;
-    entities.push({ slot, flags, pos, vel, yaw, pitch, health, armor, weapon, ammo, kills, deaths, name });
+    entities.push({ slot, flags, pos, vel, yaw, pitch, health, armor, weapon, ammo, kills, deaths });
   }
   const evCount = v.getUint8(o); o += 1;
   const events: GameEvent[] = [];
@@ -317,5 +328,35 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
     scoreT: v.getUint16(o + 5, true),
     scoreCt: v.getUint16(o + 7, true),
   };
-  return { serverTick, ackSeq, entities, events, round };
+  o += 9;
+  // Impact events (Phase C): appended after round state. Tolerate
+  // truncated snapshots from older servers that didn't send these.
+  const impCount = o < data.length ? v.getUint8(o) : 0;
+  o += 1;
+  const impactEvents: ImpactEvent[] = [];
+  for (let i = 0; i < impCount; i++) {
+    // 26 bytes: slot(1) + pos(12) + normal(12) + surface(1). The guard read 25,
+    // so a frame truncated to exactly 25 remaining bytes entered the body and
+    // threw a RangeError out of decodeSnapshot instead of returning null.
+    if (data.length < o + 26) break;
+    const slot = v.getUint8(o); o += 1;
+    const rf = (): number => { const n = v.getFloat32(o, true); o += 4; return n; };
+    const pos: [number, number, number] = [rf(), rf(), rf()];
+    const normal: [number, number, number] = [rf(), rf(), rf()];
+    const surface = v.getUint8(o); o += 1;
+    impactEvents.push({ slot, pos, normal, surface });
+  }
+  // Roster (Phase D): per-slot display names.
+  const rosterCount = o < data.length ? v.getUint8(o) : 0;
+  o += 1;
+  const roster: RosterEntry[] = [];
+  for (let i = 0; i < rosterCount; i++) {
+    if (data.length < o + 2) break;
+    const slot = v.getUint8(o); o += 1;
+    const nameLen = v.getUint8(o); o += 1;
+    if (data.length < o + nameLen) break;
+    const name = new TextDecoder().decode(data.slice(o, o + nameLen)); o += nameLen;
+    roster.push({ slot, name });
+  }
+  return { serverTick, ackSeq, entities, events, impactEvents, roster, round };
 }

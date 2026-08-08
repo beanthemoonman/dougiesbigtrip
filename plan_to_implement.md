@@ -607,6 +607,17 @@ Fixed in a follow-up that added `enemy_positions` filtering in `main.rs`, spread
 (`spawn_ring_feet`), and bot shooting with deterministic angular spread. Three new AI tests
 added (wander, engage, teammate ignore). See `claude_changelog.md` 2026-08-08.
 
+**Superseded (2026-08-08):** the waypoint-graph pathing decision is reversed. Bots now route
+over the baked walkable-triangle soup (`sim/src/nav.rs`: A* + portal-midpoint smoothing);
+`de_douglas.navnodes.json` survives only to *choose* the destination via the shared
+goal-selection spec. The AI itself moved to `sim/src/ai/` and reaches the browser through
+`sim.wasm`, so there is one implementation rather than two — `src/ai/{brain,perception,aim,
+nav,bot}.ts` are deleted and `recast-navigation` is a dev-only dependency used by the bake.
+`docs/plan-phase11-bot-ai.md` records the reversed decision. Note the interim state was worse
+than either port: `nav.rs` shipped unwired (and unusable — adjacency was built by vertex index
+against an unindexed soup, so every query returned an empty route), which meant single-player
+had been downgraded to the server's 13-node hops rather than the server being upgraded.
+
 ---
 
 ## Phase 12 — Third-person fidelity + ragdoll (redux of Phase 7) (1 week)

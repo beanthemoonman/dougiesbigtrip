@@ -39,7 +39,7 @@ You (Claude) will have access to Intellij and Blender MCP servers to work on the
 | Renderer | three.js (r170+) | WebGL2 |
 | Physics | `@dimforge/rapier3d-compat` | WASM; used for raycasts + collision queries only |
 | Character movement | Hand-rolled (`src/player/`) | Rapier used only for shape-casts / collide-and-slide. **Phase 6: moves into a shared Rust `sim/` crate (WASM-share) — server-authoritative, client runs the same WASM. See `docs/netcode.md`.** |
-| Nav | `recast-navigation-js` | Baked offline to a binary blob |
+| Nav | Baked offline by `recast-navigation-js`, consumed by Rust | `pnpm nav:bake` (a **dev** dependency) emits both the Detour blob and a portable triangle soup. At runtime bots path over the soup in `sim/src/nav.rs` — A* + portal-midpoint smoothing — so the browser and the server route identically. recast is not shipped to the client. |
 | Build | Vite + TypeScript | |
 | Audio | Web Audio, incl. spatial (`PannerNode`) | All sounds are synthesised in `src/core/audio.ts` — no sound files, so no licence. World sounds (other actors' footsteps/gunfire, bullet impacts) take a position and route through an HRTF `PannerNode` with a linear distance model; sounds at the ear (your own gun, reload, hurt) stay unpanned. `setListener()` follows the camera each frame. **Not Howler.js** despite the original plan: Howler plays *sources* (files), and there are none here — its spatial support is a wrapper over the same `PannerNode` we use directly. Revisit only if real audio files land. |
 | UI/HUD | Plain DOM overlay | Don't pull in React for a crosshair |
@@ -54,7 +54,9 @@ src/
   physics/       rapier world wrapper, collide-and-slide, shapecast helpers
   player/        movement (Source port), camera, viewmodel, stamina/duck
   weapons/       defs, hitscan, spray patterns, recoil, ammo
-  ai/            bot FSM, nav queries, aim model
+  ai/            anim clip driver, third-person pose, ragdoll (render only —
+                 the bot FSM/perception/aim/nav live in `sim/src/ai/` and reach
+                 the client through sim.wasm)
   game/          round state, spawns, scoring, damage/hitboxes; session.ts is the
                  whole game world + loop (main.ts is just the menu shell that
                  dynamic-imports it on a ?bots=/?connect= boot)

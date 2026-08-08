@@ -8,12 +8,14 @@ capability is added (server-side pathing).
 
 ## The dual-port tax (read first)
 
-Bot AI, like movement, lives in **two** places that behave differently *today*:
+**Resolved.** Bot AI now lives in **one** place, `sim/src/ai/`, compiled native for the server and
+wasm32 for the browser — the WASM-share arrangement `docs/netcode.md` always specified. The table
+below is kept as the record of what the split used to be.
 
 | Port | Files | Has nav? | Runs in |
 |---|---|:--:|---|
-| **TS** (single-player) | `src/ai/brain.ts` + `perception.ts` + `nav.ts` + `aim.ts`, ticked at `main.ts:1107` | ✅ recast `findPath` | SP client |
-| **Rust** (authoritative) | `server/src/ai.rs`, driven from `server/src/main.rs` | ❌ **straight-line only** (`ai.rs:232`) | MP server |
+| ~~**TS** (single-player)~~ | **Deleted in Phase E.4.** The client now calls `sim_tick_bot` in WASM. | — | — |
+| **Rust** (the only port) | `sim/src/ai/`, linked natively by the server and shipped to the browser as `sim.wasm` | ✅ navmesh A* (`sim/src/nav.rs`) | both |
 
 The Rust server bots **have no pathfinding** — they walk straight at the goal and rely on
 collide-and-slide to scrape around walls. That is fine-ish on open ground and useless in the "D"
@@ -38,7 +40,7 @@ nav helper in 11.0 goes in `server`, not the shared WASM sim).
 
 | Decision | Choice | Why |
 |---|---|---|
-| **Server pathing** | **Static waypoint graph + greedy hop**, not a Rust recast port. Hand-place ~8–12 nodes across the map with adjacency (neighbours chosen to have clear LOS so straight-line + collide-slide between them never snags); bots path node-to-node. Seed it from the existing `PATROL_*` points. | A Rust recast runtime is weeks and needs the blob re-exported to a Rust-readable format. The map is one small fixed loop — a hand-authored graph is the classic small-map bot nav, is deterministic, and reuses data we already have. `ponytail: waypoint graph, upgrade to a real navmesh port only if a second map lands.` |
+| **Server pathing** | ~~Static waypoint graph + greedy hop~~ → **SUPERSEDED.** Bots now path over the baked walkable-triangle soup in `sim/src/nav.rs` (A* + portal-midpoint smoothing). The 13-node graph survives, but only to *choose the destination* via the shared goal-selection spec; the route to it comes from the mesh. | The waypoint-hop decision was made to avoid a Rust recast runtime, and it was right about that — `nav.rs` reads the portable soup the bake already emits, so there is still no recast in Rust and none in the browser either. It was wrong about the cost of the divergence: hops meant 12 m straight lines and 90° rail-track turns, and when the TS AI was retired in Phase E the two ports converged on the *worse* pathing rather than the better. One implementation, mesh-quality routes, both ends. |
 | **Where the graph lives** | New `assets/maps/de_douglas.navnodes.json` (nodes + edges), loaded by **both** ports (Rust `serde` on the server, `import` in TS). Single source of truth. | No third divergent copy. TS keeps recast for *movement* quality but selects the *same* search node so behaviour matches. |
 | **Search goal selection (shared spec)** | Pick the graph node maximising `-w1·Σ_teammates 1/(1+distance) + w2·(time since this node was last visited by anyone) + w3·tactical_weight - w4·(teammates already goaling it) + w5·hash01(bot_tick_offset + tick, node)`. Deterministic tie-break by node index. Still no RNG stream — the jitter is a pure hash, so T1 replays stay exact. | "Spread out + sweep unvisited" falls out of the first two terms. The repulsion is a *field* (every teammate pushes), not "distance to the nearest one" — the latter always crowned the single globally-farthest node so every bot ran the same route. The hash jitter is what makes routes differ run to run without breaking determinism. |
 | **TS pathing under the shared goal** | SP keeps recast `findPath` to the chosen node (better-looking); server uses the graph hop. Same node chosen → same behaviour, different smoothness. | Don't throw away the working recast path in SP; only the *goal* must match, not the interpolation. |

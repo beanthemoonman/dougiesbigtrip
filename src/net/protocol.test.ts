@@ -191,13 +191,15 @@ describe('protocol (TS)', () => {
   // Golden bytes shared with sim/src/protocol.rs snapshot_golden_bytes.
   it('decodes a Snapshot produced by the Rust encoder', () => {
     // Tag(1) + Version(1) + tick(4) + ack(4) + entityCount(1)
-    //   + entity(36) + eventCount(1) + round(9: phase+time_left_ms.u32+scoreT+scoreCt) = 59
+    //   + entity(variable) + eventCount(1) + round(9: phase+time_left_ms.u32+scoreT+scoreCt) + impactCount(1)
     const bytes = new Uint8Array([
       3, 1, 100, 0, 0, 0, 7, 0, 0, 0, 1, 0, 5, 0, 0, 192, 63, 0, 0, 0, 0, 0, 0, 200, 193, 0, 0,
       128, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 63, 0, 0, 128, 190, 100, 0, 1, 30,
-      2, 0, 3, 0, 3, 67, 84, 49, // kills=2, deaths=3, nameLen=3, "CT1"
+      2, 0, 3, 0, // kills=2, deaths=3
       0, 1, 96,
       234, 0, 0, 2, 0, 3, 0,
+      0, // impactEvents count
+      1, 0, 3, 67, 84, 49, // rosterCount=1, slot=0, nameLen=3, "CT1"
     ]);
     const expected: Snapshot = {
       serverTick: 100,
@@ -216,10 +218,11 @@ describe('protocol (TS)', () => {
           ammo: 30,
           kills: 2,
           deaths: 3,
-          name: 'CT1',
         },
       ],
       events: [],
+      impactEvents: [],
+      roster: [{ slot: 0, name: 'CT1' }],
       round: { phase: 1, timeLeftMs: 60000, scoreT: 2, scoreCt: 3 },
     };
     expect(decodeSnapshot(bytes)).toEqual(expected);
@@ -236,5 +239,29 @@ describe('protocol (TS)', () => {
     ok[1] = PROTOCOL_VERSION;
     expect(decodeSnapshot(ok)).not.toBeNull();
     expect(F_DUCKED).toBe(2);
+  });
+
+  // Golden bytes emitted by the Rust encoder (sim/src/protocol.rs
+  // impact_events_round_trip). ImpactEvent had no cross-end coverage at all,
+  // so a field-order or width skew would have shown up as decals in the wrong
+  // place rather than a red test.
+  it('decodes ImpactEvents produced by the Rust encoder', () => {
+    const bytes = new Uint8Array([
+      3, 1, 42, 0, 0, 0, 1, 0, 0, 0, // tag, ver, tick=42, ack=1
+      0,                              // entityCount
+      0,                              // eventCount
+      1, 232, 3, 0, 0, 0, 0, 0, 0,    // round: phase=1, 1000 ms, 0, 0
+      1,                              // impactCount
+      3,                              // slot
+      0, 0, 192, 63, 0, 0, 16, 192, 0, 0, 224, 64, // pos 1.5, -2.25, 7.0
+      0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0,       // normal 0, 1, 0
+      2,                              // surface = wood
+      0,                              // rosterCount
+    ]);
+    const snap = decodeSnapshot(bytes);
+    expect(snap).not.toBeNull();
+    expect(snap!.impactEvents).toEqual([
+      { slot: 3, pos: [1.5, -2.25, 7], normal: [0, 1, 0], surface: 2 },
+    ]);
   });
 });

@@ -4281,3 +4281,291 @@ or reload, ±0.06 rad spread ⇒ ~0.5 s TTK) has had no ACC pass and is likely t
 
 Left alone deliberately: the older tests in `src/ai/anim.test.ts` above the remote block use the
 same reimplement-locally pattern and are equally hollow, but they predate this work.
+
+## Phase B — Remote animation reads wire instead of re-deriving it
+
+- **Speed from vel:** session.ts now uses `hypot(r.vel[0], r.vel[2])` from the wire
+  instead of computing speed from positional deltas. Noise-free, server-authoritative.
+- **F_ONGROUND flag:** Added bit 3 to EntityState.flags in both protocol.rs and
+  protocol.ts. Server `build_snapshot` reads `p.on_ground` and sets the flag.
+  Client passes `r.onGround` to `driveBotAnim` so remotes show correct ground state.
+- **Corpse teleport removed:** Server no longer calls `player.reset()` on death;
+  position stays where they died. Client can ragdoll at the death spot now.
+- **Ragdoll parity:** Remote deaths use `spawnRagdollBody` (same path as SP bots)
+  instead of the 2 s death clip. `remoteDeaths` and `DEATH_CLIP_SECONDS` deleted.
+- **anim.ts dt comment fixed:** Doc now says "render frame rate" instead of
+  "64 Hz fixed sim rate" — the code was already correct.
+
+## Phase C — Bullets land both directions
+
+- **EV_IMPACT protocol:** New `ImpactEvent` struct (slot, pos, normal, surface) and
+  `EV_IMPACT` tag (3). Encoded after round state in Snapshot. Surface IDs: 0=concrete,
+  1=flesh, 2=wood, 3=metal.
+- **Server emits EV_IMPACT:** After every shot raycast, the server emits an
+  ImpactEvent with the hit position, normal, and surface type (flesh if a player was
+  within 2.25 m, concrete otherwise).
+- **Local fire cosmetic unfenced:** VFX (vfx.impact, playImpact, decals) now run in
+  both SP and MP modes. Damage and prop destruction stay SP-only (server owns hitreg).
+- **EV_FIRE queue:** Replaced `pendingFireSlots: Set<number>` with a tick-based queue
+  (`pendingFireQueue`, `pendingImpactQueue`). Events drain when `interpBuf.renderTick`
+  reaches the event's server tick — fixing collapse, drop, and desync.
+- **Remote gunshot audio:** `playGunshot` called positionally on EV_FIRE drain.
+- **Remote tracer termination:** Tracers now end at the EV_IMPACT hit point instead
+  of a fixed 100 m beam.
+
+## Phase D — Drop names from the entity record
+
+- **EntityState.name removed.** Names live in a separate `RosterEntry { slot, name }`
+  list in Snapshot. Per-tick bandwidth cut by ~4–16 B per entity.
+- **slotNameMap** on the client: updated from the roster each snapshot. Scoreboard
+  reads from it instead of `ent.name`.
+- Golden bytes updated on both ends (Rust + TS).
+
+## Phase E.1 — Portable navmesh pathfinding in sim/
+
+- **sim/src/nav.rs:** Reads `de_douglas.navmesh.tris.bin` (NVMT v1 format).
+  Builds shared-edge adjacency via edge-map. A* over triangle centroids. Simple
+  funnel/string-pull smoothing passes. `find_path(from, to) -> Vec<[f32; 3]>`.
+- 4 tests: adjacency, pathfinding on simple mesh, shared-edge detection, and
+  parsing the real 39 KB tris.bin file.
+- E.2–E.5 (moving server AI into sim/, closing combat divergences, client-side
+  WASM AI, parity tests) remain deferred — each is days of work.
+
+## Files changed
+
+- `sim/src/protocol.rs` — F_ONGROUND, ImpactEvent, EV_IMPACT, RosterEntry,
+  removed name from EntityState, new Snapshot fields
+- `sim/src/nav.rs` — new file, portable navmesh pathfinding
+- `sim/src/lib.rs` — registered nav module
+- `src/net/protocol.ts` — mirrored all protocol changes
+- `src/net/interpolation.ts` — onGround in RemoteEntity, renderTick getter
+- `src/net/protocol.test.ts` — updated golden bytes, Snapshot constructors
+- `src/net/interpolation.test.ts` — roster/impactEvents in snap helper
+- `src/net/prediction.test.ts` — roster/impactEvents in snap helper
+- `src/game/session.ts` — vel-based speed, onGround, ragdoll parity, cosmetic
+  unfencing, EV_FIRE queue, impact draining, slotNameMap, surfaceFromId
+- `src/ai/anim.ts` — fixed dt contract comment
+- `server/src/main.rs` — F_ONGROUND in flags, no corpse teleport, EV_IMPACT
+  emission, roster building, build_snapshot signature updated
+
+---
+
+## 2026-08-08
+
+- **Phase E.2 — Moved AI into sim/ crate**: Split `server/src/ai.rs` (599 lines)
+  into `sim/src/ai/` submodules per plan: `bot.rs` (data model, constants,
+  Bot, SearchState), `perception.rs` (can_see, forward_dir, angle_delta),
+  `aim.rs` (step_angle, hash01), `brain.rs` (tick_bot, pick_search_node,
+  unstick, + all integration tests). Moved `server/src/nav_graph.rs` →
+  `sim/src/nav_graph.rs` (both file and test suite). Updated `sim/src/lib.rs`
+  with `pub mod ai;` and `pub mod nav_graph;`. Updated `server/src/main.rs` to
+  use `sim::ai::*` and `sim::nav_graph::*` instead of local modules. Deleted
+  `server/src/ai.rs` and `server/src/nav_graph.rs`. All 57 sim tests pass
+  (up from 46), all 29 server tests pass, all 289 TS tests pass (1 pre-existing
+  modelview timeout unchanged), typecheck clean. Behaviour is unchanged —
+  replaces `server/src/ai.rs` with exactly equivalent code under `sim/`.
+
+- **Phase E.3 — Closed combat divergences**: Ported `src/game/hitbox.ts` →
+  `sim/src/hitbox.rs` (21 per-bone AABBs, `hitboxRay` slab test, `hitboxAt`
+  height-band fallback, 6 tests). Ported `src/game/damage.ts` →
+  `sim/src/damage.rs` (`computeDamage`, `rangeFalloff`, `Hitbox` enum with
+  multipliers, `WeaponStats` rifle/pistol defs, 6 tests). Added combat
+  functions to `sim/src/ai/aim.rs`: `onTarget`, `botShotLands`,
+  `desiredYawPitch`, `stepAim` (+8 tests). Updated `sim/src/ai/bot.rs`: added
+  `error_offset` (Vector3), `should_fire` (bool), `FIRE_TOL`, `ERROR_RADIUS`,
+  `BOT_AIM_SPREAD`. Updated `sim/src/ai/brain.rs`: nearest-visible targeting
+  (was "first index"), per-acquisition `error_offset` on engage, `onTarget`
+  fire gate replacing bare `reaction_timer`, `stepAim` replacing inline angle
+  math. Updated `server/src/main.rs`: replaced flat-30 "nearest collider within
+  1.5m" damage with full `hitboxRay → computeDamage` per-bone pipeline; bot
+  fire condition now checks `should_fire` (on-target gate from brain).
+   All 77 sim tests pass (+20), all 29 server tests pass, all 289 TS tests
+   pass, typecheck clean, WASM rebuilt. Only pre-existing modelview timeout
+   unchanged.
+
+- **Phase E.4 — Client-side WASM bot AI.** Exposed `sim_tick_bot()` and supporting
+  functions as WASM bindings in `sim/src/lib.rs`: `sim_init_bots(json)`,
+  `sim_add_bot(x,y,z,tick_offset,team)`, `sim_tick_bot(index,server_tick,alive)`,
+  `sim_kill_bot(index)`, `sim_reset_bot(index,x,y,z)`, `sim_set_team(index,team)`,
+  `sim_get_bot_aim_yaw/pitch`, `sim_get_bot_mode`, `sim_get_bot_should_fire`,
+  `sim_get_bot_fire_cooldown`, `sim_set_bot_fire_cooldown`, `sim_get_bot_target_slot`,
+  `sim_get_bot_last_known`, `sim_bot_shot_lands`, `sim_hash01`.
+  - Added `BotGlobals` struct (NavGraph, SearchState, Vec<Bot>, teams) behind a
+    second static `BOTS: Mutex<Option<BotGlobals>>`. Lock order: SIM before BOTS.
+  - `sim_tick_bot` builds enemy/teammate position arrays from stored teams +
+    alive flags, then calls Rust `tick_bot` (same FSM shared with the server).
+  - Refactored `src/game/session.ts`: replaced all `BotBrain`/`tickBrain`/
+    `createBrain`/`killBot`/`pickTarget`/`searchState`/`canSee`/`botShotLands`
+    references with WASM binder calls. Bot creation now calls `sim_add_bot` +
+    inline TS Rapier capsule via `createKinematicCapsule`. Bot tick loop builds
+    an `alive` Uint8Array and calls `sim_tick_bot` → parses result → calls
+    `sim_tick` for movement. Damage resolution uses `sim_get_bot_target_slot`
+    to identify the target. Human team set via `sim_set_team` after `enterGame`.
+    Render path caches `aimYaw`/`mode` from the tick result directly on `Enemy`.
+    Removed `hearSound` call (WASM brain handles perception each tick).
+  - Removed `loadNav`/recast Detour runtime and `navUrl` import.
+  - Fixed `sim/src/ai/perception.rs::can_see` — raycast stop distance now
+    `dist - PLAYER_RADIUS - 0.05` (matching TS), not `dist - 0.1`.
+  - **Deleted TS AI source files:** `src/ai/{brain,bot,aim,perception,nav}.ts`.
+    Rendering-only files kept: `anim.ts`, `thirdperson.ts`, `ragdoll.ts`.
+  - Updated `src/ai/anim.ts`: replaced `BotMode` import from deleted `./brain`
+    with new local type `BotMode3P`.
+  - Updated `src/game/mutual_fire.test.ts`: replaced `canSee` import from
+    deleted `./perception` with inline raycast logic.
+  - **Deleted old AI test files:** `src/ai/{brain,aim,bot,nav,perception}.test.ts`
+    (E.5 rewrites them as WASM parity).
+  - **Removed `recast-navigation` from package.json** — payload win.
+  - `pnpm typecheck` clean, `pnpm build` green.
+  
+- **Phase E.5 — WASM bot AI parity tests.** Created `tests/ai_parity.test.ts`
+  (18 tests): sim_init_bots load, sim_add_bot creation, sim_set_team, bot starts
+  in search (mode 0), sim_tick_bot returns 6-element result, wandering produces
+  FORWARD, engagement on visible enemy, sim_kill_bot → mode 3, sim_reset_bot →
+  reinit, dead bots return zero buttons, determinism (same inputs → same output),
+  sim_bot_shot_lands (point-blank hit, range miss), sim_hash01 (deterministic,
+  in [0,1), different inputs diverge), sim_get_bot_target_slot (-1 when searching),
+  sim_get_bot_aim_yaw (0 for fresh). All 18 pass. Full suite: 280 TS tests green
+  (up from 262 missing the 5 deleted AI test files). Only pre-existing modelview
+  timeout unchanged. 77 sim tests + 29 server tests continue to pass.
+
+## Files changed
+
+- `sim/src/lib.rs` — +~250 lines: BotGlobals, BOTS static, 17 new WASM bindings
+- `sim/src/ai/perception.rs` — fixed can_see raycast margin
+- `sim/pkg/*` — rebuilt WASM via wasm-pack
+- `src/game/session.ts` — +~180/−~150 lines: WASM bot AI integration
+- `src/ai/anim.ts` — BotMode3P type replaces deleted brain import
+- `src/game/mutual_fire.test.ts` — inline raycast replaces deleted canSee
+- `src/ai/brain.ts` — deleted
+- `src/ai/bot.ts` — deleted  
+- `src/ai/aim.ts` — deleted
+- `src/ai/perception.ts` — deleted
+- `src/ai/nav.ts` — deleted
+- `src/ai/brain.test.ts` — deleted (replaced)
+- `src/ai/aim.test.ts` — deleted (replaced)
+- `src/ai/bot.test.ts` — deleted (replaced)
+- `src/ai/nav.test.ts` — deleted (replaced)
+- `src/ai/perception.test.ts` — deleted (replaced)
+- `tests/ai_parity.test.ts` — new file, 18 parity tests
+- `package.json` — removed recast-navigation
+
+---
+
+## 2026-08-08 — Review follow-up: fixing what the phases left broken
+
+Everything below came out of reviewing the Phase A–E work. The premise was "same or
+better than before", so each change is either a defect fix or a capability restore —
+nothing was scaled back.
+
+### Bot pathing now actually uses the navmesh (the headline)
+
+`sim/src/nav.rs` existed but had **zero callers**, and Phase E.4 deleted the TS AI and
+uninstalled recast — so single-player pathing had been *downgraded* to the server's
+13-node BFS hops rather than the server being upgraded. Three separate bugs had to be
+fixed before the module could be wired at all:
+
+- **Adjacency was built by vertex index.** The baked blob is an unindexed soup (813 tris,
+  2439 verts — exactly 3 per triangle), so no two triangles ever share an index. Every
+  triangle was an island and `find_path` returned an empty route for *every* query.
+  Adjacency now welds coincident positions (1 mm quantisation) first.
+- **A\* used a constant edge cost** against a metre-valued heuristic, which makes h wildly
+  overestimate remaining g and degrades A* to greedy best-first. Now centroid distance.
+- **The apex/funnel string-pull was wrong** — it produced a 342 m sawtooth for a 48 m
+  crossing because `shared_edge` returned portal vertices in arbitrary order, so the funnel
+  flipped handedness at random portals. Replaced with portal midpoints + collinear thinning:
+  can't self-cross, 35 waypoints and 91 m for the same crossing. `shared_edge` also now
+  orders (left, right) by travel direction.
+
+Wired into `sim/src/ai/brain.rs` via `nav_target()`: the 13-node graph still *chooses* the
+destination (the shared goal-selection spec is fine and both ports agreed on it), the mesh
+decides the route. Route is cached on `Bot` and recomputed only when the goal node changes.
+**Falls back to `graph.next_hop` whenever the mesh yields no route**, so a bad bake degrades
+to the old behaviour rather than freezing a bot. The mesh is `include_bytes!`-compiled into
+`sim/`, so the server and the browser both get it with no loading plumbing.
+
+`recast-navigation` restored as a **dev** dependency — it was deleted outright while
+`tools/navbake/bake.ts` still imported it, so `pnpm nav:bake` was broken. Verified: the bake
+runs and reproduces the checked-in blob byte-for-byte (39040 bytes, 2439 verts, 813 tris).
+
+### Client interpolation (both P0s)
+
+- **The render clock was open-loop.** It advanced by real time with a one-sided catch-up, so
+  ordinary rAF-vs-server drift walked it past the newest snapshot and every frame fell
+  through to "hold the newest" — the exact stepping defect interpolation exists to fix.
+  Measured before: with the server 2% slow, after 3 s the clock ran **10 ticks ahead** of the
+  newest snapshot and **114 of 360 frames (32%) rendered an identical frozen position**.
+  Now a ±10% rate trim steers toward the target; measured after: **0 frozen frames**, clock
+  parked 5 ticks behind. Also clamped so it never renders past the newest snapshot (a stall
+  used to sawtooth between free-run and hard-snap).
+- **The lerp fraction was wrong.** `renderFrac + (renderTick - sLo.tick)/span` mixes a
+  one-tick fraction with a span-normalised offset; correct only when span == 1. One dropped
+  snapshot sent remotes ~50% past their true position. Now `(renderTime - sLo.tick)/span`,
+  clamped. Three regression tests added, all of which fail on the old code.
+
+### Remote deaths render again
+
+`spawnRagdollBody` only creates a physics body — the caller must ride the mesh on it, which
+the SP path does and the MP path did not. Remote corpses were spawning a ragdoll, setting
+`root.visible = false`, and never posing anything: the body vanished while an invisible
+capsule tumbled for four seconds. Now poses the model from the ragdoll transform like SP.
+Respawn does a full `rotation.set(0, yaw, 0)` (yaw alone left the corpse's tumble tilt), and
+`disposeRemote` despawns the body instead of leaking it on disconnect.
+
+### Server combat
+
+- **Every missed shot spawned a phantom impact in mid-air** — `frame_impacts.push` was
+  unconditional with an 80 m fallback and a zeroed normal, so a puff, a decal and an impact
+  sound appeared at the end of every miss. Now only emitted when something was actually hit.
+- Two different miss fallbacks (100 m for occlusion, 80 m for the impact position) unified
+  to one `MAX_SHOT_RANGE`.
+- **Ducked hitboxes were 20% too tall**: hardcoded `0.6` vs the client's
+  `duckScaleY(1) = DUCKED_HEIGHT/STANDING_HEIGHT = 0.5`. Now a named `DUCKED_SCALE` constant
+  documenting the pairing.
+- Occlusion compared *eye-to-feet* distance against distance-to-geometry with a 0.5 m fudge,
+  letting shots register through thin walls. Now uses the distance **along the ray** to the
+  target's chest, with no slack. Damage falloff gets the same corrected distance.
+
+### Protocol
+
+- **Phase D saved no bandwidth**: names moved out of the entity record and were then re-sent
+  in a roster list every tick anyway. Roster now ships only when a cheap hash of it changes,
+  plus a 1 Hz heartbeat so a client connecting between changes still learns the names.
+- `ImpactEvent` had **zero round-trip coverage on either end** — the only new wire structure,
+  and both golden tests used empty lists. Added a Rust round-trip, a 26-byte width assertion,
+  and a TS golden-bytes test using bytes emitted by the Rust encoder.
+- Fixed an off-by-one: the TS impact bounds guard read `o + 25` for a 26-byte record, so a
+  frame truncated to exactly 25 remaining bytes threw a RangeError out of `decodeSnapshot`
+  instead of returning null.
+
+### Spectators
+
+`pendingFireQueue`/`pendingImpactQueue` were fed from every snapshot but drained against
+`interpBuf.renderTick`, which only advances inside `interpolate()` — called only when a
+`predictor` exists. Spectators therefore had both queues grow unbounded for the whole
+session. Now cleared when there is no predictor.
+
+### Docs (the housekeeping the phases skipped)
+
+- `CLAUDE.md` + `agents.md`: the stack table still named `recast-navigation-js` as the nav
+  runtime and the layout still listed `src/ai/` as the bot FSM — both false after Phase E.
+- `docs/netcode.md` §3.2 claimed ~20 Hz delta snapshots against a 64 Hz full-snapshot server.
+  Now records what actually ships, including the roster and impact lists.
+- `docs/plan-phase11-bot-ai.md`: the "static waypoint graph, not a Rust recast port" decision
+  is marked SUPERSEDED with the reasoning, and the dual-port table records that the split is
+  resolved.
+
+### Verification
+
+`cargo test --workspace` 114 passed (29 server + 85 sim, up from 86). `npx vitest run` 284
+passed (up from 280); the sole failure is `tools/modelview/view.test.ts`, a pre-existing 30 s
+timeout unrelated to any of this — it fails identically on the base commit. `npx tsc --noEmit`
+clean. `cargo check -p sim --features wasm --target wasm32-unknown-unknown` clean.
+`npx vite build` clean. WASM rebuild ritual completed (`wasm-pack build sim --target bundler
+--features wasm`, pnpm store entry verified identical by md5, `.vite` cache cleared).
+
+**Not verified by me:** none of this in a live match — no browser, no `docker compose`. The
+navmesh route quality in particular is asserted by unit tests (monotone, bounded length,
+short hops), not by watching a bot walk. Two things I chose to leave, both noted rather than
+fixed: ~31% of navmesh triangles are unreachable islands from the T spawn, which is a bake
+artifact worth a look; and `pnpm-lock.yaml` still lists `recast-navigation` under the old
+section because pnpm is not on this machine's PATH — the next `pnpm install` will tidy it.

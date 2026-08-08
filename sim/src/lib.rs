@@ -1,7 +1,12 @@
+pub mod ai;
 pub mod constants;
+pub mod damage;
+pub mod hitbox;
 pub mod input;
 pub mod map;
 pub mod movement;
+pub mod nav;
+pub mod nav_graph;
 pub mod protocol;
 pub mod rng;
 pub mod shapecast;
@@ -338,5 +343,336 @@ mod wasm_bindings {
             }
             None => vec![],
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Bot AI bindings (Phase E.4 — single-player bots via WASM)
+    // ---------------------------------------------------------------
+
+    use crate::ai::{Bot, BotMode, SearchState, tick_bot};
+    use crate::nav_graph::NavGraph;
+
+    struct BotGlobals {
+        nav_graph: NavGraph,
+        search: SearchState,
+        bots: Vec<Option<Bot>>,
+        teams: Vec<u8>,
+    }
+
+    static BOTS: Mutex<Option<BotGlobals>> = Mutex::new(None);
+
+    /// Load the nav graph JSON and initialise shared search state.
+    /// Must be called once before sim_add_bot.
+    #[wasm_bindgen]
+    pub fn sim_init_bots(json: &str) {
+        let graph = NavGraph::from_json(json);
+        let node_count = graph.node_count();
+        *BOTS.lock().unwrap() = Some(BotGlobals {
+            nav_graph: graph,
+            search: SearchState::new(node_count),
+            bots: Vec::new(),
+            teams: Vec::new(),
+        });
+    }
+
+    /// Add a bot player slot. Creates both a PlayerState (for movement) and a Bot
+    /// (for AI). `team`: 0 = T, 1 = CT. Returns the slot index (same as wasm
+    /// player index).
+    #[wasm_bindgen]
+    pub fn sim_add_bot(spawn_x: f64, spawn_y: f64, spawn_z: f64, tick_offset: u32, team: u8) -> u32 {
+        let idx = sim_add_player(spawn_x, spawn_y, spawn_z);
+        let i = idx as usize;
+        let sim = SIM.lock().unwrap();
+        let start_node = if let Some((_, states)) = sim.as_ref() {
+            if let Some(s) = states.get(i) {
+                let bots_lock = BOTS.lock().unwrap();
+                if let Some(ref bg) = bots_lock.as_ref() {
+                    bg.nav_graph.nearest_node(s.position.x, s.position.y, s.position.z)
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        drop(sim);
+
+        let mut bots_lock = BOTS.lock().unwrap();
+        if let Some(ref mut bg) = bots_lock.as_mut() {
+            while bg.bots.len() <= i {
+                bg.bots.push(None);
+                bg.teams.push(255);
+            }
+            bg.bots[i] = Some(Bot::new(start_node, tick_offset));
+            bg.teams[i] = team;
+        }
+        idx
+    }
+
+    /// Remove a bot slot. Must be called from highest index downward.
+    #[wasm_bindgen]
+    pub fn sim_remove_bot(index: u32) {
+        sim_remove_player(index);
+        let i = index as usize;
+        let mut bots_lock = BOTS.lock().unwrap();
+        if let Some(ref mut bg) = bots_lock.as_mut() {
+            if i < bg.bots.len() {
+                bg.bots.remove(i);
+                bg.teams.remove(i);
+            }
+        }
+    }
+
+    /// Tick a bot's AI FSM. Returns a flat array:
+    /// [buttons, yaw, should_fire, aim_yaw, aim_pitch, mode]
+    /// where mode: 0 = Search, 1 = Engage, 2 = Reposition, 3 = Dead.
+    /// `alive` is a slice of u8: 1 = alive, 0 = dead, one per player slot.
+    #[wasm_bindgen]
+    pub fn sim_tick_bot(index: u32, server_tick: u32, alive: Vec<u8>) -> Vec<f64> {
+        let i = index as usize;
+        let sim_lock = SIM.lock().unwrap();
+        let mut bots_lock = BOTS.lock().unwrap();
+
+        let (world, states, bg) = match (
+            sim_lock.as_ref(),
+            bots_lock.as_mut(),
+        ) {
+            (Some((w, s)), Some(bg)) if i < s.len() && i < bg.bots.len() => (w, s, bg),
+            _ => return vec![],
+        };
+
+        // Collect teammate goal nodes first (avoids borrowing bg.bots while
+        // holding the mutable bot reference later).
+        let n = states.len().min(bg.teams.len());
+        let mut teammate_goals: Vec<usize> = Vec::new();
+        for j in 0..n {
+            if j == i { continue; }
+            if let Some(Some(tb)) = bg.bots.get(j) {
+                let same_team = bg.teams.get(j).copied().unwrap_or(255) == bg.teams.get(i).copied().unwrap_or(255);
+                if same_team {
+                    teammate_goals.push(tb.path_goal_node);
+                }
+            }
+        }
+
+        let bot = match bg.bots.get_mut(i) {
+            Some(Some(b)) => b,
+            _ => return vec![],
+        };
+
+        let team = bg.teams.get(i).copied().unwrap_or(255);
+        let bot_collider = world.player_collider_handle(i);
+        let bot_feet = states[i].position;
+
+        // Build enemy positions (other team, alive, not self)
+        let mut enemy_positions: Vec<Option<nalgebra::Vector3<f64>>> = vec![None; n];
+        let mut teammate_positions: Vec<&nalgebra::Vector3<f64>> = Vec::new();
+
+        for j in 0..n {
+            if j == i { continue; }
+            let other_team = bg.teams.get(j).copied().unwrap_or(255);
+            let other_alive = alive.get(j).copied().unwrap_or(0) != 0;
+            if other_alive && other_team != team {
+                enemy_positions[j] = Some(states[j].position);
+            }
+            if other_alive && other_team == team {
+                teammate_positions.push(&states[j].position);
+            }
+        }
+
+        let alive_bools: Vec<bool> = alive.iter().map(|&a| a != 0).collect();
+        let tm_refs: Vec<&nalgebra::Vector3<f64>> = teammate_positions;
+
+        let (buttons, yaw) = tick_bot(
+            bot,
+            world,
+            &bot_feet,
+            bot_collider,
+            &enemy_positions,
+            &alive_bools,
+            &bg.nav_graph,
+            &mut bg.search,
+            &tm_refs,
+            &teammate_goals,
+            server_tick,
+        );
+
+        let mode = match bot.mode {
+            BotMode::Search => 0,
+            BotMode::Engage => 1,
+            BotMode::Reposition => 2,
+            BotMode::Dead => 3,
+        };
+        let should_fire = if bot.should_fire { 1.0 } else { 0.0 };
+
+        vec![
+            buttons as f64,
+            yaw,
+            should_fire,
+            bot.aim_yaw,
+            bot.aim_pitch,
+            mode as f64,
+        ]
+    }
+
+    /// Kill a bot (set AI mode to Dead). The body stays in place.
+    #[wasm_bindgen]
+    pub fn sim_kill_bot(index: u32) {
+        let i = index as usize;
+        let mut bots_lock = BOTS.lock().unwrap();
+        if let Some(ref mut bg) = bots_lock.as_mut() {
+            if let Some(Some(bot)) = bg.bots.get_mut(i) {
+                bot.mode = BotMode::Dead;
+            }
+        }
+    }
+
+    /// Reset a bot's AI for respawn. Repositions the player state and
+    /// reinitialises bot FSM fields.
+    #[wasm_bindgen]
+    pub fn sim_reset_bot(index: u32, spawn_x: f64, spawn_y: f64, spawn_z: f64) {
+        sim_reset_player(index, spawn_x, spawn_y, spawn_z);
+        let i = index as usize;
+        let mut bots_lock = BOTS.lock().unwrap();
+        if let Some(ref mut bg) = bots_lock.as_mut() {
+            if let Some(Some(bot)) = bg.bots.get_mut(i) {
+                let node = bg.nav_graph.nearest_node(spawn_x, spawn_y, spawn_z);
+                *bot = Bot::new(node, bot.tick_offset);
+            }
+        }
+    }
+
+    /// Get bot aim yaw for rendering.
+    #[wasm_bindgen]
+    pub fn sim_get_bot_aim_yaw(index: u32) -> f64 {
+        let bots_lock = BOTS.lock().unwrap();
+        if let Some(ref bg) = bots_lock.as_ref() {
+            if let Some(Some(bot)) = bg.bots.get(index as usize) {
+                return bot.aim_yaw;
+            }
+        }
+        0.0
+    }
+
+    /// Get bot aim pitch for rendering.
+    #[wasm_bindgen]
+    pub fn sim_get_bot_aim_pitch(index: u32) -> f64 {
+        let bots_lock = BOTS.lock().unwrap();
+        if let Some(ref bg) = bots_lock.as_ref() {
+            if let Some(Some(bot)) = bg.bots.get(index as usize) {
+                return bot.aim_pitch;
+            }
+        }
+        0.0
+    }
+
+    /// Get bot mode: 0 = Search, 1 = Engage, 2 = Reposition, 3 = Dead.
+    #[wasm_bindgen]
+    pub fn sim_get_bot_mode(index: u32) -> u8 {
+        let bots_lock = BOTS.lock().unwrap();
+        if let Some(ref bg) = bots_lock.as_ref() {
+            if let Some(Some(bot)) = bg.bots.get(index as usize) {
+                return match bot.mode {
+                    BotMode::Search => 0,
+                    BotMode::Engage => 1,
+                    BotMode::Reposition => 2,
+                    BotMode::Dead => 3,
+                };
+            }
+        }
+        3
+    }
+
+    /// True if the bot brain says it should fire this tick.
+    #[wasm_bindgen]
+    pub fn sim_get_bot_should_fire(index: u32) -> bool {
+        let bots_lock = BOTS.lock().unwrap();
+        if let Some(ref bg) = bots_lock.as_ref() {
+            if let Some(Some(bot)) = bg.bots.get(index as usize) {
+                return bot.should_fire;
+            }
+        }
+        false
+    }
+
+    /// Deterministic per-shot miss-cone check. Returns true if the shot lands
+    /// within the target's body radius at the given distance, given two
+    /// [0,1) angular samples and an angular spread half-extent.
+    #[wasm_bindgen]
+    pub fn sim_bot_shot_lands(dist_m: f64, spread: f64, r1: f64, r2: f64, body_radius: f64) -> bool {
+        crate::ai::aim::bot_shot_lands(dist_m, spread, r1, r2, body_radius)
+    }
+
+    /// Deterministic [0,1) hash — bit-identical to navnodes.ts::hash01.
+    #[wasm_bindgen]
+    pub fn sim_hash01(a: u32, b: u32) -> f64 {
+        crate::ai::aim::hash01(a, b)
+    }
+
+    /// Get bot fire_cooldown for this slot. Returns remaining seconds.
+    #[wasm_bindgen]
+    pub fn sim_get_bot_fire_cooldown(index: u32) -> f64 {
+        let bots_lock = BOTS.lock().unwrap();
+        if let Some(ref bg) = bots_lock.as_ref() {
+            if let Some(Some(bot)) = bg.bots.get(index as usize) {
+                return bot.fire_cooldown;
+            }
+        }
+        0.0
+    }
+
+    /// Set bot fire_cooldown. Call after synthesizing a shot.
+    #[wasm_bindgen]
+    pub fn sim_set_bot_fire_cooldown(index: u32, value: f64) {
+        let mut bots_lock = BOTS.lock().unwrap();
+        if let Some(ref mut bg) = bots_lock.as_mut() {
+            if let Some(Some(bot)) = bg.bots.get_mut(index as usize) {
+                bot.fire_cooldown = value;
+                bot.should_fire = false;
+            }
+        }
+    }
+
+    /// Set the team for a player slot. `team`: 0 = T, 1 = CT, 255 = unset.
+    #[wasm_bindgen]
+    pub fn sim_set_team(index: u32, team: u8) {
+        let mut bots_lock = BOTS.lock().unwrap();
+        if let Some(ref mut bg) = bots_lock.as_mut() {
+            let i = index as usize;
+            while bg.teams.len() <= i {
+                bg.teams.push(255);
+            }
+            bg.teams[i] = team;
+        }
+    }
+
+    /// Get the target slot the bot is currently engaged with.
+    /// Returns -1 if no target (searching, dead, etc).
+    #[wasm_bindgen]
+    pub fn sim_get_bot_target_slot(index: u32) -> i32 {
+        let bots_lock = BOTS.lock().unwrap();
+        if let Some(ref bg) = bots_lock.as_ref() {
+            if let Some(Some(bot)) = bg.bots.get(index as usize) {
+                return bot.target_slot.map(|s| s as i32).unwrap_or(-1);
+            }
+        }
+        -1
+    }
+
+    /// Get the bot's last-known enemy position (feet).
+    /// Returns [x, y, z] or empty vec if no last-known.
+    #[wasm_bindgen]
+    pub fn sim_get_bot_last_known(index: u32) -> Vec<f64> {
+        let bots_lock = BOTS.lock().unwrap();
+        if let Some(ref bg) = bots_lock.as_ref() {
+            if let Some(Some(bot)) = bg.bots.get(index as usize) {
+                if let Some(ref lk) = bot.last_known {
+                    return vec![lk.x, lk.y, lk.z];
+                }
+            }
+        }
+        vec![]
     }
 }
