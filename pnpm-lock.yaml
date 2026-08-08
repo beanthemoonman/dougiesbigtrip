@@ -14,9 +14,6 @@ importers:
       keycloak-js:
         specifier: ^26.2.4
         version: 26.2.4
-      recast-navigation:
-        specifier: ^0.43.1
-        version: 0.43.1
       sim-wasm:
         specifier: file:./sim/pkg
         version: sim@file:sim/pkg
@@ -57,6 +54,9 @@ importers:
       puppeteer:
         specifier: ^25.3.0
         version: 25.3.0
+      recast-navigation:
+        specifier: ^0.43.1
+        version: 0.43.1
       tsx:
         specifier: ^4.23.1
         version: 4.23.1

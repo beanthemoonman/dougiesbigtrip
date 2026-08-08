@@ -1,212 +1,20 @@
-//! Server-side bot AI (Phase 11). Each bot runs an FSM (search ↔ engage ↔
-//! reposition) and drives the SAME tick_movement function humans use. Bots now
-//! navigate via a hand-authored waypoint graph (nav_graph.rs) instead of
-//! straight-line walking or fixed patrol routes.
-//!
-//! See docs/plan-phase11-bot-ai.md.
+//! Bot FSM and decision logic: tick_bot, search-goal selection, unsticking.
+//! Phase E.2 — extracted from server/src/ai.rs into sim/ for WASM-share.
+//! Phase E.3 — nearest-visible targeting, error-offset aim error, on-target fire gate.
 
 use nalgebra::Vector3;
-use sim::constants::{EYE_HEIGHT_STANDING, FIXED_DT};
-use sim::input::Buttons;
-use sim::shapecast;
-use sim::world::SimWorld;
 
+use crate::constants::{EYE_HEIGHT_STANDING, FIXED_DT};
+use crate::input::Buttons;
 use crate::nav_graph::NavGraph;
 
-const SIGHT_RANGE: f64 = 40.0;
-const SIGHT_HALF_FOV_COS: f64 = 0.258819; // cos(75°)
-const WAYPOINT_RADIUS: f64 = 0.6;
-const TURN_RATE: f64 = 6.0; // rad/s — normal difficulty
-const REACTION_TIME: f64 = 0.5; // s
-const LOSE_MEMORY: f64 = 4.0; // s
-
-/// How many ticks a node stays "recently visited" for the search-spread bonus.
-const VISIT_RECENCY_TICKS: u32 = 64 * 8; // ~8 s at 64 Hz
-
-/// Weights for the search-goal selection metric. Bots spread out from teammates
-/// and avoid nodes that were recently visited by anyone on the team.
-/// Same-pole repulsion: every teammate pushes on nearby nodes as 1/(1+d). Was a
-/// "distance to nearest teammate" bonus, which always crowned the one globally
-/// farthest node — every bot then ran the identical route to it.
-const W_REPEL: f64 = 60.0;
-const W_RECENCY: f64 = 2.0;
-/// Deterministic per-pick jitter, ~3x the tactical spread: tactical nodes stay
-/// favoured, but low-weight ones still come up so routes vary run to run.
-const W_RANDOM: f64 = 80.0;
-/// Per-node tactical weight multiplier. Curve/flank nodes are high, spine/killbox
-/// nodes are low.
-const W_TACTICAL: f64 = 10.0;
-/// Penalty per teammate who already has this node as their active path goal.
-/// Gently encourages bots to pick different nodes rather than converging.
-const W_GOAL_CONFLICT: f64 = 20.0;
-
-/// Caution: bots in search mode pause to scan every few seconds instead of
-/// rushing between nodes. Move for ~2.5 s, then stop ± scan for ~1.5 s.
-const CAUTION_MOVE_TICKS: u32 = 64 * 5 / 2;  // 2.5 s
-const CAUTION_PAUSE_TICKS: u32 = 64 * 3 / 2; // 1.5 s
-/// Per-bot tick variation so bots don't pause in lockstep.
-const CAUTION_JITTER: u32 = 64; // ±1 s variation
-
-/// Slow-scan yaw rate during caution pauses (rad/s).
-const SCAN_RATE: f64 = 1.0;
-
-/// Unsticking. Breakable props are not in the nav graph, so a hop can run
-/// straight through a crate. Rather than teach nav about props, detect
-/// "pressing FORWARD, going nowhere" and strafe out of it, like a human does.
-/// Below this per-tick horizontal displacement (m) the bot counts as blocked.
-const STUCK_STEP: f64 = 0.015;
-const STUCK_TICKS: u32 = 24;
-const SIDESTEP_TICKS: u32 = 32;
-/// Two failed sidesteps in a row → treat the goal as unreachable and re-pick.
-const STUCK_STRIKES: u32 = 2;
-
-/// In search mode, bots walk at a reduced duty cycle (press FORWARD only 3 of
-/// every 4 ticks) so they move at roughly 50-60% of their normal ground speed.
-const SEARCH_DUTY_ON: u32 = 3;
-const SEARCH_DUTY_PERIOD: u32 = 4;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BotMode {
-    Search,
-    Engage,
-    Reposition,
-    Dead,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CautionPhase {
-    Moving,
-    Pausing,
-}
-
-pub struct Bot {
-    pub mode: BotMode,
-    pub yaw: f64,
-    pub aim_yaw: f64,
-    pub aim_pitch: f64,
-    pub target_slot: Option<usize>,
-    pub last_known: Option<Vector3<f64>>,
-    pub reaction_timer: f64,
-    pub lost_timer: f64,
-    /// Time until the bot may fire its weapon again (seconds). Decremented each
-    /// tick; the loop in main.rs synthesises a Shot only when this reaches zero.
-    pub fire_cooldown: f64,
-    /// Graph node the bot is currently walking toward (the next hop in a path).
-    pub path_goal_node: usize,
-    /// Graph node the bot is currently at (nearest node to its position last frame).
-    pub current_node: usize,
-    pub caution_timer: u32,
-    pub caution_phase: CautionPhase,
-    /// Deterministic per-bot tick offset for de-synchronising caution timers.
-    pub tick_offset: u32,
-    /// Stuck detector: position last tick + how long we've been going nowhere.
-    pub last_x: f64,
-    pub last_z: f64,
-    pub stuck_ticks: u32,
-    pub sidestep_ticks: u32,
-    /// Buttons::LEFT or Buttons::RIGHT while sidestepping, 0 otherwise.
-    pub sidestep_dir: u16,
-    pub stuck_strikes: u32,
-}
-
-impl Bot {
-    pub fn new(start_node: usize, tick_offset: u32) -> Self {
-        let base_move = CAUTION_MOVE_TICKS + (tick_offset % CAUTION_JITTER);
-        Self {
-            mode: BotMode::Search,
-            yaw: 0.0,
-            aim_yaw: 0.0,
-            aim_pitch: 0.0,
-            target_slot: None,
-            last_known: None,
-            reaction_timer: 0.0,
-            lost_timer: 0.0,
-            fire_cooldown: 0.0,
-            path_goal_node: start_node,
-            current_node: start_node,
-            caution_timer: base_move,
-            caution_phase: CautionPhase::Moving,
-            tick_offset,
-            last_x: f64::MAX,
-            last_z: f64::MAX,
-            stuck_ticks: 0,
-            sidestep_ticks: 0,
-            sidestep_dir: 0,
-            stuck_strikes: 0,
-        }
-    }
-}
-
-/// Shared search state across all bots: per-node last-visited tick.
-/// Maps a node index → server tick when any bot last arrived at it.
-pub struct SearchState {
-    pub last_visited: Vec<u32>,
-}
-
-impl SearchState {
-    pub fn new(node_count: usize) -> Self {
-        Self { last_visited: vec![0; node_count] }
-    }
-}
-
-fn angle_delta(a: f64, b: f64) -> f64 {
-    let mut d = (b - a) % (std::f64::consts::PI * 2.0);
-    if d > std::f64::consts::PI { d -= std::f64::consts::PI * 2.0; }
-    if d <= -std::f64::consts::PI { d += std::f64::consts::PI * 2.0; }
-    d
-}
-
-fn step_angle(current: f64, target: f64, max_step: f64) -> f64 {
-    let d = angle_delta(current, target);
-    if d.abs() <= max_step { target } else { current + d.signum() * max_step }
-}
-
-fn forward_dir(yaw: f64) -> (f64, f64) {
-    (-yaw.sin(), -yaw.cos())
-}
-
-fn can_see(
-    world: &SimWorld,
-    bot_feet: &Vector3<f64>,
-    bot_yaw: f64,
-    target_feet: &Vector3<f64>,
-    exclude_collider: sim::ColliderHandle,
-) -> bool {
-    let eye = Vector3::new(bot_feet.x, bot_feet.y + EYE_HEIGHT_STANDING, bot_feet.z);
-    let target_eye = Vector3::new(
-        target_feet.x,
-        target_feet.y + EYE_HEIGHT_STANDING,
-        target_feet.z,
-    );
-    let to = target_eye - eye;
-    let dist = to.norm();
-    if dist < 1e-6 { return true; }
-    if dist > SIGHT_RANGE { return false; }
-    let dir = to / dist;
-    let (fx, fz) = forward_dir(bot_yaw);
-    if dir.x * fx + dir.z * fz < SIGHT_HALF_FOV_COS { return false; }
-    let mut normal = Vector3::zeros();
-    shapecast::ray_cast(
-        &world.physics,
-        eye.x, eye.y, eye.z,
-        dir.x, dir.y, dir.z,
-        dist - 0.1,
-        &mut normal,
-        Some(exclude_collider),
-    )
-    .is_none()
-}
-
-/// Deterministic [0,1) hash of two u32s. Must stay bit-identical to
-/// `navnodes.ts::hash01` — it is what lets both ports jitter their goal picks
-/// the same way. Not an RNG: no stream, no state, so replays stay exact.
-pub fn hash01(a: u32, b: u32) -> f64 {
-    let mut h = a.wrapping_mul(0x9e37_79b1) ^ b.wrapping_mul(0x85eb_ca6b);
-    h ^= h >> 15;
-    h = h.wrapping_mul(0x2545_f491);
-    h ^= h >> 13;
-    f64::from(h) / 4_294_967_296.0
-}
+use super::aim;
+use super::bot::{
+    self, Bot, BotMode, CautionPhase, SearchState,
+    LOSE_MEMORY, REACTION_TIME, SCAN_RATE, SEARCH_DUTY_ON, SEARCH_DUTY_PERIOD,
+    WAYPOINT_RADIUS,
+};
+use super::perception;
 
 /// Pick a search goal node using the shared spec:
 ///   max over i of  -w1·Σ_teammates 1/(1 + distance_to_node_i)
@@ -238,15 +46,15 @@ fn pick_search_node(
         }
 
         let ticks_since = server_tick.saturating_sub(search.last_visited[i]);
-        let recency_bonus = (ticks_since as f64).min(VISIT_RECENCY_TICKS as f64);
+        let recency_bonus = (ticks_since as f64).min(bot::VISIT_RECENCY_TICKS as f64);
 
         let tactical = graph.weight(i);
 
         let conflicts = teammate_goals.iter().filter(|&&g| g == i).count() as f64;
 
-        let score = -W_REPEL * repel + W_RECENCY * recency_bonus
-            + W_TACTICAL * tactical - W_GOAL_CONFLICT * conflicts
-            + W_RANDOM * hash01(seed.wrapping_add(server_tick), i as u32);
+        let score = -bot::W_REPEL * repel + bot::W_RECENCY * recency_bonus
+            + bot::W_TACTICAL * tactical - bot::W_GOAL_CONFLICT * conflicts
+            + bot::W_RANDOM * aim::hash01(seed.wrapping_add(server_tick), i as u32);
 
         if score > best_score {
             best_score = score;
@@ -254,6 +62,54 @@ fn pick_search_node(
         }
     }
     best_node
+}
+
+/// The point the bot should currently walk toward: the next unreached waypoint
+/// on a smoothed navmesh route to `path_goal_node`.
+///
+/// The route is cached on the Bot and recomputed only when the destination node
+/// changes — an A* over the triangle soup is far too expensive to run per bot
+/// per tick. ponytail: recompute-on-goal-change means a bot shoved off its route
+/// walks back to it rather than re-planning; `unstick` already catches the case
+/// where that leaves it grinding a wall.
+///
+/// Falls back to the nav-graph hop whenever the mesh yields no route, so a bad
+/// bake degrades to the previous behaviour instead of freezing the bot.
+fn nav_target(bot: &mut Bot, graph: &NavGraph, bot_feet: &Vector3<f64>) -> (f64, f64) {
+    let Some(goal) = graph.node(bot.path_goal_node).copied() else {
+        return (bot_feet.x, bot_feet.z);
+    };
+
+    if bot.path_for_node != bot.path_goal_node {
+        bot.path_for_node = bot.path_goal_node;
+        bot.path = match crate::nav::mesh() {
+            Some(m) => m.find_path(
+                [bot_feet.x as f32, bot_feet.y as f32, bot_feet.z as f32],
+                [goal[0] as f32, goal[1] as f32, goal[2] as f32],
+            ),
+            None => Vec::new(),
+        };
+        // find_path's first waypoint is the start position itself; walking to
+        // where you already stand would stall the bot on arrival-radius checks.
+        bot.path_idx = if bot.path.is_empty() { 0 } else { 1 };
+    }
+
+    // Consume every waypoint already reached — a fast bot can clear more than
+    // one in a tick after a corner.
+    while let Some(w) = bot.path.get(bot.path_idx) {
+        let dx = w[0] as f64 - bot_feet.x;
+        let dz = w[2] as f64 - bot_feet.z;
+        if dx * dx + dz * dz <= WAYPOINT_RADIUS * WAYPOINT_RADIUS {
+            bot.path_idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    match bot.path.get(bot.path_idx) {
+        Some(w) => (w[0] as f64, w[2] as f64),
+        None => graph.next_hop(bot.current_node, bot.path_goal_node),
+    }
 }
 
 /// Add a strafe when the bot is walking into something the nav graph doesn't
@@ -271,7 +127,7 @@ fn unstick(bot: &mut Bot, buttons: u16, bot_feet: &Vector3<f64>, server_tick: u3
     if buttons & Buttons::FORWARD != 0 {
         let dx = bot_feet.x - bot.last_x;
         let dz = bot_feet.z - bot.last_z;
-        if dx * dx + dz * dz < STUCK_STEP * STUCK_STEP {
+        if dx * dx + dz * dz < bot::STUCK_STEP * bot::STUCK_STEP {
             bot.stuck_ticks += 1;
         } else {
             bot.stuck_ticks = 0;
@@ -280,16 +136,16 @@ fn unstick(bot: &mut Bot, buttons: u16, bot_feet: &Vector3<f64>, server_tick: u3
     bot.last_x = bot_feet.x;
     bot.last_z = bot_feet.z;
 
-    if bot.stuck_ticks >= STUCK_TICKS {
+    if bot.stuck_ticks >= bot::STUCK_TICKS {
         bot.stuck_ticks = 0;
         bot.stuck_strikes += 1;
-        bot.sidestep_ticks = SIDESTEP_TICKS;
-        bot.sidestep_dir = if hash01(bot.tick_offset.wrapping_add(server_tick), bot.stuck_strikes) < 0.5 {
+        bot.sidestep_ticks = bot::SIDESTEP_TICKS;
+        bot.sidestep_dir = if aim::hash01(bot.tick_offset.wrapping_add(server_tick), bot.stuck_strikes) < 0.5 {
             Buttons::LEFT
         } else {
             Buttons::RIGHT
         };
-        if bot.stuck_strikes >= STUCK_STRIKES {
+        if bot.stuck_strikes >= bot::STUCK_STRIKES {
             bot.stuck_strikes = 0;
             bot.path_goal_node = bot.current_node; // forces a re-pick next tick
             bot.last_known = None;
@@ -307,9 +163,9 @@ fn unstick(bot: &mut Bot, buttons: u16, bot_feet: &Vector3<f64>, server_tick: u3
 /// self and same-team slots are always `None`. `alive` indicates which slots are alive.
 pub fn tick_bot(
     bot: &mut Bot,
-    world: &SimWorld,
+    world: &crate::world::SimWorld,
     bot_feet: &Vector3<f64>,
-    bot_collider: sim::ColliderHandle,
+    bot_collider: crate::ColliderHandle,
     player_positions: &[Option<Vector3<f64>>],
     alive: &[bool],
     graph: &NavGraph,
@@ -336,22 +192,26 @@ pub fn tick_bot(
         if ts < alive.len() && alive[ts] {
             if let Some(ref p) = player_positions[ts] {
                 target_feet = *p;
-                sees = can_see(world, bot_feet, bot.yaw, &target_feet, bot_collider);
+                sees = perception::can_see(world, bot_feet, bot.yaw, &target_feet, bot_collider);
             }
         }
     }
-    // If current target is dead/lost, scan for another.
+    // If current target is dead/lost, scan for nearest visible (not first index).
     if bot.target_slot.is_none_or(|ts| ts >= alive.len() || !alive[ts]) {
         bot.target_slot = None;
+        let mut best_dist = f64::INFINITY;
         for (i, a) in alive.iter().enumerate() {
             if !a { continue; }
             if let Some(ref p) = player_positions[i] {
-                if can_see(world, bot_feet, bot.yaw, p, bot_collider) {
+                let dx = bot_feet.x - p.x;
+                let dz = bot_feet.z - p.z;
+                let dist_sq = dx * dx + dz * dz;
+                if dist_sq < best_dist && perception::can_see(world, bot_feet, bot.yaw, p, bot_collider) {
+                    best_dist = dist_sq;
                     bot.target_slot = Some(i);
                     bot.last_known = Some(*p);
                     sees = true;
                     target_feet = *p;
-                    break;
                 }
             }
         }
@@ -364,6 +224,13 @@ pub fn tick_bot(
                 bot.mode = BotMode::Engage;
                 bot.reaction_timer = REACTION_TIME;
                 bot.last_known = Some(target_feet);
+                // Fresh per-acquisition aim error offset (matches TS acquire()).
+                let r = bot::ERROR_RADIUS;
+                bot.error_offset = Vector3::new(
+                    (aim::hash01(server_tick, bot.tick_offset) - 0.5) * 2.0 * r,
+                    (aim::hash01(bot.tick_offset, server_tick) - 0.5) * 2.0 * r,
+                    (aim::hash01(server_tick.wrapping_add(1), bot.tick_offset) - 0.5) * 2.0 * r,
+                );
             } else if bot.mode == BotMode::Reposition {
                 bot.lost_timer += dt;
                 // Give up: either timer elapsed OR reached last_known without re-acquiring.
@@ -393,20 +260,29 @@ pub fn tick_bot(
     }
 
     // --- Act ---
+    bot.should_fire = false; // reset each tick; set below if eligible
     if bot.mode == BotMode::Engage {
-        // Stand and aim: no movement, track target with turn-rate cap.
         if bot.reaction_timer > 0.0 {
             bot.reaction_timer -= dt;
-        } else if let Some(ref target) = bot.last_known {
+        }
+        if let Some(ref target) = bot.last_known {
             let eye = Vector3::new(bot_feet.x, bot_feet.y + EYE_HEIGHT_STANDING, bot_feet.z);
-            let aim_point = Vector3::new(target.x, target.y + EYE_HEIGHT_STANDING, target.z);
-            let to_target = aim_point - eye;
-            let desired_pitch = (to_target.y / to_target.norm()).asin();
-            let desired_yaw = (-to_target.x).atan2(-to_target.z);
-            let max_step = TURN_RATE * dt;
-            bot.aim_yaw = step_angle(bot.aim_yaw, desired_yaw, max_step);
-            bot.aim_pitch = step_angle(bot.aim_pitch, desired_pitch, max_step);
+            // Aim at target feet + eye height + per-acquisition error_offset.
+            let aim_point = Vector3::new(
+                target.x + bot.error_offset.x,
+                target.y + EYE_HEIGHT_STANDING + bot.error_offset.y,
+                target.z + bot.error_offset.z,
+            );
+            let (desired_yaw, desired_pitch) = aim::desired_yaw_pitch(&eye, &aim_point);
+            (bot.aim_yaw, bot.aim_pitch) = aim::step_aim(
+                bot.aim_yaw, bot.aim_pitch,
+                desired_yaw, desired_pitch,
+                bot::TURN_RATE, dt,
+            );
             bot.yaw = bot.aim_yaw;
+            // Fire gate: reaction done AND view angles on target within FIRE_TOL.
+            bot.should_fire = bot.reaction_timer <= 0.0
+                && aim::on_target(bot.aim_yaw, bot.aim_pitch, desired_yaw, desired_pitch, bot::FIRE_TOL);
         }
         return (0, bot.yaw);
     }
@@ -419,11 +295,11 @@ pub fn tick_bot(
             match bot.caution_phase {
                 CautionPhase::Moving => {
                     bot.caution_phase = CautionPhase::Pausing;
-                    bot.caution_timer = CAUTION_PAUSE_TICKS + (bot.tick_offset.wrapping_mul(13) % CAUTION_JITTER);
+                    bot.caution_timer = bot::CAUTION_PAUSE_TICKS + (bot.tick_offset.wrapping_mul(13) % bot::CAUTION_JITTER);
                 }
                 CautionPhase::Pausing => {
                     bot.caution_phase = CautionPhase::Moving;
-                    bot.caution_timer = CAUTION_MOVE_TICKS + (bot.tick_offset.wrapping_mul(7) % CAUTION_JITTER);
+                    bot.caution_timer = bot::CAUTION_MOVE_TICKS + (bot.tick_offset.wrapping_mul(7) % bot::CAUTION_JITTER);
                 }
             }
         }
@@ -454,8 +330,11 @@ pub fn tick_bot(
         }
     }
 
-    // Walk toward the next hop toward path_goal_node.
-    let (target_x, target_z) = graph.next_hop(bot.current_node, bot.path_goal_node);
+    // Walk toward path_goal_node along a smoothed navmesh route. The nav graph
+    // still chooses the destination (shared goal-selection spec); the navmesh
+    // decides how to get there, so bots follow the walkable surface instead of
+    // straight-lining between waypoints ~12 m apart and scraping the geometry.
+    let (target_x, target_z) = nav_target(bot, graph, bot_feet);
     let dx = target_x - bot_feet.x;
     let dz = target_z - bot_feet.z;
     let dist_sq = dx * dx + dz * dz;
@@ -481,17 +360,60 @@ pub fn tick_bot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim::world::SimWorld;
+    use crate::world::SimWorld;
 
-    const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
-    const NAVNODES_JSON: &str = include_str!("../../assets/maps/de_douglas.navnodes.json");
+    const MAP_JSON: &str = include_str!("../../../assets/maps/de_douglas.json");
+    const NAVNODES_JSON: &str = include_str!("../../../assets/maps/de_douglas.navnodes.json");
 
     fn setup() -> (SimWorld, NavGraph) {
         let mut world = SimWorld::new();
-        sim::map::load(&mut world, MAP_JSON);
+        crate::map::load(&mut world, MAP_JSON);
         world.ensure_broad_phase_ready();
         let graph = NavGraph::from_json(NAVNODES_JSON);
         (world, graph)
+    }
+
+    /// Bots must walk the navmesh, not straight-line between waypoint nodes.
+    ///
+    /// This is the whole point of routing through `nav.rs`: the 13-node graph
+    /// still chooses the destination, but the *route* comes from the baked
+    /// walkable surface, so a bot heading somewhere behind a wall follows the
+    /// corridor instead of grinding into geometry ~12 m at a time.
+    #[test]
+    fn search_route_follows_the_navmesh_not_graph_hops() {
+        let (mut world, graph) = setup();
+        let (_b, coll) = world.add_player_body();
+        let mut bot = Bot::new(0, 0);
+        let feet = nalgebra::Vector3::new(-15.0, 0.05, -24.0);
+
+        // Goal at the far spine end (node 7 = CT spawn).
+        bot.path_goal_node = 7;
+        let (tx, tz) = nav_target(&mut bot, &graph, &feet);
+
+        assert!(!bot.path.is_empty(), "a navmesh route should have been computed");
+        assert!(bot.path.len() > 2, "route should have intermediate waypoints, got {}", bot.path.len());
+
+        // The immediate target must be a nearby corridor point, not the 12 m
+        // graph hop the old code steered at.
+        let d = ((tx - feet.x).powi(2) + (tz - feet.z).powi(2)).sqrt();
+        assert!(d < 12.0, "next waypoint is {d:.1} m away — that is a graph hop, not a mesh route");
+
+        let _ = coll;
+    }
+
+    /// The route must survive a missing navmesh: no mesh, no panic, and the bot
+    /// still gets a heading from the nav graph.
+    #[test]
+    fn nav_target_falls_back_to_graph_hop_when_off_mesh() {
+        let (_world, graph) = setup();
+        let mut bot = Bot::new(0, 0);
+        // Far outside the map: closest_tri finds nothing within tolerance, so
+        // find_path returns empty and the graph hop has to carry it.
+        let feet = nalgebra::Vector3::new(500.0, 400.0, 500.0);
+        bot.path_goal_node = 7;
+        let (tx, tz) = nav_target(&mut bot, &graph, &feet);
+        assert!(bot.path.is_empty(), "no mesh route should exist out here");
+        assert!(tx.is_finite() && tz.is_finite());
     }
 
     /// Regression test: two same-team bots at identical coords would freeze before
@@ -576,24 +498,5 @@ mod tests {
             bot.mode, BotMode::Engage,
             "bot should not engage when only teammates/self are present"
         );
-    }
-
-    #[test]
-    fn hash01_is_deterministic() {
-        let v1 = hash01(42, 17);
-        let v2 = hash01(42, 17);
-        assert_eq!(v1, v2, "hash01 must be deterministic for the same inputs");
-        assert!(v1 >= 0.0 && v1 < 1.0);
-    }
-
-    /// hash01 with different seeds produces different values (not a collision).
-    #[test]
-    fn hash01_differs_by_input() {
-        let a = hash01(1, 1);
-        let b = hash01(1, 2);
-        let c = hash01(2, 1);
-        assert_ne!(a, b);
-        assert_ne!(b, c);
-        assert_ne!(a, c);
     }
 }

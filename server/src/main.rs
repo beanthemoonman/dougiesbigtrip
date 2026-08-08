@@ -18,8 +18,8 @@ use sim::constants::{EYE_HEIGHT_STANDING, FIXED_DT};
 use sim::map;
 use sim::movement::{tick_movement, PlayerState};
 use sim::protocol::{
-    Bye, CommandFrame, EntityState, GameEvent, Join, RoundState, Shot, Snapshot, Welcome, EV_FIRE,
-    EV_KILL, F_ALIVE, F_DUCKED, F_TEAM_CT, SPECTATOR,
+    Bye, CommandFrame, EntityState, GameEvent, ImpactEvent, Join, RoundState, RosterEntry, Shot,
+    Snapshot, Welcome, EV_FIRE, EV_KILL, F_ALIVE, F_DUCKED, F_ONGROUND, F_TEAM_CT, SPECTATOR,
 };
 use sim::world::SimWorld;
 use sim::{ColliderHandle, RigidBodyHandle};
@@ -29,12 +29,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 
-mod ai;
 mod auth;
 mod db;
 mod game;
 mod http;
-mod nav_graph;
 
 use auth::{AuthConfig, ValidatedUser};
 use sqlx::PgPool;
@@ -53,6 +51,13 @@ const DEFAULT_BIND: &str = "127.0.0.1:9876";
 const MAX_SLOTS: usize = 10; // slot capacity (5 T + 5 CT); keep in step with LIMITS.botCount
 const MAX_SPECTATORS: usize = 4;
 const SEED: u32 = 1;
+/// Ducked model/hitbox scale — must equal the client's `duckScaleY(1)`
+/// (`src/player/constants.ts`: DUCKED_HEIGHT / STANDING_HEIGHT).
+const DUCKED_SCALE: f64 = 0.9144 / 1.8288;
+/// Approximate chest height above the feet, standing. Used to pick the point on
+/// the target that the along-ray distance is measured to.
+const CHEST_HEIGHT: f64 = 0.9;
+
 const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
 const NAVNODES_JSON: &str = include_str!("../../assets/maps/de_douglas.navnodes.json");
 
@@ -75,12 +80,12 @@ fn spawn_ring_feet(team_ct: bool, rel_index: usize, anchor: [f64; 3]) -> [f64; 3
     [anchor[0] + x_off, anchor[1], anchor[2] + z_off * z_sign]
 }
 
-/// The enemy-only view of the world handed to one bot's `ai::tick_bot`.
+/// The enemy-only view of the world handed to one bot's `sim::ai::tick_bot`.
 ///
 /// Entry `i` is `Some(pos)` only when slot `i` is occupied, alive and on the
 /// opposite team to slot `idx`. Self and same-team slots are always `None`.
 ///
-/// This filter is load-bearing, not an optimisation. `ai::can_see` returns true
+/// This filter is load-bearing, not an optimisation. `sim::ai::can_see` returns true
 /// unconditionally below 1e-6 m, and every bot on a team used to share one spawn
 /// coordinate — so an unfiltered array made each bot acquire *itself* as a
 /// target, enter Engage, and return zero buttons forever. See the tests.
@@ -254,7 +259,7 @@ struct Slot {
     body_handle: RigidBodyHandle,
     collider_handle: ColliderHandle,
     player: PlayerState,
-    bot: Option<ai::Bot>,
+    bot: Option<sim::ai::Bot>,
     bot_spawn: BotSpawn,
     queue: VecDeque<CommandFrame>,
     last_buttons: u16,
@@ -286,8 +291,8 @@ async fn game_loop(
     let mut world = SimWorld::new();
     let spawn = map::load(&mut world, MAP_JSON);
     world.ensure_broad_phase_ready();
-    let nav_graph = nav_graph::NavGraph::from_json(NAVNODES_JSON);
-    let mut search_state = ai::SearchState::new(nav_graph.node_count());
+    let nav_graph = sim::nav_graph::NavGraph::from_json(NAVNODES_JSON);
+    let mut search_state = sim::ai::SearchState::new(nav_graph.node_count());
 
     // Live bot budget: seeded from startup config, re-read from the shared config
     // at each round reset so an admin edit takes effect without a restart.
@@ -311,7 +316,7 @@ async fn game_loop(
             // Only fill the first bot_count slots; remainder stay vacant for future humans.
             let occupied = i < bot_count;
             let start_node = if team_ct { 7 } else { 0 };
-            let bot = if occupied { Some(ai::Bot::new(start_node, i as u32 * 17)) } else { None };
+            let bot = if occupied { Some(sim::ai::Bot::new(start_node, i as u32 * 17)) } else { None };
 
             Slot {
                 occupied,
@@ -352,6 +357,7 @@ async fn game_loop(
     let mut next_conn_id: u32 = 0;
 
     let mut server_tick: u32 = 0;
+    let mut last_roster_sig: u64 = 0;
     let mut interval = tokio::time::interval(std::time::Duration::from_secs_f64(FIXED_DT));
     let mut round = game::State::new(
         config.rounds_to_win,
@@ -407,7 +413,7 @@ async fn game_loop(
                         // Phase 9: a slot a human left is vacant (no bot, dead) until now —
                         // backfill a bot at round start (a bot never replaces a player mid-round).
                         if !s.is_human && s.bot.is_none() {
-                            s.bot = Some(ai::Bot::new(
+                            s.bot = Some(sim::ai::Bot::new(
                                 if s.team_ct { 7 } else { 0 },
                                 i as u32 * 17,
                             ));
@@ -514,7 +520,7 @@ async fn game_loop(
                             let tm_refs: Vec<&nalgebra::Vector3<f64>> =
                                 teammate_positions[_idx].iter().collect();
                             let tm_goals: &[usize] = &teammate_goals[_idx];
-                            let (buttons, yaw) = ai::tick_bot(
+                            let (buttons, yaw) = sim::ai::tick_bot(
                                 bot,
                                 &world,
                                 &slot.player.position,
@@ -531,21 +537,19 @@ async fn game_loop(
                             slot.last_yaw = yaw as f32;
                             slot.last_pitch = bot.aim_pitch as f32;
 
-                            // Bot shooting (Phase 11.5): when in Engage with
-                            // reaction done and the fire interval elapsed, synthesise
-                            // a Shot with deterministic angular spread.
+                            // Bot shooting (Phase 11.5 / E.3): fire gate moved into
+                            // brain.rs (on_target + reaction_timer). Check should_fire
+                            // and the fire interval here; brain handles aim gating.
                             bot.fire_cooldown = (bot.fire_cooldown - FIXED_DT as f64).max(0.0);
-                            slot.last_shot = if bot.mode == ai::BotMode::Engage
-                                && bot.reaction_timer <= 0.0
-                                && bot.fire_cooldown <= 0.0
+                            slot.last_shot = if bot.should_fire && bot.fire_cooldown <= 0.0
                             {
-                                const BOT_AIM_SPREAD: f64 = 0.06;
+                                bot.should_fire = false; // consume
                                 const FIRE_INTERVAL: f64 = 0.125;
                                 bot.fire_cooldown = FIRE_INTERVAL;
-                                let r1 = ai::hash01(server_tick, _idx as u32);
-                                let r2 = ai::hash01(_idx as u32, server_tick);
-                                let sp_yaw = (r1 - 0.5) * 2.0 * BOT_AIM_SPREAD;
-                                let sp_pitch = (r2 - 0.5) * 2.0 * BOT_AIM_SPREAD;
+                                let r1 = sim::ai::hash01(server_tick, _idx as u32);
+                                let r2 = sim::ai::hash01(_idx as u32, server_tick);
+                                let sp_yaw = (r1 - 0.5) * 2.0 * sim::ai::bot::BOT_AIM_SPREAD;
+                                let sp_pitch = (r2 - 0.5) * 2.0 * sim::ai::bot::BOT_AIM_SPREAD;
                                 let ay = bot.aim_yaw + sp_yaw;
                                 let ap = bot.aim_pitch + sp_pitch;
                                 let cp = ap.cos();
@@ -599,6 +603,7 @@ async fn game_loop(
                 // other slots' colliders. Collect shots first, then apply damage
                 // in a separate pass to avoid aliasing slots.
                 let mut frame_events: Vec<GameEvent> = Vec::new();
+                let mut frame_impacts: Vec<ImpactEvent> = Vec::new();
 
                 // Collect shooters: (shooter_idx, shot) for all alive slots with shots.
                 let mut shooters: Vec<(usize, Shot)> = Vec::new();
@@ -640,7 +645,7 @@ async fn game_loop(
 
                     let shooter_coll = slots[shooter_idx].collider_handle;
                     let mut hit_normal = nalgebra::Vector3::zeros();
-                    let hit = sim::shapecast::ray_cast(
+                    let world_hit = sim::shapecast::ray_cast(
                         &world.physics,
                         eye_x, eye_y, eye_z,
                         dir_x, dir_y, dir_z,
@@ -648,61 +653,122 @@ async fn game_loop(
                         &mut hit_normal,
                         Some(shooter_coll),
                     );
+                    // One fallback for "the ray hit nothing", used by both the
+                    // occlusion test and the impact position below. They used to
+                    // disagree (100 vs 80), which meant a shot could count as
+                    // unoccluded and still place its impact 20 m short.
+                    const MAX_SHOT_RANGE: f64 = 100.0;
+                    let world_dist = world_hit.unwrap_or(MAX_SHOT_RANGE);
 
-                    if let Some(dist) = hit {
-                        let hit_x = eye_x + dir_x * dist;
-                        let hit_y = eye_y + dir_y * dist;
-                        let hit_z = eye_z + dir_z * dist;
-                        let mut best_slot: Option<usize> = None;
-                        let mut best_dist_sq = f64::MAX;
-                        let shooter_ct = slots[shooter_idx].team_ct;
-                        for (ts, ts_slot) in slots.iter().enumerate() {
-                            if ts == shooter_idx || !ts_slot.occupied || !ts_slot.alive {
-                                continue;
-                            }
-                            // No friendly fire. Bots fire ~8 rounds/s while standing
-                            // in Engage and their teammates spawn a few metres away,
-                            // so without this a team shoots itself down and the
-                            // shooter is credited with the kills.
-                            if ts_slot.team_ct == shooter_ct {
-                                continue;
-                            }
-                            let tp = &ts_slot.player.position;
-                            let dx = hit_x - tp.x;
-                            let dy = hit_y - tp.y;
-                            let dz = hit_z - tp.z;
-                            let dsq = dx * dx + dy * dy + dz * dz;
-                            if dsq < best_dist_sq {
-                                best_dist_sq = dsq;
-                                best_slot = Some(ts);
-                            }
+                    // Phase E.3: replace flat-30 "nearest collider" with full
+                    // hitboxRay → computeDamage pipeline. For each alive non-friendly
+                    // enemy, trace the ray through their per-bone AABBs.
+                    let shooter_ct = slots[shooter_idx].team_ct;
+                    let mut best_target: Option<usize> = None;
+                    let mut best_hitbox = sim::damage::Hitbox::Chest;
+                    let mut best_t = f64::INFINITY;
+
+                    for (ts, ts_slot) in slots.iter().enumerate() {
+                        if ts == shooter_idx || !ts_slot.occupied || !ts_slot.alive {
+                            continue;
                         }
-                        if let Some(ts) = best_slot {
-                            if best_dist_sq < 2.25 {
-                                let target = &mut slots[ts];
-                                let dmg = 30u8.min(target.health);
-                                target.health -= dmg;
-                                if target.health == 0 {
-                                    target.alive = false;
-                                    let bf = target.bot_spawn.feet;
-                                    target.player.reset(bf[0], bf[1], bf[2]);
-                                    // Server-authoritative K/D tally (ts != shooter_idx,
-                                    // enforced by the target-search filter above).
-                                    target.deaths += 1;
-                                    slots[shooter_idx].kills += 1;
-                                    frame_events.push(GameEvent {
-                                        tag: EV_KILL,
-                                        slot: ts as u8,
-                                        by: shooter_idx as u8,
-                                    });
-                                    println!("slot {shooter_idx} killed slot {ts}");
-                                }
+                        if ts_slot.team_ct == shooter_ct {
+                            continue;
+                        }
+                        let tp = &ts_slot.player.position;
+                        let yaw = ts_slot.last_yaw as f64;
+                        // Must match the client's duckScaleY(1) = DUCKED_HEIGHT /
+                        // STANDING_HEIGHT = 0.9144 / 1.8288. A hand-rounded 0.6
+                        // made crouched hitboxes 20% taller than the model.
+                        let scale = if ts_slot.player.ducked { DUCKED_SCALE } else { 1.0 };
+                        let hit_on_bone = sim::hitbox::hitbox_ray(
+                            eye_x, eye_y, eye_z,
+                            dir_x, dir_y, dir_z,
+                            tp.x, tp.y, tp.z,
+                            yaw, scale,
+                        );
+                        if let Some(zone) = hit_on_bone {
+                            // Distance ALONG THE RAY to the target's chest, not
+                            // eye-to-feet: that is what has to be compared against
+                            // the distance to world geometry to decide whether a
+                            // wall got there first, and what damage falloff wants.
+                            let cx = tp.x - eye_x;
+                            let cy = tp.y + CHEST_HEIGHT * scale - eye_y;
+                            let cz = tp.z - eye_z;
+                            let t_along = cx * dir_x + cy * dir_y + cz * dir_z;
+                            if t_along >= 0.0 && t_along < best_t {
+                                best_t = t_along;
+                                best_target = Some(ts);
+                                best_hitbox = zone;
                             }
                         }
                     }
+
+                    let mut hit_surface: u8 = 0; // concrete
+                    if let Some(ts) = best_target {
+                        let ray_dist = best_t;
+                        // Strictly nearer than the wall. The old test allowed a
+                        // half-metre of slack, which let shots register through
+                        // thin geometry.
+                        if ray_dist <= world_dist {
+                            // Bullet reached the target before hitting geometry.
+                            hit_surface = 1; // flesh
+                            let dmg = sim::damage::compute_damage(
+                                &sim::damage::WEAPON_RIFLE,
+                                ray_dist,
+                                best_hitbox,
+                                slots[ts].armor,
+                            );
+                            let target = &mut slots[ts];
+                            let hp_dmg = (dmg.health as u8).min(target.health);
+                            let armor_dmg = (dmg.armor as u8).min(target.armor);
+                            target.health -= hp_dmg;
+                            target.armor -= armor_dmg;
+                            if target.health == 0 {
+                                target.alive = false;
+                                target.player.on_ground = false;
+                                target.deaths += 1;
+                                slots[shooter_idx].kills += 1;
+                                frame_events.push(GameEvent {
+                                    tag: EV_KILL,
+                                    slot: ts as u8,
+                                    by: shooter_idx as u8,
+                                });
+                                println!("slot {shooter_idx} killed slot {ts}");
+                            }
+                        }
+                    }
+
+                    // Only report an impact where something was actually struck.
+                    // Emitting one unconditionally put a puff, a decal and an
+                    // impact sound in mid-air at the far end of every missed
+                    // shot — with `hit_normal` still zeroed, so the decal had a
+                    // degenerate orientation too.
+                    let impact_dist = if hit_surface == 1 { Some(best_t) } else { world_hit };
+                    if let Some(dist) = impact_dist {
+                        frame_impacts.push(ImpactEvent {
+                            slot: shooter_idx as u8,
+                            pos: [
+                                (eye_x + dir_x * dist) as f32,
+                                (eye_y + dir_y * dist) as f32,
+                                (eye_z + dir_z * dist) as f32,
+                            ],
+                            normal: [
+                                hit_normal.x as f32,
+                                hit_normal.y as f32,
+                                hit_normal.z as f32,
+                            ],
+                            surface: hit_surface,
+                        });
+                    }
                 }
 
-                let snapshot = build_snapshot(&slots, &round, server_tick, frame_events);
+                // Ship the roster when it changes, plus a 1 Hz heartbeat so a
+                // client that connected between changes still learns the names.
+                let roster_sig = roster_signature(&slots);
+                let send_roster = roster_sig != last_roster_sig || server_tick % 64 == 0;
+                last_roster_sig = roster_sig;
+                let snapshot = build_snapshot(&slots, &round, server_tick, frame_events, frame_impacts, send_roster);
                 for slot in &slots {
                     if let (true, Some(out)) = (slot.occupied, &slot.out) {
                         let mut snap = snapshot.clone();
@@ -916,7 +982,21 @@ async fn game_loop(
     }
 }
 
-fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events: Vec<GameEvent>) -> Snapshot {
+/// Hash of everything the roster carries. Compared tick to tick so names ship
+/// only when they change (see `build_snapshot`).
+fn roster_signature(slots: &[Slot]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for (i, s) in slots.iter().enumerate() {
+        if s.occupied && (s.is_human || s.bot.is_some()) {
+            (i as u8).hash(&mut h);
+            s.display_name.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events: Vec<GameEvent>, impact_events: Vec<ImpactEvent>, send_roster: bool) -> Snapshot {
     // Include occupied-but-dead players (F_ALIVE clear) so the scoreboard sees
     // everyone mid-respawn; the client hides dead remote bodies via the flag. A
     // slot a human just left (occupied, but no bot and no human until the next
@@ -937,6 +1017,9 @@ fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events:
             if s.team_ct {
                 flags |= F_TEAM_CT;
             }
+            if p.on_ground {
+                flags |= F_ONGROUND;
+            }
             EntityState {
                 slot: i as u8,
                 flags,
@@ -950,15 +1033,34 @@ fn build_snapshot(slots: &[Slot], round: &game::State, server_tick: u32, events:
                 ammo: s.ammo,
                 kills: s.kills,
                 deaths: s.deaths,
-                name: s.display_name.clone(),
             }
         })
         .collect();
+    // Names change only on join/leave, so shipping them every tick was the whole
+    // thing Phase D set out to stop — moving them out of the entity record and
+    // then re-sending the same list 64 times a second saved nothing. `roster` is
+    // now populated only on the ticks where it actually changed; the client
+    // holds the last one it saw.
+    let roster: Vec<RosterEntry> = if send_roster {
+        slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.occupied && (s.is_human || s.bot.is_some()))
+            .map(|(i, s)| RosterEntry {
+                slot: i as u8,
+                name: s.display_name.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     Snapshot {
         server_tick,
         ack_seq: 0,
         entities,
         events,
+        impact_events,
+        roster,
         round: RoundState {
             phase: round.phase_value(),
             time_left_ms: round.time_left_ms,
@@ -1375,17 +1477,17 @@ mod enemy_filter_tests {
         let mut world = SimWorld::new();
         map::load(&mut world, MAP_JSON);
         world.ensure_broad_phase_ready();
-        let graph = nav_graph::NavGraph::from_json(NAVNODES_JSON);
+        let graph = sim::nav_graph::NavGraph::from_json(NAVNODES_JSON);
         let (positions, occupied, alive, teams) = stacked_teams();
         let feet = positions[0].unwrap();
 
         let run = |view: &[Option<Vector3<f64>>], world: &mut SimWorld| -> bool {
             let (_b, coll) = world.add_player_body();
-            let mut bot = ai::Bot::new(0, 0);
-            let mut search = ai::SearchState::new(graph.node_count());
+            let mut bot = sim::ai::Bot::new(0, 0);
+            let mut search = sim::ai::SearchState::new(graph.node_count());
             let mut moved = false;
             for tick in 0..200 {
-                let (buttons, _) = ai::tick_bot(
+                let (buttons, _) = sim::ai::tick_bot(
                     &mut bot, world, &feet, coll, view, &alive, &graph,
                     &mut search, &[], &[], tick,
                 );

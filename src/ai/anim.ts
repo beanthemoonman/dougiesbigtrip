@@ -7,9 +7,9 @@
  * anim.test.ts.
  */
 import { AnimationMixer, LoopOnce, LoopRepeat, type AnimationClip, type AnimationAction, type Object3D } from 'three';
-import type { BotMode } from './brain';
 
 export type AnimClip = 'idle' | 'walk' | 'death';
+export type BotMode3P = 'search' | 'engage' | 'reposition' | 'dead';
 
 const WALK_SPEED_THRESHOLD = 0.5; // m/s; below this the bot is "standing"
 const FADE_DURATION = 0.15;       // s; crossfade between clips
@@ -53,16 +53,18 @@ export function createBotAnim(root: Object3D, templateClips: AnimationClip[]): B
 }
 
 /**
- * Advance the animation state for one sim tick. Reads bot speed + ground
+ * Advance the animation state for one render frame. Reads bot speed + ground
  * contact + the brain FSM mode to pick the right clip. The mixer is stepped by
- * `dt` at the fixed sim rate (64 Hz). The caller must also set the bot root's
- * world position and rotation separately.
+ * `dt` at the render frame rate (typically 1/120 s), not at the 64 Hz fixed
+ * sim rate — animation is explicitly outside the deterministic sim per
+ * docs/netcode.md §2. The caller must also set the bot root's world position
+ * and rotation separately.
  */
 export function driveBotAnim(
   state: BotAnimState,
   speed: number,
   onGround: boolean,
-  mode: BotMode,
+  mode: BotMode3P,
   dt: number,
 ): void {
   if (mode === 'dead') {

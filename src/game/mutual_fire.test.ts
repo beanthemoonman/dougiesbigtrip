@@ -2,7 +2,6 @@ import { Vector3 } from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createKinematicCapsule, createWorld, initPhysics } from '../physics/world';
 import { rayCast } from '../physics/shapecast';
-import { canSee } from '../ai/perception';
 import {
   EYE_HEIGHT_STANDING,
   PLAYER_RADIUS,
@@ -74,9 +73,15 @@ describe('mutual fire: player <-> bot', () => {
     const playerFeet = new Vector3(0, 0, -10);
     const { world, bot } = scene(playerFeet, botFeet);
 
-    // Bot faces -Z (yaw 0), player is straight ahead. canSee excludes the bot's
-    // own collider (perception.ts:51); the player's collider sits 0.1m past the
-    // ray's end, so it must not self-block either.
-    expect(canSee(world, botFeet, 0, playerFeet, bot.collider)).toBe(true);
+    // Bot faces -Z (yaw 0), player is straight ahead. Ray from bot eye to
+    // player eye with the bot's own collider excluded.
+    const botEye = new Vector3(botFeet.x, botFeet.y + EYE_HEIGHT_STANDING, botFeet.z);
+    const playerEye = new Vector3(playerFeet.x, playerFeet.y + EYE_HEIGHT_STANDING, playerFeet.z);
+    const toPlayer = playerEye.clone().sub(botEye);
+    const dist = toPlayer.length();
+    toPlayer.normalize();
+    const outNormal = new Vector3();
+    const hit = rayCast(world, botEye, toPlayer, dist - PLAYER_RADIUS - 0.05, outNormal, bot.collider);
+    expect(hit).toBeNull();
   });
 });

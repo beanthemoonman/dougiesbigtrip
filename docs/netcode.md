@@ -120,7 +120,7 @@ shot: 0 | 1               // fired this tick?
 
 Each packet re-sends any unacked commands (cheap redundancy against loss).
 
-### 3.2 Server → Client: `Snapshot` (delta-encoded, ~20 Hz)
+### 3.2 Server → Client: `Snapshot` (full, 64 Hz — see the note below)
 
 ```
 tag: u8 = SNAP
@@ -136,10 +136,16 @@ events[]:    kill(slot,by) | shotTracer(slot,from,to,weapon) | spawn(slot) | rou
 round:       { phase:u8, timeLeftMs:u32, scoreT:u16, scoreCT:u16 }
 ```
 
-- Server **simulates** at 64 Hz, **sends** at ~20 Hz (interpolation covers the gap). Start by
-  sending every tick if simpler; throttle only if bandwidth is measured to matter.
-- Delta baseline is the client's last **acked** snapshot; `events` are resent until acked
-  (reliable-ish over the ordered WS stream).
+- **As built:** the server simulates *and* sends at 64 Hz, full snapshots, no delta encoding.
+  The "start by sending every tick if simpler" option above is what shipped and never got
+  revisited. Client interpolation (§5.3) is what makes a lower rate safe, and it only started
+  working correctly recently — throttling to ~20 Hz is now a viable experiment, not a
+  prerequisite. Measure before changing it.
+- Names are **not** in the entity record. They ship in a `roster` list, sent only on change
+  plus a 1 Hz heartbeat so late joiners still learn them.
+- Impacts ship as a separate `impact_events` list (hit position, normal, surface), emitted only
+  when a shot actually strikes something.
+- Delta encoding is still **not implemented**; `events` are sent once, not resent until acked.
 - Your own slot rides in the snapshot too — the client uses it to **reconcile**, not to render.
 
 ### 3.3 Control messages

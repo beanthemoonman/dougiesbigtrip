@@ -17,16 +17,10 @@ import { Color, FogExp2, Group, MathUtils, Object3D, Quaternion, Vector3 } from 
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import mapGlbUrl from '../../assets/maps/de_douglas.glb?url';
-import navUrl from '../../assets/maps/de_douglas.navmesh.bin?url';
+import navNodesJson from '../../assets/maps/de_douglas.navnodes.json?raw';
 import mapKtx2Url from '../../assets/maps/de_douglas/lightmap.ktx2?url';
 import rifleUrl from '../../assets/weapons/ak_viewmodel.glb?url';
 import pistolUrl from '../../assets/weapons/pistol_viewmodel.glb?url';
-import { createBot } from '../ai/bot';
-import { createBrain, DIFFICULTIES, hearSound, killBot, tickBrain, type BotBrain } from '../ai/brain';
-import { SearchScore, nearestNode } from '../ai/navnodes';
-import { canSee } from '../ai/perception';
-import { botShotLands } from '../ai/aim';
-import { loadNav } from '../ai/nav';
 import { createBotAnim, driveBotAnim, resetBotAnim, type BotAnimState } from '../ai/anim';
 import { applyWeaponPose, getWeaponMuzzle } from '../ai/thirdperson';
 import { createRagdollWorld, despawnRagdollBody, ragdollExpired, spawnRagdollBody, type RagdollBody } from '../ai/ragdoll';
@@ -51,8 +45,8 @@ import { updateViewCamera, type ViewState } from '../player/camera';
 import { createMovementContext, createPlayerState, type PlayerState } from '../player/movement';
 import { moveSpectator } from '../player/spectator';
 import { rayCast } from '../physics/shapecast';
-import { addStaticBox, createWorld, initPhysics } from '../physics/world';
-import { sim_add_box, sim_add_player, sim_add_prop_box, sim_add_ramp, sim_disable_prop_box, sim_get_state, sim_init, sim_reset_player, sim_set_player, sim_tick } from 'sim-wasm';
+import { addStaticBox, createKinematicCapsule, createWorld, initPhysics } from '../physics/world';
+import { sim_add_box, sim_add_bot, sim_add_prop_box, sim_add_ramp, sim_bot_shot_lands, sim_disable_prop_box, sim_get_bot_target_slot, sim_get_state, sim_init, sim_init_bots, sim_kill_bot, sim_reset_bot, sim_reset_player, sim_set_player, sim_set_team, sim_tick, sim_tick_bot } from 'sim-wasm';
 import { createConnection } from '../net/connection';
 import { createPredictor, attachShot, type Predictor } from '../net/prediction';
 import { createInterpolationBuffer } from '../net/interpolation';
@@ -115,6 +109,16 @@ function stanceOf(player: PlayerState): Stance {
 // position and the linear distance model silences it past its own range
 // (core/audio.ts: GUNSHOT_RANGE / FOOTSTEP_RANGE). No manual falloff here.
 
+/** Map server surface IDs to the client Surface type used by VFX. */
+function surfaceFromId(id: number): Surface {
+  switch (id) {
+    case 1: return 'flesh';
+    case 2: return 'wood';
+    case 3: return 'metal';
+    default: return 'concrete';
+  }
+}
+
 export async function startGameSession(ctx: SessionContext): Promise<void> {
   const { canvas, renderCtx, input, screens, auth, validatedBootUrl } = ctx;
 
@@ -168,6 +172,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   let serverPhase = -1; // 0=freezetime, 1=live, 2=over; -1 = not synced yet
   let serverRoundsToWin = 0; // from Welcome; 0 = pre-Phase-16 server, no match end
   let lastSnapshot: Snapshot | null = null; // latest snapshot; drives the MP scoreboard
+  const slotNameMap = new Map<number, string>(); // slot → display name, updated from roster
   // Single-player K/D tally for the local human (bots carry their own on the Enemy).
   let humanKills = 0;
   let humanDeaths = 0;
@@ -195,7 +200,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     e.active = false;
     e.alive = false;
     e.root.visible = false;
-    e.brain.bot.collider.setEnabled(false);
+    e.collider.setEnabled(false);
   }
   // Free a seat on `team` for the human, benching a bot. Reclaims the seat if the human
   // is rejoining a team they left this round (no double-drop).
@@ -219,6 +224,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     }
     if (!benchedBot || benchedBot.team !== team) benchedBot = displaceBotFor(team);
     playerTeam = team;
+    sim_set_team(0, team === 'CT' ? 1 : 0);
     const spawnPt = team === 'T' ? T_SPAWN : CT_SPAWN;
     spawn.set(spawnPt[0], spawnPt[1], spawnPt[2]);
     player.position.copy(spawn);
@@ -296,6 +302,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     }
     const conn = createConnection();
     conn.onWelcome = (w): void => {
+      interpBuf.reset(); // clear stale snapshots from a prior connection
       serverRoundsToWin = w.roundsToWin;
       if (w.yourSlot === SPECTATOR) {
         teamMenu.setCounts(w.players, w.maxPlayers, w.spectators, w.specCap);
@@ -351,7 +358,13 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           showPlayerBodyTeam(playerTeam === 'CT');
           playerRagdoll = spawnRagdollBody(ragdollWorld, player.position, player.velocity, simTime);
         }
-        if (ev.tag === EV_FIRE) pendingFireSlots.add(ev.slot);
+        if (ev.tag === EV_FIRE) pendingFireQueue.push({ slot: ev.slot, tick: s.serverTick });
+      }
+      for (const imp of s.impactEvents ?? []) {
+        pendingImpactQueue.push({ slot: imp.slot, tick: s.serverTick, pos: imp.pos, normal: imp.normal, surface: imp.surface });
+      }
+      for (const r of s.roster ?? []) {
+        slotNameMap.set(r.slot, r.name);
       }
     };
     conn.onClose = (): void => {
@@ -468,8 +481,8 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     );
   });
 
-  loading.step('Loading navmesh…');
-  const nav = await loadNav(navUrl);
+  loading.step('Loading navgraph…');
+  sim_init_bots(navNodesJson);
   loading.step('Loading characters…');
 
   // Phase 9: player spawns at the origin initially (body disabled); enterGame()
@@ -487,12 +500,12 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   // Fixed seed: the sim stays reproducible for a recorded trace. core/rng.ts is
   // the only randomness allowed under src/.
   const rng = makeRng(1);
-  const searchState = new SearchScore();
-  let localTick = 0; // monotonic counter for the search-spread recency formula
+  let localTick = 0; // monotonic tick counter, passed to WASM bot AI as server_tick
   let simTime = 0; // accumulated sim time (s), used for ragdoll despawn timers
   // Phase 12.3: per-bot ragdoll bodies, spawned on death and despawned after a timer.
   const ragdolls = new Map<Enemy, RagdollBody>();
-  const pendingFireSlots = new Set<number>(); // EV_FIRE slots for muzzle FX this frame
+  const pendingFireQueue: { slot: number; tick: number }[] = []; // EV_FIRE with server tick
+  const pendingImpactQueue: { slot: number; tick: number; pos: [number, number, number]; normal: [number, number, number]; surface: number }[] = [];
   const shotDir = new Vector3();
   const shotOrigin = new Vector3();
   const hitNormal = new Vector3();
@@ -529,10 +542,20 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   type Team = 'T' | 'CT';
   interface Enemy {
     readonly team: Team;
-    readonly brain: BotBrain;
+    readonly wasmIndex: number; // index in the WASM sim (player state + bot AI)
     readonly root: Group; // wraps the cloned armature+skinned-mesh so we can position/yaw
     readonly anim: BotAnimState;
     readonly spawn: Vector3;
+    // Synced from WASM sim each tick (for rendering + hit detection)
+    position: Vector3;
+    velocity: Vector3;
+    onGround: boolean;
+    duckAmount: number;
+    aimYaw: number;
+    mode: number; // 0=Search, 1=Engage, 2=Reposition, 3=Dead
+    // Kinematic capsule in the TS Rapier world (hit detection raycasts)
+    collider: import('@dimforge/rapier3d-compat').Collider;
+    body: import('@dimforge/rapier3d-compat').RigidBody;
     // Phase 9 roster: a bot is benched (active=false) when a human takes its slot —
     // hidden, no collider, never revived — until the human leaves and it backfills.
     active: boolean;
@@ -568,24 +591,38 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   // they were created unconditionally and the loop merely stopped *updating* them —
   // leaving frozen bodies visible at both spawn rows whose Rapier capsules still
   // blocked movement and swallowed local tracer raycasts.
+  let botSeq = 0; // sequential index for tick offset de-synchronisation
   const enemies: Enemy[] = (netMode ? [] : botDefs).map(({ team, s }) => {
-    const wasmIndex = sim_add_player(s.x, s.y, s.z);
-    const bot = createBot(world, s, wasmIndex);
+    const tickOffset = (botSeq++) * 17;
+    const teamByte = team === 'CT' ? 1 : 0;
+    const wasmIndex = sim_add_bot(s.x, s.y, s.z, tickOffset, teamByte);
+    // Create TS kinematic capsule for hit detection (human bullets → bot colliders)
+    const centerY = s.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS;
+    const center = new Vector3(s.x, centerY, s.z);
+    const { body, collider } = createKinematicCapsule(world, center, STANDING_HALF_HEIGHT, PLAYER_RADIUS);
     const clone = cloneSkeleton(templateFor(team));
-    clone.visible = true; // template is hidden; clones must be visible
+    clone.visible = true;
     flattenMaterials(clone);
-    attachBotWeapon(clone); // Bug 2: rifle in the bot's right hand
+    attachBotWeapon(clone);
     const root = new Group();
     root.add(clone);
     root.position.set(s.x, s.y, s.z);
-    root.rotation.y = bot.yaw;
+    root.rotation.y = 0;
     renderCtx.scene.add(root);
     return {
       team,
-      brain: createBrain(bot, DIFFICULTIES.normal),
+      wasmIndex,
       root,
       anim: createBotAnim(clone, ctTemplateClips),
       spawn: s,
+      position: s.clone(),
+      velocity: new Vector3(),
+      onGround: false,
+      duckAmount: 0,
+      aimYaw: 0,
+      mode: 0,
+      collider,
+      body,
       active: true,
       alive: true,
       hp: BOT_MAX_HP,
@@ -596,7 +633,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     };
   });
   // Map each bot's collider back to its Enemy so a player hitscan can find it.
-  const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.brain.bot.collider.handle, e]));
+  const byCollider = new Map<number, Enemy>(enemies.map((e) => [e.collider.handle, e]));
 
   // --- Local player third-person body (Phase 12). Single-player is first-person,
   // so the only time you see your own avatar is the death cam: on death this CT
@@ -634,16 +671,10 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   const remoteSteps = new Map<number, { x: number; z: number; dist: number }>();
   const remoteAnims = new Map<number, BotAnimState>(); // slot → animation mixer + state
   const remoteAlive = new Map<number, boolean>(); // slot → last known alive flag
-  // How long a networked corpse stays up playing its death clip before it is
-  // hidden. ponytail: a fixed duration rather than reading the clip length off
-  // the mixer — the clip clamps on its last frame, so overshooting just holds
-  // the pose. Revisit if the death animation is ever re-authored longer.
-  const DEATH_CLIP_SECONDS = 2.0;
-  // slot → where the model was standing when it died, plus the seconds left of
-  // the death clip. The server teleports a corpse's position straight back to
-  // its spawn point (main.rs, on health reaching 0), so the death animation has
-  // to play at a remembered position, not the one on the wire.
-  const remoteDeaths = new Map<number, { x: number; y: number; z: number; t: number }>();
+  // Phase B: remote corpses use the same ragdoll path as SP bots.
+  const remoteRagdolls = new Map<number, RagdollBody>(); // slot → ragdoll body
+  const sDeathPos = new Vector3(); // scratch — no allocation in the render loop
+  const sDeathVel = new Vector3();
   /** Drop every per-slot resource. The maps must be torn down together: keeping
    *  the root while dropping the mixer leaves a model that can never animate
    *  again, because remoteRootFor only builds a mixer when it builds the root. */
@@ -655,7 +686,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     remoteAnims.delete(slot);
     remoteSteps.delete(slot);
     remoteAlive.delete(slot);
-    remoteDeaths.delete(slot);
+    const rag = remoteRagdolls.get(slot);
+    if (rag) despawnRagdollBody(rag); // else the Rapier body leaks on disconnect
+    remoteRagdolls.delete(slot);
   }
   function remoteRootFor(slot: number, teamCt: boolean): Group {
     // A slot that switches team must get the other side's model — the cached one
@@ -680,33 +713,6 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     return root;
   }
 
-  // The human plays the chosen team (set in enterGame / enterSpectator).
-  // Nearest ALIVE, VISIBLE enemy for a given bot. Returns the human sentinel,
-  // an Enemy, or null (nobody in sight → the brain patrols/repositions).
-  type Target = Enemy | 'human' | null;
-  function pickTarget(me: Enemy): Target {
-    const from = me.brain.bot.position;
-    const yaw = me.brain.aim.yaw;
-    const coll = me.brain.bot.collider;
-    let best: Target = null;
-    let bestD = Infinity;
-    if (me.team !== playerTeam && playerAlive) {
-      const d = from.distanceToSquared(playerFeet);
-      if (d < bestD && canSee(world, from, yaw, playerFeet, coll)) {
-        bestD = d;
-        best = 'human';
-      }
-    }
-    for (const other of enemies) {
-      if (other === me || !other.alive || other.team === me.team) continue;
-      const d = from.distanceToSquared(other.brain.bot.position);
-      if (d < bestD && canSee(world, from, yaw, other.brain.bot.position, coll)) {
-        bestD = d;
-        best = other;
-      }
-    }
-    return best;
-  }
   const rayHit: { collider: import('@dimforge/rapier3d-compat').Collider | null } = { collider: null };
   const botEye = new Vector3();
   const botToPlayer = new Vector3();
@@ -805,20 +811,14 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         despawnRagdollBody(oldRagdoll);
         ragdolls.delete(e);
       }
-      const b = e.brain.bot;
-      b.collider.setEnabled(true);
-      b.position.copy(e.spawn);
-      b.velocity.set(0, 0, 0);
-      b.path = [];
-      b.waypoint = 0;
-      sim_reset_player(b.wasmIndex, e.spawn.x, e.spawn.y, e.spawn.z);
-      e.brain.mode = 'search';
-      e.brain.lastKnown = null;
-      e.brain.reactionTimer = 0;
-      // Reseed the search goal to the spawn node so tick 1 re-picks immediately
-      // (else the bot walks to a stale cross-map goal from the previous round).
-      e.brain.currentNode = nearestNode(e.spawn.x, e.spawn.y, e.spawn.z);
-      e.brain.pathGoalNode = e.brain.currentNode;
+      e.collider.setEnabled(true);
+      e.position.copy(e.spawn);
+      e.velocity.set(0, 0, 0);
+      e.aimYaw = 0;
+      e.mode = 0;
+      e.onGround = false;
+      e.duckAmount = 0;
+      sim_reset_bot(e.wasmIndex, e.spawn.x, e.spawn.y, e.spawn.z);
       e.root.position.set(e.spawn.x, e.spawn.y, e.spawn.z);
       resetBotAnim(e.anim);
       // Sync the collider to the spawn position now. Without this
@@ -827,15 +827,16 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       bodyCenterScratch.set(
         e.spawn.x, e.spawn.y + STANDING_HALF_HEIGHT + PLAYER_RADIUS, e.spawn.z,
       );
-      b.collider.setTranslation(bodyCenterScratch);
-      b.body.setTranslation(bodyCenterScratch, true);
+      e.collider.setTranslation(bodyCenterScratch);
+      e.body.setTranslation(bodyCenterScratch, true);
     }
     // Flush the query BVH so the very next raycast (human fire or bot
     // perception) sees every capsule at its fresh spawn position.
     world.updateSceneQueries();
     // Phase 12.3: clear pending fire events on round reset so stale EV_FIRE
     // from the previous round don't linger.
-    pendingFireSlots.clear();
+    pendingFireQueue.length = 0;
+    pendingImpactQueue.length = 0;
     // Phase 13.3: restore any breakable props destroyed in the previous round.
     restoreBreakables();
   }
@@ -1043,55 +1044,50 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         moveSpectator(specPos, input.state.buttons, input.state.yaw, input.state.pitch, fixedDt);
       }
 
-      // Bots (both teams): pick the nearest visible enemy, run the FSM, shoot.
+      // Bots (both teams): WASM AI drives the FSM, then WASM sim runs movement.
       // In networked mode the server is authoritative for all entities; local bot
       // simulation would create duplicate models and waste CPU on shadow sim ticks.
       if (live && !netMode) {
+        // Build alive array: one entry per WASM player slot. Index 0 = human,
+        // indices 1+ = bots added via sim_add_bot.
+        const alive: number[] = [playerAlive ? 1 : 0];
+        for (const e of enemies) alive.push(e.alive ? 1 : 0);
+
         for (const e of enemies) {
           if (!e.alive) continue;
           e.fireCooldown = Math.max(0, e.fireCooldown - fixedDt);
-          // Nearest visible enemy this tick (human or an opposing bot).
-          const target = pickTarget(e);
-          const targetAlive = target === 'human' ? playerAlive : target !== null && target.alive;
-          const targetFeet = target === 'human' ? playerFeet : target ? target.brain.bot.position : playerFeet;
-          // Build teammate positions for spread-out search (same-team, excl. self).
-          const teammateFeet: Vector3[] = [];
-          const teammateGoals: number[] = [];
-          for (const other of enemies) {
-            if (other === e || !other.alive) continue;
-            if (other.team !== e.team) continue;
-            teammateFeet.push(other.brain.bot.position);
-            teammateGoals.push(other.brain.pathGoalNode);
-          }
-          const { fire, buttons, yaw } = tickBrain(
-            e.brain, world, nav, rng, targetFeet, targetAlive, fixedDt,
-            searchState, teammateFeet, localTick, teammateGoals,
-          );
+          // Walk the brain in WASM — returns [buttons, yaw, should_fire, aim_yaw, aim_pitch, mode]
+          const result = sim_tick_bot(e.wasmIndex, localTick, new Uint8Array(alive));
+          const buttons = result[0]!;
+          const yaw = result[1]!;
+          const shouldFire = result[2] !== 0;
+          const aimYaw = result[3]!;
+          const mode = result[5]!;
+          // Cache for the render path (avoids Wasm calls on the render thread)
+          e.aimYaw = aimYaw;
+          e.mode = mode;
           // Apply WASM movement for this bot, then sync the TS kinematic body
-          // so perception and hit-detection are up-to-date.
-          const bs = sim_tick(e.brain.bot.wasmIndex, buttons, yaw);
-          const b = e.brain.bot;
-          b.position.set(bs[0]!, bs[1]!, bs[2]!);
-          b.velocity.set(bs[3]!, bs[4]!, bs[5]!);
-          b.onGround = bs[6]! === 1;
-          b.eyeHeight = bs[7]!;
-          b.duckAmount = bs[9]!;
-          const botHalf = duckHalfHeight(b.duckAmount);
-          b.collider.setHalfHeight(botHalf);
-          bodyCenterScratch.set(b.position.x, b.position.y + botHalf + PLAYER_RADIUS, b.position.z);
-          b.collider.setTranslation(bodyCenterScratch);
-          b.body.setTranslation(bodyCenterScratch, true);
-          const botSpeed = Math.hypot(b.velocity.x, b.velocity.z);
-          driveBotAnim(e.anim, botSpeed, b.onGround, e.brain.mode, fixedDt);
+          // so hit-detection is up-to-date.
+          const bs = sim_tick(e.wasmIndex, buttons, yaw);
+          e.position.set(bs[0]!, bs[1]!, bs[2]!);
+          e.velocity.set(bs[3]!, bs[4]!, bs[5]!);
+          e.onGround = bs[6]! === 1;
+          e.duckAmount = bs[9]!;
+          const botHalf = duckHalfHeight(e.duckAmount);
+          e.collider.setHalfHeight(botHalf);
+          bodyCenterScratch.set(e.position.x, e.position.y + botHalf + PLAYER_RADIUS, e.position.z);
+          e.collider.setTranslation(bodyCenterScratch);
+          e.body.setTranslation(bodyCenterScratch, true);
+          const botSpeed = Math.hypot(e.velocity.x, e.velocity.z);
+          const modeStr = ['search', 'engage', 'reposition', 'dead'][mode] as 'search' | 'engage' | 'reposition' | 'dead';
+          driveBotAnim(e.anim, botSpeed, e.onGround, modeStr, fixedDt);
           // Audible footsteps (positional). Same stride pacing as the player;
-          // the panner handles distance + direction, so no gating here beyond
-          // "there is an ear to hear it" — a spectator hears them too, from the
-          // free-fly camera, which is where the listener sits while dead.
-          const botStep = advanceStride(e.stepDist, b.onGround ? botSpeed : 0, fixedDt);
+          // the panner handles distance + direction.
+          const botStep = advanceStride(e.stepDist, e.onGround ? botSpeed : 0, fixedDt);
           e.stepDist = botStep.dist;
-          if (botStep.stepped) playFootstep('concrete', b.position);
+          if (botStep.stepped) playFootstep('concrete', e.position);
           applyWeaponPose(e.root, 'rifle');
-          if (fire && e.fireCooldown === 0 && target !== null && targetAlive) {
+          if (shouldFire && e.fireCooldown === 0) {
             e.fireCooldown = BOT_WEAPON.fireInterval;
             // Third-person muzzle flash + tracer from the bot's weapon (Phase 12.2).
             const wm = getWeaponMuzzle(e.root);
@@ -1099,14 +1095,29 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
               vfx.muzzleFlash(wm.pos, wm.dir);
               vfx.tracer(wm.pos, wm.dir.clone().multiplyScalar(100).add(wm.pos));
             }
-            botEye.set(b.position.x, b.position.y + EYE_HEIGHT_STANDING, b.position.z);
-            const teye = target === 'human' ? player.eyeHeight : EYE_HEIGHT_STANDING;
+            botEye.set(e.position.x, e.position.y + EYE_HEIGHT_STANDING, e.position.z);
+            // Determine who the bot is shooting at. The WASM brain tracks target_slot;
+            // use botShotLands (per-shot miss cone) to decide if it hits.
+            const targetSlot = sim_get_bot_target_slot(e.wasmIndex);
+            let targetType: 'human' | Enemy | null = null;
+            let targetFeet = new Vector3();
+            if (targetSlot === 0 && playerAlive && e.team !== playerTeam) {
+              targetType = 'human';
+              targetFeet = playerFeet;
+            } else if (targetSlot > 0) {
+              const targetEnemy = enemies.find((o) => o.wasmIndex === targetSlot);
+              if (targetEnemy && targetEnemy.alive && targetEnemy.team !== e.team) {
+                targetType = targetEnemy;
+                targetFeet = targetEnemy.position;
+              }
+            }
+            const teye = targetType === 'human' ? player.eyeHeight : EYE_HEIGHT_STANDING;
             botToPlayer.set(targetFeet.x, targetFeet.y + teye, targetFeet.z).sub(botEye);
             const dist = botToPlayer.length();
             // Per-shot miss roll (deterministic via seeded rng). Only a landed
             // shot deals damage — no more guaranteed chest hits.
-            if (botShotLands(dist, BOT_AIM_SPREAD, rng.next(), rng.next())) {
-              if (target === 'human') {
+            if (targetType && sim_bot_shot_lands(dist, BOT_AIM_SPREAD, rng.next(), rng.next(), PLAYER_RADIUS)) {
+              if (targetType === 'human') {
                 const dmg = computeDamage(BOT_WEAPON, dist, 'chest', armor);
                 health -= dmg.health;
                 armor -= dmg.armor;
@@ -1120,32 +1131,27 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
                   playerAlive = false;
                   humanDeaths += 1;
                   e.kills += 1;
-                  // Bug 3: enter free-fly spectator from the death eye position.
                   specPos.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
-                  // Phase 12: ragdoll the player body so the spectator cam sees the corpse.
                   showPlayerBodyTeam(playerTeam === 'CT');
                   playerRagdoll = spawnRagdollBody(ragdollWorld, player.position, player.velocity, simTime);
                 }
               } else {
+                const target = targetType;
                 target.hp -= computeDamage(BOT_WEAPON, dist, 'chest', 0).health;
                 if (target.hp <= 0) {
                   target.alive = false;
                   target.deaths += 1;
                   e.kills += 1;
-                  target.brain.bot.collider.setEnabled(false);
-                  killBot(target.brain);
-                  // Phase 12.3: spawn a cosmetic ragdoll body at the death position
-                  // with the death-frame velocity (the body carries momentum).
-                  const bp = target.brain.bot.position;
-                  const bv = target.brain.bot.velocity;
+                  target.collider.setEnabled(false);
+                  sim_kill_bot(target.wasmIndex);
+                  const bp = target.position;
+                  const bv = target.velocity;
                   const rbody = spawnRagdollBody(ragdollWorld, bp, bv, simTime);
                   ragdolls.set(target, rbody);
                 }
               }
             }
-            // Bot gunshot audio: positional. A whiff is still a bang — play for
-            // every shot, not only landed hits. The panner's linear distance
-            // model keeps the far side of the map quiet (GUNSHOT_RANGE).
+            // Bot gunshot audio: positional.
             playGunshot('rifle', botEye);
           }
         }
@@ -1187,8 +1193,6 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           if (shot) {
             onFire(anim);
             playGunshot(active.id);
-            // The shot is a sound bots can hear → they investigate from idle.
-            for (const e of enemies) if (e.alive && e.team !== playerTeam) hearSound(e.brain, playerFeet);
             // From the eye, not the muzzle (docs/weapon-feel.md §2) — the bullet
             // goes where the crosshair is, which is the point of the whole model.
             shotOrigin.set(player.position.x, player.position.y + player.eyeHeight, player.position.z);
@@ -1213,66 +1217,63 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
               // Networked: the server owns hitreg. Ship eye + spread-adjusted dir
               // on this tick's command; kill/damage arrive via snapshot events.
               if (netCmd) attachShot(netCmd, shotOrigin, shot.direction);
-            } else if (distance !== null) {
+            }
+            if (distance !== null) {
               impact.copy(shotOrigin).addScaledVector(shot.direction, distance);
               const enemy = rayHit.collider ? byCollider.get(rayHit.collider.handle) : undefined;
-              // Friendly fire off: teammate bullets pass through (no damage), but
-              // a hit on an enemy bot resolves the precise hitbox below.
-              if (enemy && enemy.alive && enemy.team === playerTeam) {
-                // Teammate — bullet absorbed, no effect.
-              } else if (enemy && enemy.alive) {
-                // Precise per-bone zone from the shot ray in the bot's frame;
-                // fall back to the height band if it grazed the collider but
-                // missed every bone box (an edge clip that still counts).
-                const bp = enemy.brain.bot.position;
-                const bscale = duckScaleY(enemy.brain.bot.duckAmount);
-                const hitbox = hitboxRay(
-                  shotOrigin.x, shotOrigin.y, shotOrigin.z,
-                  shot.direction.x, shot.direction.y, shot.direction.z,
-                  bp.x, bp.y, bp.z, enemy.brain.aim.yaw, bscale,
-                ) ?? hitboxAt(bp.y, impact.y, bscale);
-                enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
-                vfx.impact(impact, hitNormal, 'flesh'); // blood puff, no bullet hole
+              const surface = (rayHit.collider ? surfaceByCollider.get(rayHit.collider.handle) : undefined) ?? 'concrete';
+
+              // Authority half: damage + prop destruction is SP-only.
+              if (!netMode) {
+                if (enemy && enemy.alive && enemy.team !== playerTeam) {
+                  const bp = enemy.position;
+                  const bscale = duckScaleY(enemy.duckAmount);
+                  const hitbox = hitboxRay(
+                    shotOrigin.x, shotOrigin.y, shotOrigin.z,
+                    shot.direction.x, shot.direction.y, shot.direction.z,
+                    bp.x, bp.y, bp.z, enemy.aimYaw, bscale,
+                  ) ?? hitboxAt(bp.y, impact.y, bscale);
+                  enemy.hp -= computeDamage(weapon, distance, hitbox, 0).health;
+                  if (enemy.hp <= 0) {
+                    enemy.alive = false;
+                    enemy.deaths += 1;
+                    humanKills += 1;
+                    enemy.collider.setEnabled(false);
+                    sim_kill_bot(enemy.wasmIndex);
+                    const bv = enemy.velocity;
+                    const rbody = spawnRagdollBody(ragdollWorld, bp, bv, simTime);
+                    ragdolls.set(enemy, rbody);
+                  }
+                } else if (!enemy || !enemy.alive) {
+                  // Breakable props, SP-only.
+                  const pi = rayHit.collider ? propByCollider.get(rayHit.collider.handle) : undefined;
+                  const dmg = pi === undefined ? 0 : computeDamage(weapon, distance, 'chest', 0).health;
+                  const broke = pi === undefined ? [] : damageProp(breakables, pi, dmg);
+                  for (const bi of broke) {
+                    const pp = placedProps[bi];
+                    if (!pp) continue;
+                    renderCtx.scene.remove(pp.mesh);
+                    const oldHandle = pp.collider.handle;
+                    const parentBody = pp.collider.parent();
+                    if (parentBody) world.removeRigidBody(parentBody);
+                    else world.removeCollider(pp.collider, false);
+                    propByCollider.delete(oldHandle);
+                    surfaceByCollider.delete(oldHandle);
+                    sim_disable_prop_box(bi);
+                  }
+                }
+              }
+
+              // Cosmetic half: VFX always runs, server hitreg or not.
+              const isEnemyHit = enemy && enemy.alive && enemy.team !== playerTeam;
+              if (isEnemyHit) {
+                vfx.impact(impact, hitNormal, 'flesh');
                 playImpact('flesh', impact);
-                if (enemy.hp <= 0) {
-                  enemy.alive = false;
-                  enemy.deaths += 1;
-                  humanKills += 1;
-                  enemy.brain.bot.collider.setEnabled(false);
-                  killBot(enemy.brain);
-                  const bp = enemy.brain.bot.position;
-                  const bv = enemy.brain.bot.velocity;
-                  const rbody = spawnRagdollBody(ragdollWorld, bp, bv, simTime);
-                  ragdolls.set(enemy, rbody);
-                }
               } else {
-                // Not a bot: maybe a breakable prop. Damage it; break cascades to
-                // anything stacked on top so nothing is left standing mid-air.
-                const pi = rayHit.collider ? propByCollider.get(rayHit.collider.handle) : undefined;
-                const dmg = pi === undefined ? 0 : computeDamage(weapon, distance, 'chest', 0).health;
-                const broke = pi === undefined ? [] : damageProp(breakables, pi, dmg);
-                for (const bi of broke) {
-                  const pp = placedProps[bi];
-                  if (!pp) continue;
-                  renderCtx.scene.remove(pp.mesh);
-                  // Actually remove it: setEnabled(false) does NOT take the collider
-                  // out of the query pipeline, so bullets and bot LOS kept hitting the
-                  // invisible box. restoreBreakables() builds a fresh one each round.
-                  const oldHandle = pp.collider.handle;
-                  const parentBody = pp.collider.parent();
-                  if (parentBody) world.removeRigidBody(parentBody);
-                  else world.removeCollider(pp.collider, false);
-                  propByCollider.delete(oldHandle);
-                  surfaceByCollider.delete(oldHandle);
-                  sim_disable_prop_box(bi); // also remove from sim movement collision
-                }
-                // Surface drives the puff colour + impact tick; the map has no
-                // collider→surface entry, so it falls back to concrete.
-                const surface = (rayHit.collider ? surfaceByCollider.get(rayHit.collider.handle) : undefined) ?? 'concrete';
                 vfx.impact(impact, hitNormal, surface);
                 playImpact(surface, impact);
-                if (broke.length === 0 && SURFACE_FX[surface].decal) {
-                  decals.add(hitPoint.copy(impact), hitNormal); // bullet mark
+                if (SURFACE_FX[surface].decal) {
+                  decals.add(hitPoint.copy(impact), hitNormal);
                 }
               }
             }
@@ -1364,13 +1365,12 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       if (!netMode) {
         for (const e of enemies) {
           if (e.alive) {
-            const p = e.brain.bot.position;
-            e.root.position.set(p.x, p.y, p.z);
-            e.root.scale.y = duckScaleY(e.brain.bot.duckAmount);
+            e.root.position.copy(e.position);
+            e.root.scale.y = duckScaleY(e.duckAmount);
             // Full reset, not just .y: a prior death drives e.root.quaternion from
             // the ragdoll (tumbled), leaving nonzero X/Z Euler. Setting only .y on
             // respawn keeps that tilt — the bot stands upright only if we clear it.
-            e.root.rotation.set(0, e.brain.aim.yaw, 0);
+            e.root.rotation.set(0, e.aimYaw, 0);
           } else {
             // Phase 12.3: dead bots may have a ragdoll body. Drive the model
             // from the ragdoll transform; despawn when the timer expires.
@@ -1414,30 +1414,25 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       // by snapshot data from the authoritative server.
       if (predictor) {
         const mySlot = predictor.ownSlot;
-        const remotes = interpBuf.interpolate(mySlot);
+        const remotes = interpBuf.interpolate(mySlot, frameDt);
         for (const r of remotes) {
           const root = remoteRootFor(r.slot, r.teamCt);
           if (r.alive) {
             root.visible = true;
-            // Footsteps for networked players. Speed is the interpolated
-            // horizontal delta since the last frame (positional delta, not
-            // wire velocity — RemoteEntity discards velocity at interp time).
-            // ponytail: this runs on the render frame, not the 64 Hz tick — a
-            // cosmetic cue, and pacing is distance-based so a variable dt only
-            // shifts *when* within a stride the step lands, never how many.
+            // Footsteps for networked players. Speed comes from server-authoritative
+            // velocity (noise-free, already paid for on the wire). Stride pacing is
+            // distance-based so a variable render dt only shifts *when* within a
+            // stride the step lands, never how many.
             const prev = remoteSteps.get(r.slot);
-            let speed = 0;
-            if (prev) {
-              const dx = r.pos[0] - prev.x;
-              const dz = r.pos[2] - prev.z;
-              speed = frameDt > 0 ? Math.hypot(dx, dz) / frameDt : 0;
-              const rs = advanceStride(prev.dist, speed, frameDt);
-              prev.dist = rs.dist;
-              if (rs.stepped) playFootstep('concrete', root.position);
-            }
-            remoteSteps.set(r.slot, { x: r.pos[0], z: r.pos[2], dist: prev?.dist ?? 0 });
+            const speed = Math.hypot(r.vel[0], r.vel[2]);
+            const rs = advanceStride(prev?.dist ?? 0, speed, frameDt);
+            if (rs.stepped) playFootstep('concrete', root.position);
+            remoteSteps.set(r.slot, { x: r.pos[0], z: r.pos[2], dist: rs.dist });
             root.position.set(r.pos[0], r.pos[1], r.pos[2]);
-            root.rotation.y = r.yaw;
+            // Full reset, not just .y: a previous death drove this quaternion from
+            // the ragdoll, so setting yaw alone would leave the corpse's tilt on
+            // the respawned model (same trap as the SP path).
+            root.rotation.set(0, r.yaw, 0);
             root.scale.y = duckScaleY(r.ducked ? 1 : 0);
             // Reset animation on dead→alive transition so the death pose
             // is cleared on respawn.
@@ -1445,54 +1440,45 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
             if (!wasAlive) {
               const anim = remoteAnims.get(r.slot);
               if (anim) resetBotAnim(anim);
-              remoteDeaths.delete(r.slot);
+              // Despawn any ragdoll from the previous death.
+              const oldRagdoll = remoteRagdolls.get(r.slot);
+              if (oldRagdoll) {
+                despawnRagdollBody(oldRagdoll);
+                remoteRagdolls.delete(r.slot);
+              }
             }
             remoteAlive.set(r.slot, true);
-            // Remote player animation: drive the bot anim state machine from
-            // interpolated speed and mode. Must run BEFORE applyWeaponPose so
-            // the weapon-hold arm IK override wins against the animation.
             const anim = remoteAnims.get(r.slot);
             if (anim) {
-              // ponytail: the wire carries no on-ground flag; always true so
-              // remotes never show an air pose. An upgrading flag would need a
-              // wire extension (EntityState::flags reserved bits).
-              driveBotAnim(anim, speed, true, 'search', frameDt);
+              driveBotAnim(anim, speed, r.onGround, 'search', frameDt);
             }
             // Phase 12.1: apply weapon-hold pose to remote models.
             applyWeaponPose(root, 'rifle');
-            // Phase 12.2: spawn muzzle FX from pending EV_FIRE events.
-            if (pendingFireSlots.delete(r.slot)) {
-              const wm = getWeaponMuzzle(root);
-              if (wm) {
-                vfx.muzzleFlash(wm.pos, wm.dir);
-                vfx.tracer(wm.pos, wm.dir.clone().multiplyScalar(100).add(wm.pos));
-              }
-            }
           } else {
-            // On the alive→dead edge, pin the model where it fell: the server
-            // resets a corpse's position to its spawn point the moment health
-            // hits 0, so r.pos is already useless for this. root.position still
-            // holds the last position we rendered it alive at.
+            // On the alive→dead edge, spawn a ragdoll where the model stood.
+            // The server no longer teleports corpses, so r.pos is the death
+            // position; but root.position still holds the last rendered frame,
+            // which is more up-to-date than the snapshot.
             if (remoteAlive.get(r.slot)) {
-              remoteDeaths.set(r.slot, {
-                x: root.position.x,
-                y: root.position.y,
-                z: root.position.z,
-                t: DEATH_CLIP_SECONDS,
-              });
+              sDeathPos.set(root.position.x, root.position.y, root.position.z);
+              sDeathVel.set(r.vel[0], r.vel[1], r.vel[2]);
+              const rbody = spawnRagdollBody(ragdollWorld, sDeathPos, sDeathVel, simTime);
+              remoteRagdolls.set(r.slot, rbody);
             }
             remoteAlive.set(r.slot, false);
-            remoteSteps.delete(r.slot); // dead: no teleport-step on respawn
-            const death = remoteDeaths.get(r.slot);
-            const anim = remoteAnims.get(r.slot);
-            if (death && death.t > 0 && anim) {
-              // Play the death clip out where the body fell, then hide. No
-              // applyWeaponPose here — the clip owns the whole skeleton.
-              death.t -= frameDt;
+            remoteSteps.delete(r.slot);
+            // Ride the model on the ragdoll body, the same way SP bots do above.
+            // spawnRagdollBody only creates a physics body — it draws nothing —
+            // so without this the corpse simply vanished on death while an
+            // invisible capsule tumbled for its four-second lifetime.
+            const rag = remoteRagdolls.get(r.slot);
+            if (rag) {
               root.visible = true;
-              root.position.set(death.x, death.y, death.z);
-              root.scale.y = duckScaleY(0);
-              driveBotAnim(anim, 0, true, 'dead', frameDt);
+              root.scale.y = 1; // a corpse isn't crouching
+              const tr = rag.body.translation();
+              root.position.set(tr.x, tr.y - PLAYER_RADIUS * 0.5, tr.z);
+              const q = rag.body.rotation();
+              root.quaternion.set(q.x, q.y, q.z, q.w);
             } else {
               root.visible = false;
             }
@@ -1507,9 +1493,57 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           if (!activeSlots.has(slot)) disposeRemote(slot);
         }
       }
-      // Clear any fire events we couldn't deliver (e.g. slot not in this snapshot
-      // yet, or stale event from a disconnected player). Don't let them pile up.
-      pendingFireSlots.clear();
+      // Drain EV_FIRE / EV_IMPACT events whose server tick <= current render tick.
+      // Events arrive ~6 ticks ahead (interp delay); the render clock tells us when
+      // that tick is "now" in the interpolated view. A queue avoids per-frame collapse.
+      //
+      // Gated on the same `predictor` as the remote loop above: the render clock
+      // only advances inside `interpolate()`, so without a predictor `renderTick`
+      // stays 0, neither the drain nor the staleness sweep below can ever fire,
+      // and both queues grow for the whole session. Spectators hit exactly that.
+      if (!predictor) {
+        pendingFireQueue.length = 0;
+        pendingImpactQueue.length = 0;
+      }
+      const rt = interpBuf.renderTick;
+      while (pendingFireQueue.length > 0 && pendingFireQueue[0]!.tick <= rt) {
+        const ev = pendingFireQueue.shift()!;
+        const root = remoteRoots.get(ev.slot);
+        if (!root) continue;
+        const wm = getWeaponMuzzle(root);
+        if (!wm) continue;
+        vfx.muzzleFlash(wm.pos, wm.dir);
+        // Pair with a matching impact to terminate the tracer at the real hit point.
+        // Impact events arrive in the same snapshot, so a slot match is sufficient.
+        const tracerEnd = wm.dir.clone().multiplyScalar(100).add(wm.pos);
+        for (let j = 0; j < pendingImpactQueue.length; j++) {
+          const imp = pendingImpactQueue[j]!;
+          if (imp.slot === ev.slot) {
+            tracerEnd.set(imp.pos[0], imp.pos[1], imp.pos[2]);
+            const surface = surfaceFromId(imp.surface);
+            const ip = new Vector3(imp.pos[0], imp.pos[1], imp.pos[2]);
+            const inorm = new Vector3(imp.normal[0], imp.normal[1], imp.normal[2]);
+            vfx.impact(ip, inorm, surface);
+            playImpact(surface, ip);
+            if (SURFACE_FX[surface].decal) decals.add(new Vector3().copy(ip), inorm);
+            pendingImpactQueue.splice(j, 1);
+            break;
+          }
+        }
+        vfx.tracer(wm.pos, tracerEnd);
+        playGunshot('rifle', wm.pos);
+      }
+      // Discard events too old to matter (stale, behind render time by a large margin).
+      while (pendingFireQueue.length > 0 && pendingFireQueue[0]!.tick <= rt - 32) pendingFireQueue.shift();
+      while (pendingImpactQueue.length > 0 && pendingImpactQueue[0]!.tick <= rt - 32) pendingImpactQueue.shift();
+
+      // Despawn expired remote ragdoll bodies.
+      for (const [slot, r] of remoteRagdolls) {
+        if (ragdollExpired(r, simTime)) {
+          despawnRagdollBody(r);
+          remoteRagdolls.delete(slot);
+        }
+      }
 
       // Phase 12.3: step the ragdoll world each render frame so dynamic bodies
       // respond to gravity and collide with the static map geometry.
@@ -1543,7 +1577,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           roster.push({
             slot: ent.slot,
             team: (ent.flags & F_TEAM_CT) !== 0 ? 'CT' : 'T',
-            name: ent.name || `Bot ${ent.slot + 1}`,
+            name: slotNameMap.get(ent.slot) || `Bot ${ent.slot + 1}`,
             kills: ent.kills,
             deaths: ent.deaths,
             alive: (ent.flags & F_ALIVE) !== 0,

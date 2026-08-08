@@ -261,10 +261,12 @@ impl CommandFrame {
 pub const F_ALIVE: u8 = 1 << 0;
 pub const F_DUCKED: u8 = 1 << 1;
 pub const F_TEAM_CT: u8 = 1 << 2; // set = CT, clear = T
+pub const F_ONGROUND: u8 = 1 << 3;
 
 // Game event tags (one byte each, payload follows).
 pub const EV_KILL: u8 = 1;
 pub const EV_FIRE: u8 = 2;
+pub const EV_IMPACT: u8 = 3; // followed by ImpactEvent payload
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GameEvent {
@@ -287,6 +289,34 @@ impl GameEvent {
     }
 }
 
+/// Server-authoritative bullet impact result, sent from the shot already
+/// computed server-side. Client uses it to place puffs/decals/sounds and to
+/// terminate remote tracers at the actual hit point instead of a fixed 100 m.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImpactEvent {
+    pub slot: u8, // shooter
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
+    pub surface: u8, // 0=concrete, 1=flesh, 2=wood, 3=metal
+}
+
+impl ImpactEvent {
+    pub fn encode(&self, buf: &mut Vec<u8>) {
+        buf.push(self.slot);
+        for v in self.pos.iter().chain(self.normal.iter()) {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        buf.push(self.surface);
+    }
+    pub(crate) fn decode(r: &mut Reader) -> Option<Self> {
+        let slot = r.u8()?;
+        let pos = [r.f32()?, r.f32()?, r.f32()?];
+        let normal = [r.f32()?, r.f32()?, r.f32()?];
+        let surface = r.u8()?;
+        Some(ImpactEvent { slot, pos, normal, surface })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntityState {
     pub slot: u8,
@@ -299,13 +329,8 @@ pub struct EntityState {
     pub armor: u8,
     pub weapon: u8,
     pub ammo: u8,
-    /// Phase 21: server-authoritative match tally + display name, so every
-    /// client renders the same scoreboard. ponytail: name ships every snapshot
-    /// (it only changes on join) — cheap for a ≤12-player deathmatch; move to a
-    /// join-time roster message if the player cap ever grows.
     pub kills: u16,
     pub deaths: u16,
-    pub name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -317,17 +342,25 @@ pub struct RoundState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct RosterEntry {
+    pub slot: u8,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub server_tick: u32,
     pub ack_seq: u32,
     pub entities: Vec<EntityState>,
     pub events: Vec<GameEvent>,
+    pub impact_events: Vec<ImpactEvent>,
+    pub roster: Vec<RosterEntry>,
     pub round: RoundState,
 }
 
 impl Snapshot {
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(11 + self.entities.len() * 38 + self.events.len() * 3 + 9);
+        let mut buf = Vec::with_capacity(11 + self.entities.len() * 38 + self.events.len() * 3 + 9 + self.impact_events.len() * 26);
         buf.push(TAG_SNAP);
         buf.push(PROTOCOL_VERSION);
         buf.extend_from_slice(&self.server_tick.to_le_bytes());
@@ -347,9 +380,6 @@ impl Snapshot {
             buf.push(e.ammo);
             buf.extend_from_slice(&e.kills.to_le_bytes());
             buf.extend_from_slice(&e.deaths.to_le_bytes());
-            let name_bytes = e.name.as_bytes();
-            buf.push(name_bytes.len() as u8);
-            buf.extend_from_slice(name_bytes);
         }
         buf.push(self.events.len() as u8);
         for ev in &self.events {
@@ -359,6 +389,17 @@ impl Snapshot {
         buf.extend_from_slice(&self.round.time_left_ms.to_le_bytes());
         buf.extend_from_slice(&self.round.score_t.to_le_bytes());
         buf.extend_from_slice(&self.round.score_ct.to_le_bytes());
+        buf.push(self.impact_events.len() as u8);
+        for imp in &self.impact_events {
+            imp.encode(&mut buf);
+        }
+        buf.push(self.roster.len() as u8);
+        for r in &self.roster {
+            buf.push(r.slot);
+            let name_bytes = r.name.as_bytes();
+            buf.push(name_bytes.len() as u8);
+            buf.extend_from_slice(name_bytes);
+        }
         buf
     }
 
@@ -385,10 +426,6 @@ impl Snapshot {
                 ammo: r.u8()?,
                 kills: r.u16()?,
                 deaths: r.u16()?,
-                name: {
-                    let n = r.u8()? as usize;
-                    String::from_utf8(r.take(n)?.to_vec()).ok()?
-                },
             });
         }
         let ev_count = r.u8()? as usize;
@@ -404,11 +441,31 @@ impl Snapshot {
             score_t: r.u16()?,
             score_ct: r.u16()?,
         };
+        // Impact events (Phase C): appended after round state. Tolerate
+        // truncated snapshots from older servers that didn't send these.
+        let imp_count = r.u8().unwrap_or(0) as usize;
+        let mut impact_events = Vec::with_capacity(imp_count);
+        for _ in 0..imp_count {
+            if let Some(imp) = ImpactEvent::decode(&mut r) {
+                impact_events.push(imp);
+            }
+        }
+        // Roster (Phase D): per-slot display names, appended after impact events.
+        let roster_count = r.u8().unwrap_or(0) as usize;
+        let mut roster = Vec::with_capacity(roster_count);
+        for _ in 0..roster_count {
+            let slot = r.u8().unwrap_or(0);
+            let n = r.u8().unwrap_or(0) as usize;
+            let name = String::from_utf8(r.take(n).unwrap_or(&[]).to_vec()).unwrap_or_default();
+            roster.push(RosterEntry { slot, name });
+        }
         Some(Snapshot {
             server_tick,
             ack_seq,
             entities,
             events,
+            impact_events,
+            roster,
             round,
         })
     }
@@ -628,7 +685,6 @@ mod tests {
                     ammo: 30,
                     kills: 4,
                     deaths: 1,
-                    name: "Dougy".into(),
                 },
                 EntityState {
                     slot: 3,
@@ -643,10 +699,11 @@ mod tests {
                     ammo: 12,
                     kills: 0,
                     deaths: 0,
-                    name: String::new(),
                 },
             ],
             events: vec![],
+            impact_events: vec![],
+            roster: vec![],
             round: RoundState {
                 phase: 1,
                 time_left_ms: 60000,
@@ -659,6 +716,47 @@ mod tests {
     // Golden bytes shared with src/net/protocol.test.ts — if this vector
     // changes, the TS cross-compat test must change to match (and vice versa).
     // This is the on-the-wire contract between the two ends.
+    /// ImpactEvent is the only wire structure that shipped with no round-trip
+    /// cover at all — both golden tests used an empty impact list, so a field
+    /// order or width mismatch against the TS decoder would have surfaced as
+    /// decals at garbage coordinates rather than a failing test.
+    #[test]
+    fn impact_events_round_trip() {
+        let s = Snapshot {
+            server_tick: 42,
+            ack_seq: 1,
+            entities: vec![],
+            events: vec![],
+            impact_events: vec![
+                ImpactEvent {
+                    slot: 3,
+                    pos: [1.5, -2.25, 7.0],
+                    normal: [0.0, 1.0, 0.0],
+                    surface: 2,
+                },
+                ImpactEvent {
+                    slot: 0,
+                    pos: [-11.0, 0.5, 4.125],
+                    normal: [-1.0, 0.0, 0.0],
+                    surface: 1,
+                },
+            ],
+            roster: vec![],
+            round: RoundState { phase: 1, time_left_ms: 1000, score_t: 0, score_ct: 0 },
+        };
+        let decoded = Snapshot::decode(&s.encode()).expect("round trip");
+        assert_eq!(decoded.impact_events, s.impact_events);
+    }
+
+    /// One impact record is exactly 26 bytes: slot + 6 f32 + surface. Both ends
+    /// bounds-check against this number.
+    #[test]
+    fn impact_event_is_26_bytes() {
+        let mut buf = Vec::new();
+        ImpactEvent { slot: 1, pos: [0.0; 3], normal: [0.0; 3], surface: 0 }.encode(&mut buf);
+        assert_eq!(buf.len(), 26);
+    }
+
     #[test]
     fn snapshot_golden_bytes() {
         let s = Snapshot {
@@ -677,9 +775,10 @@ mod tests {
                 ammo: 30,
                 kills: 2,
                 deaths: 3,
-                name: "CT1".into(),
             }],
             events: vec![],
+            impact_events: vec![],
+            roster: vec![RosterEntry { slot: 0, name: "CT1".into() }],
             round: RoundState { phase: 1, time_left_ms: 60000, score_t: 2, score_ct: 3 },
         };
         let bytes = s.encode();
@@ -702,3 +801,4 @@ mod tests {
         assert!(CommandFrame::decode(&buf[..buf.len() - 1]).is_none());
     }
 }
+
