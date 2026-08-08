@@ -1,20 +1,40 @@
 # End-to-end tests (`tests/e2e/`)
 
-These spawn the **real Rust server** (`target/debug/server`) and drive it over a
-WebSocket, asserting on the wire protocol exactly as a browser client would. They
-cover the server-authoritative loop and the Phase 9 team/bot roster rules
+These drive the **real Rust server** over a WebSocket, asserting on the wire
+protocol exactly as a browser client would. They cover the server-authoritative
+loop, server-side hit registration, and the Phase 9 team/bot roster rules
 end-to-end — round FSM, slot/bot bookkeeping, capacity gating.
 
 ## Running
+
+Two ways to get a server. Both run the identical `.e2e.ts` suites.
+
+**A) Local binary (default).**
 
 ```bash
 cargo build --manifest-path server/Cargo.toml   # build the server binary first
 pnpm test:e2e                                    # runs tests/e2e/**/*.e2e.ts
 ```
 
-If the binary is absent the suites `skipIf` themselves (so CI without a Rust
-toolchain stays green). File suffix is `.e2e.ts`, **not** `.test.ts`, so the
-default `pnpm test` unit pool never picks them up.
+**B) Against a dockerized dev server** — no host Rust toolchain, "more complete
+tests against the dev server". The `docker-compose.e2e.yml` service runs the
+server alone (no db/auth), published on `:9876`, with the same fast-round env as
+the local harness:
+
+```bash
+docker compose -f docker-compose.e2e.yml up -d --build
+E2E_SERVER_URL=ws://localhost:9876 pnpm test:e2e
+docker compose -f docker-compose.e2e.yml down
+```
+
+`E2E_SERVER_URL` makes `startServer()` a no-op and every suite connect to that URL
+instead of spawning/binding a local port (see `harness.ts`). Point it at any
+running server — but start that server with the fast-round env or the ~40 s
+reset-cycle test will time out; `docker-compose.e2e.yml` already does.
+
+If neither a built binary nor `E2E_SERVER_URL` is present the suites `skipIf`
+themselves (so CI without a Rust toolchain stays green). File suffix is `.e2e.ts`,
+**not** `.test.ts`, so the default `pnpm test` unit pool never picks them up.
 
 ## Why a separate runner (`vitest.e2e.config.ts`)
 
@@ -30,8 +50,9 @@ The round clock is sped up via env (`SERVER_FREEZE_MS`/`ROUND_MS`/`END_MS` in
 
 | File | Covers |
 |---|---|
-| `harness.ts` | Server spawn, a promise-queue WebSocket `Client`, two-phase `joinTeam`. |
+| `harness.ts` | Server spawn (or external via `E2E_SERVER_URL`), a promise-queue WebSocket `Client`, two-phase `joinTeam`. |
 | `server-loop.e2e.ts` | Slot-0 assignment, movement→snapshot, per-round player reset (Phase 9.5 hygiene). |
+| `combat.e2e.ts` | Server-side hitreg: one client's shot kills another player (`EV_KILL{by: shooter}`) — the cross-client combat that was silently client-local. |
 | `roster.e2e.ts` | 3v3 default, instant mid-round join, leave→bot-next-round, team-full→spectate, Welcome capacity (6 players / 4 spectators), server-full refusal. |
 
 ## Roster rules under test (Phase 9)

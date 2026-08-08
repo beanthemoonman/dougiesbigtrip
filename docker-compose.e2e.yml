@@ -1,0 +1,32 @@
+# E2E dev server — the game server alone (no db/auth/client), published to the
+# host so the WebSocket e2e suite can run against a container instead of a local
+# `cargo build`. Fast-round env mirrors the local harness (FAST_ROUND_ENV) so
+# timing-sensitive tests behave identically.
+#
+#   docker compose -f docker-compose.e2e.yml up -d --build
+#   E2E_SERVER_URL=ws://localhost:9876 pnpm test:e2e
+#   docker compose -f docker-compose.e2e.yml down
+#
+# No DATABASE_URL / AUTH_REQUIRED → the server runs without persistence and with
+# the admin gate open (loopback dev only). See tests/e2e/README.md.
+#
+# `name:` puts this in its OWN compose project so it never recreates the `server`
+# of the full-stack docker-compose.yml (which shares the same default project name
+# by directory). The e2e server publishes :9876; the main stack's server only
+# `expose`s it, so the two coexist without a port clash.
+
+name: dougys-e2e
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      SERVER_BIND: 0.0.0.0:9876
+      # Match tests/e2e/harness.ts FAST_ROUND_ENV: freeze→live→over→reset ~11 s.
+      SERVER_FREEZE_MS: "500"
+      SERVER_ROUND_MS: "10000"
+      SERVER_END_MS: "500"
+    ports:
+      - "9876:9876"

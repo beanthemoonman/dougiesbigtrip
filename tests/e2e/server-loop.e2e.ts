@@ -8,13 +8,13 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { decodeSnapshot, encodeCommand } from '../../src/net/protocol';
-import { connect, joinTeam, startServer, SERVER_BUILT, type Client } from './harness';
+import { connect, joinTeam, startServer, serverUrl, SERVER_AVAILABLE, type Client } from './harness';
 import type { ChildProcess } from 'node:child_process';
 
 const BIND = '127.0.0.1:9899';
-const WS_URL = `ws://${BIND}`;
+const WS_URL = serverUrl(BIND);
 
-describe.skipIf(!SERVER_BUILT)('server authoritative loop (6.3)', () => {
+describe.skipIf(!SERVER_AVAILABLE)('server authoritative loop (6.3)', () => {
   let proc: ChildProcess | null = null;
   beforeAll(async () => { proc = await startServer(BIND); });
   afterAll(() => { proc?.kill(); });

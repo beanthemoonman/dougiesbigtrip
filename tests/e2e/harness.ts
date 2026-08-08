@@ -25,6 +25,31 @@ export const SERVER_BIN = resolve(import.meta.dirname, '../../target/debug/serve
 /** True when the Rust server has been built; e2e tests `skipIf` this is false. */
 export const SERVER_BUILT = existsSync(SERVER_BIN);
 
+/**
+ * Point the e2e suite at an already-running server instead of spawning the local
+ * `target/debug/server`. Set `E2E_SERVER_URL` (e.g. `ws://localhost:9876`) to run
+ * against a dockerized dev server:
+ *
+ *   docker compose -f docker-compose.e2e.yml up -d --build
+ *   E2E_SERVER_URL=ws://localhost:9876 pnpm test:e2e
+ *
+ * The e2e compose starts the server with the same fast-round env as a local
+ * spawn (see FAST_ROUND_ENV / docker-compose.e2e.yml) so timing-sensitive tests
+ * behave identically. Per-test `env` passed to startServer() cannot be injected
+ * into a running container, so if you point at some OTHER server, start it with
+ * those knobs yourself.
+ */
+export const EXTERNAL_SERVER_URL: string | null = process.env.E2E_SERVER_URL ?? null;
+export const EXTERNAL = EXTERNAL_SERVER_URL !== null;
+
+/** True when e2e can run: the binary is built, or we target an external server. */
+export const SERVER_AVAILABLE = SERVER_BUILT || EXTERNAL;
+
+/** WS URL for a test: the external dev server if configured, else the local bind. */
+export function serverUrl(bind: string): string {
+  return EXTERNAL_SERVER_URL ?? `ws://${bind}`;
+}
+
 export const SPECTATOR_SLOT = 255;
 
 /** Fast-round env so a full freeze→live→over→reset cycle takes ~11 s, not ~2 min. */
@@ -39,7 +64,10 @@ export const FAST_ROUND_ENV = {
  * child process; call `.kill()` in `afterAll`. Each test file uses its own port
  * so files never collide (they also run one-at-a-time under the e2e config).
  */
-export async function startServer(bind: string, env: Record<string, string> = {}): Promise<ChildProcess> {
+export async function startServer(bind: string, env: Record<string, string> = {}): Promise<ChildProcess | null> {
+  // External mode: the server is already running (docker compose up -d) — nothing
+  // to spawn or tear down. Tests connect via serverUrl() instead of ws://bind.
+  if (EXTERNAL) return null;
   const proc = spawn(SERVER_BIN, [], {
     stdio: 'pipe',
     env: { ...process.env, SERVER_BIND: bind, ...FAST_ROUND_ENV, ...env },
@@ -77,17 +105,21 @@ export interface Client {
 /** Open a websocket to `url` and wrap it with a promise-based message queue. */
 export async function connect(url: string): Promise<Client> {
   const ws = new WebSocket(url);
-  await new Promise<void>((res, rej) => {
-    ws.on('open', () => res());
-    ws.on('error', rej);
-  });
   const queue: Uint8Array[] = [];
   const waiters: ((m: Uint8Array) => void)[] = [];
+  // Attach the message handler BEFORE awaiting 'open'. A fast server (localhost /
+  // docker) sends the connect-Welcome in the same TCP segment as the handshake,
+  // so `ws` emits 'open' then 'message' synchronously — registering the listener
+  // after the open await would drop that first message and hang the next() for it.
   ws.on('message', (raw: Buffer) => {
     const bytes = new Uint8Array(raw);
     const w = waiters.shift();
     if (w) w(bytes);
     else queue.push(bytes);
+  });
+  await new Promise<void>((res, rej) => {
+    ws.on('open', () => res());
+    ws.on('error', rej);
   });
   return {
     ws,

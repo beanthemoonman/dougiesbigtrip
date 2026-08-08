@@ -3982,3 +3982,101 @@ fetch, no payload, nothing to load. `target=_blank` with `rel="noopener noreferr
 
 New `src/ui/entry.test.ts` (jsdom) asserts the href, the noopener rel and the presence of the SVG.
 Verified rendered in Chrome at 1568×783. `CREDITS.md` row added for the Octicons mark.
+
+## 2026-08-07 — Fix: networked clients never sent shots (MP combat was client-local)
+
+Two connected clients saw each other *move* (movement predicted + snapshotted) but were
+effectively playing separate games: nobody could damage anyone. Root cause was on the client —
+`prediction.ts` hardcodes `shot: null`, and `session.ts`'s fire path ran the entire hitscan +
+damage resolution locally against the client's own phantom bot array, which the other client
+can't see. The server's authoritative hitreg (`server/src/main.rs` §shot resolution) was fully
+implemented but never received a shot to resolve.
+
+Fix (`src/game/session.ts`): defer the per-tick CommandFrame send until after the fire block so
+a shot fired this tick rides the same frame. When networked (`predictor` set), a fired shot now
+populates `netCmd.shot = { eyePos, dir }` (dir already carries recoil+spread from `fireShot`) and
+the local damage/decal/breakable resolution is skipped — the server owns hitreg and returns
+`EV_KILL`/`EV_FIRE` via snapshot. Single-player is unchanged (`!predictor` branch keeps local
+hitscan). Muzzle flash / tracer / gunshot audio still play locally for the shooter's own feedback.
+
+No new deps. `CommandFrame` type imported into session for the deferred-send local. This closes a
+latent gap in a phase the plan marked done (6.6) — ACC-010 (two browsers, a kill registers where
+the shooter saw the target) is the acceptance gate and should be re-run.
+
+## 2026-08-07 — Tests for the MP-shot fix (unit guard + e2e), runnable against a docker dev server
+
+Two tests pinning the regression from the previous entry:
+
+- Unit (`src/net/prediction.test.ts`, runs in `pnpm test`): extracted the shot-attach into a
+  pure `attachShot(frame, eye, dir)` seam in `src/net/prediction.ts` (session now calls it instead
+  of an inline literal), then a test asserts `predict()` is movement-only (`shot === null`) and that
+  a shot attached to the frame survives encode→decode with eye/dir in order. Guards the exact bug —
+  a command going out with no shot — at the fast tier.
+- E2E (`tests/e2e/combat.e2e.ts`): two clients join the same team (identical spawn; server has no
+  friendly-fire gate), bots disperse from spawn, then the shooter sends a `CommandFrame` carrying a
+  shot at the co-located target. Asserts the server emits `EV_KILL{slot: target, by: shooter}` — a
+  kill that can only come from a server-resolved client shot. Uses the server's `solid=true` raycast
+  (origin-inside-capsule → toi 0) for a deterministic hit.
+
+E2E can now also run against a locally-running dockerized dev server, not just a local
+`target/debug/server` (goal: more complete tests against the dev server):
+
+- `tests/e2e/harness.ts`: `E2E_SERVER_URL` makes `startServer()` a no-op and `serverUrl(bind)`
+  returns the external URL; `SERVER_AVAILABLE = SERVER_BUILT || EXTERNAL` drives the `skipIf`. All
+  three suites (`server-loop`, `roster`, `combat`) use it — unchanged when run the old way.
+- `docker-compose.e2e.yml`: the server alone (no db/auth), published on `:9876`, fast-round env
+  matching `FAST_ROUND_ENV` so timing tests behave the same. Run:
+  `docker compose -f docker-compose.e2e.yml up -d --build` then
+  `E2E_SERVER_URL=ws://localhost:9876 pnpm test:e2e`.
+- `tests/e2e/README.md` documents both paths.
+
+## 2026-08-07 — E2E caught a second, deeper bug: server-side hitreg is dead
+
+Running `combat.e2e.ts` against the dockerized dev server exposed that the authoritative
+server registers **zero** hits: 65 rounds elapsed with 0 kills (bots never kill each other or
+the human). Root cause is server-only and independent of the client-shot fix:
+
+- The TS client refreshes its physics query BVH every tick (`session.ts` `world.updateSceneQueries()`),
+  so single-player hitreg + bot LOS work.
+- The Rust server's `SimWorld::update_scene_queries()` is a no-op (`sim/src/world.rs`) and the game
+  loop calls `ensure_broad_phase_ready()` exactly once at startup (`server/src/main.rs`). Player
+  colliders then move via `set_translation` every tick but the query BVH is never rebuilt, so
+  `shapecast::ray_cast` / `cast_ray_and_get_normal` never sees a player capsule at its current
+  position. Every shot and every bot LOS ray misses.
+
+Status of this session's work:
+- Client-shot fix: **done, verified** (`pnpm typecheck` clean; `prediction.test.ts` 6/6 green).
+- `combat.e2e.ts`: **correctly RED** — it reproduces the server hitreg failure. Left in place as
+  the regression/coverage test; it goes green once the server refreshes its query pipeline per tick.
+- Harness external-server support + `docker-compose.e2e.yml`: working (join/movement e2e pass
+  against the container; roster suite needs a server started with its 3v3 config).
+
+Fix not yet applied (server-side, needs decision): rebuild the query BVH each server tick after
+syncing player bodies — either a real `update_scene_queries()` that runs `physics.step()` (the
+existing BVH-build path) or a rapier `QueryPipeline::update()` — called before shot resolution and
+bot perception in the 64 Hz loop. Sim-crate + main.rs change; requires a server docker rebuild to verify.
+
+## 2026-08-07 — Server hitreg fix APPLIED and verified (combat e2e green)
+
+Applied the query-refresh fix from the previous entry:
+- `sim/src/world.rs`: `update_scene_queries()` is no longer a no-op — it runs `physics.step()`
+  (the same BVH-build path `ensure_broad_phase_ready` uses) and marks the broad phase ready.
+  Kinematic player bodies don't move under step(), so this only refreshes the spatial structures
+  the ray/shape casts read.
+- `server/src/main.rs`: the 64 Hz loop calls `world.update_scene_queries()` once per tick after all
+  player bodies are synced and before shot resolution, so hit registration (and bot LOS on the next
+  tick) query current-tick collider positions.
+
+Verification (against the dockerized dev server, `docker-compose.e2e.yml`, rebuilt with the fix):
+- `tests/e2e/combat.e2e.ts`: **PASS** — a client shot kills another player; `EV_KILL{by: shooter}`
+  observed. Was RED before the fix (server resolved nothing).
+- `server-loop` movement e2e: PASS. Unit suite: 272/273 green (the one failure, `tools/modelview`,
+  is an unrelated headless-GL render timeout). `pnpm typecheck` clean.
+
+Also fixed a real harness race (`tests/e2e/harness.ts`): `connect()` attached its `message` listener
+after awaiting `open`, so a fast server's connect-Welcome (same TCP segment as the handshake) was
+dropped → intermittent "message timeout". Listener now registers before the open await.
+
+Note: server bots still rarely kill each other within a fast round (they path from opposite spawns
+and often don't close + acquire LOS in 10 s) — that's bot engagement tuning (6.5), separate from the
+hitreg mechanism this fixes; the deterministic combat e2e proves PvP hit registration works.

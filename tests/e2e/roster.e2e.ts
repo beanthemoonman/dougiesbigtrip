@@ -12,11 +12,11 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { decodeBye, decodeSnapshot, F_ALIVE, F_TEAM_CT, TAG_BYE, type Snapshot } from '../../src/net/protocol';
-import { connect, joinTeam, startServer, tagOf, SERVER_BUILT, type Client } from './harness';
+import { connect, joinTeam, startServer, tagOf, serverUrl, SERVER_AVAILABLE, type Client } from './harness';
 import type { ChildProcess } from 'node:child_process';
 
 const BIND = '127.0.0.1:9898';
-const WS_URL = `ws://${BIND}`;
+const WS_URL = serverUrl(BIND);
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -33,7 +33,7 @@ async function waitForSnapshot(client: Client, pred: (s: Snapshot) => boolean, m
 
 const isCt = (flags: number): boolean => (flags & F_TEAM_CT) !== 0;
 
-describe.skipIf(!SERVER_BUILT)('Phase 9 roster rules', () => {
+describe.skipIf(!SERVER_AVAILABLE)('Phase 9 roster rules', () => {
   let proc: ChildProcess | null = null;
   beforeAll(async () => { proc = await startServer(BIND); });
   afterAll(() => { proc?.kill(); });

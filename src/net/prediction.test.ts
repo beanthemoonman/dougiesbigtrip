@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createPredictor, type SimBridge } from './prediction';
-import { F_ALIVE, type Snapshot } from './protocol';
+import { createPredictor, attachShot, type SimBridge } from './prediction';
+import { decodeCommand, encodeCommand, F_ALIVE, type Snapshot } from './protocol';
 
 /**
  * A trivial deterministic 1-D sim: position += buttons each tick. This is not
@@ -95,5 +95,22 @@ describe('prediction', () => {
     p.predict(1, 0, 0, 1);
     p.reconcile(snapshot(10, 1, 99));
     expect(sim.pos).toBe(1); // unchanged — no snap, no replay
+  });
+
+  // Regression guard: a fired networked command must carry the shot to the
+  // server (client shipping shot:null every tick = no MP hitreg — two clients
+  // playing separate games). predict() itself is movement-only; the fire path
+  // attaches the shot to the same frame via attachShot(). Encode/decode proves
+  // the eye/dir fields survive the wire in order.
+  it('predict is movement-only; attachShot puts the fired shot on the frame', () => {
+    const sim = fakeSim();
+    const p = createPredictor(sim, 0);
+    const frame = p.predict(1, 0.5, 0.1, 1);
+    expect(frame.shot).toBeNull(); // movement tick carries no shot
+
+    // Values exactly representable in float32 so the wire round-trips cleanly.
+    attachShot(frame, { x: 1, y: 1.5, z: -25 }, { x: 0, y: -1, z: 0 });
+    const round = decodeCommand(encodeCommand(frame));
+    expect(round?.shot).toEqual({ eyePos: [1, 1.5, -25], dir: [0, -1, 0] });
   });
 });

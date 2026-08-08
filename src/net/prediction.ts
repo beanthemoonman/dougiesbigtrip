@@ -10,6 +10,25 @@
 
 import { F_DUCKED, type CommandFrame, type Snapshot } from './protocol';
 
+/** Minimal xyz shape — a THREE.Vector3 or any plain point. */
+interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Attach a fired shot (eye position + already-spread/recoil-adjusted aim dir) to
+ * this tick's command so the authoritative server can resolve the hit
+ * (docs/netcode.md §3.1/§5.4). Kept here as a pure seam so the "a networked shot
+ * must ride the command" contract is unit-testable without driving the whole
+ * session — the client shipping `shot: null` every tick is precisely the bug this
+ * guards against.
+ */
+export function attachShot(frame: CommandFrame, eye: Vec3, dir: Vec3): void {
+  frame.shot = { eyePos: [eye.x, eye.y, eye.z], dir: [dir.x, dir.y, dir.z] };
+}
+
 /** The three sim calls prediction needs, bound to the local player (index 0). */
 export interface SimBridge {
   /** sim_tick(0, buttons, yaw) — advance one fixed step. */

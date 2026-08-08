@@ -54,9 +54,9 @@ import { rayCast } from '../physics/shapecast';
 import { addStaticBox, createWorld, initPhysics } from '../physics/world';
 import { sim_add_box, sim_add_player, sim_add_prop_box, sim_add_ramp, sim_disable_prop_box, sim_get_state, sim_init, sim_reset_player, sim_set_player, sim_tick } from 'sim-wasm';
 import { createConnection } from '../net/connection';
-import { createPredictor, type Predictor } from '../net/prediction';
+import { createPredictor, attachShot, type Predictor } from '../net/prediction';
 import { createInterpolationBuffer } from '../net/interpolation';
-import { encodeCommand, encodeJoin } from '../net/protocol';
+import { encodeCommand, encodeJoin, type CommandFrame } from '../net/protocol';
 import { SPECTATOR, EV_FIRE, EV_KILL, F_ALIVE, F_TEAM_CT, type Snapshot } from '../net/protocol';
 import { createDecals } from '../render/decals';
 import { createVfx, SURFACE_FX, type Surface } from '../render/vfx';
@@ -927,13 +927,13 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
 
       playerFeet.copy(player.position);
 
+      // Networked command for this tick. Built by predict() below (advances the
+      // WASM sim) but SENT after the fire block, so a shot fired this tick rides
+      // the same frame — the server is authoritative for hitreg (docs/netcode.md §5.4).
+      let netCmd: CommandFrame | null = null;
       if (live && playerAlive) {
         if (predictor && netConn) {
-          // Networked: predict locally (advances the WASM sim) and ship the
-          // command; reconciliation happens async in onSnapshot. Same sim read
-          // below either way.
-          const cmd = predictor.predict(input.state.buttons, input.state.yaw, input.state.pitch, active.id === 'rifle' ? 1 : 2);
-          netConn.send(encodeCommand(cmd));
+          netCmd = predictor.predict(input.state.buttons, input.state.yaw, input.state.pitch, active.id === 'rifle' ? 1 : 2);
         } else {
           sim_tick(0, input.state.buttons, input.state.yaw);
         }
@@ -1138,7 +1138,11 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
             // The pistol is a suppressed USP-S — a much smaller, dimmer flash.
             vfx.muzzleFlash(muzzle, shot.direction, active.id === 'pistol' ? 0.3 : 1);
             vfx.tracer(muzzle, tracerEnd);
-            if (distance !== null) {
+            if (predictor) {
+              // Networked: the server owns hitreg. Ship eye + spread-adjusted dir
+              // on this tick's command; kill/damage arrive via snapshot events.
+              if (netCmd) attachShot(netCmd, shotOrigin, shot.direction);
+            } else if (distance !== null) {
               impact.copy(shotOrigin).addScaledVector(shot.direction, distance);
               const enemy = rayHit.collider ? byCollider.get(rayHit.collider.handle) : undefined;
               // Friendly fire off: teammate bullets pass through (no damage), but
@@ -1204,6 +1208,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           }
         }
       }
+
+      // Ship this tick's command (movement + any shot fired above) to the server.
+      if (netCmd && netConn) netConn.send(encodeCommand(netCmd));
 
       currView.position.copy(player.position);
       currView.eyeHeight = player.eyeHeight;

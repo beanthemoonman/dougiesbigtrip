@@ -499,6 +499,12 @@ async fn game_loop(
                     }
                 }
 
+                // Rebuild the query BVH now that every player body has been synced
+                // to its current-tick position. Without this the raycasts below (and
+                // bot LOS) hit a BVH frozen at startup, so no shot ever registers —
+                // the browser client does the same refresh every tick.
+                world.update_scene_queries();
+
                 // Shot resolution (6.6): raycast from eyePos along dir against all
                 // other slots' colliders. Collect shots first, then apply damage
                 // in a separate pass to avoid aliasing slots.

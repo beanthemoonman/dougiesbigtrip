@@ -256,7 +256,18 @@ impl SimWorld {
         }
     }
 
-    pub fn update_scene_queries(&mut self) {}
+    /// Rebuild the broad-phase / query BVH so ray and shape casts see colliders
+    /// at their CURRENT positions. The authoritative server must call this every
+    /// tick after syncing player bodies — otherwise hit registration and bot LOS
+    /// query a BVH frozen at startup (the browser client does the equivalent each
+    /// tick via its own TS `world.updateSceneQueries()`). Mirrors
+    /// `ensure_broad_phase_ready`'s use of `step()` as the BVH-build path, but
+    /// unconditional. Player bodies are kinematic, so stepping moves nothing — it
+    /// only refreshes the spatial structures the casts read.
+    pub fn update_scene_queries(&mut self) {
+        self.physics.step();
+        self.broad_phase_ready = true;
+    }
 
     /// Collider handle for the player at `index`.
     pub fn player_collider_handle(&self, index: usize) -> ColliderHandle {
