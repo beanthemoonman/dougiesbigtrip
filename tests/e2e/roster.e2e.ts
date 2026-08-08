@@ -2,12 +2,13 @@
  * E2E: Phase 9 team/bot roster rules over a real WebSocket.
  *
  * The rules (see docs/plan-phase9-game-flow.md):
- *   - Each team has 3 bots by default (3v3, all slots bot-filled).
+ *   - Every slot is bot-filled by default (5v5 — MAX_SLOTS = 10, BOT_COUNT = 10
+ *     in server/src/main.rs).
  *   - A joining player replaces a bot INSTANTLY, mid-round or not.
  *   - A player who leaves is replaced by a bot only NEXT round — never mid-round.
- *   - Teams are hard-capped at 3; the 4th on a full team is forced to spectate.
- *   - Capacity = 6 players + 4 spectators (specCap = ceil(2/3 · 6)); over that,
- *     new connections are refused with a Bye.
+ *   - Teams are hard-capped at half the slots; the 6th on a full team spectates.
+ *   - Capacity = 10 players + 4 spectators (MAX_SPECTATORS); over that, new
+ *     connections are refused with a Bye.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -33,20 +34,25 @@ async function waitForSnapshot(client: Client, pred: (s: Snapshot) => boolean, m
 
 const isCt = (flags: number): boolean => (flags & F_TEAM_CT) !== 0;
 
+/** Server capacity — mirrors MAX_SLOTS / MAX_SPECTATORS in server/src/main.rs. */
+const MAX_PLAYERS = 10;
+const PER_TEAM = MAX_PLAYERS / 2;
+const SPEC_CAP = 4;
+
 describe.skipIf(!SERVER_AVAILABLE)('Phase 9 roster rules', () => {
   let proc: ChildProcess | null = null;
   beforeAll(async () => { proc = await startServer(BIND); });
   afterAll(() => { proc?.kill(); });
 
-  it('serves 3v3 bots by default — 6 entities, 3 per team', async () => {
+  it('serves 5v5 bots by default — 10 entities, 5 per team', async () => {
     const spec = await connect(WS_URL);
     await joinTeam(spec, 2); // spectate; server streams snapshots
-    // Freezetime right after a reset: every slot is alive, so all 6 show up.
-    const snap = await waitForSnapshot(spec, (s) => s.round.phase === 0 && s.entities.length === 6);
-    expect(snap.entities.length).toBe(6);
-    expect(snap.entities.filter((e) => isCt(e.flags)).length).toBe(3);
-    expect(snap.entities.filter((e) => !isCt(e.flags)).length).toBe(3);
-    spec.close();
+    // Freezetime right after a reset: every slot is alive, so all 10 show up.
+    const snap = await waitForSnapshot(spec, (s) => s.round.phase === 0 && s.entities.length === MAX_PLAYERS);
+    expect(snap.entities.length).toBe(MAX_PLAYERS);
+    expect(snap.entities.filter((e) => isCt(e.flags)).length).toBe(PER_TEAM);
+    expect(snap.entities.filter((e) => !isCt(e.flags)).length).toBe(PER_TEAM);
+    await spec.close();
     await delay(100);
   });
 
@@ -69,12 +75,14 @@ describe.skipIf(!SERVER_AVAILABLE)('Phase 9 roster rules', () => {
     expect(seen.round.phase).toBe(1); // alive while Live — spawned mid-round
     expect(seen.round.scoreT + seen.round.scoreCt).toBe(scoreSum); // no round elapsed
 
-    player.close();
-    spec.close();
+    await player.close();
+    await spec.close();
     await delay(100);
   });
 
-  it('backfills a departed player with a bot only next round, not mid-round', async () => {
+  // Waits for live → over → freezetime: a full ~11 s round cycle under
+  // FAST_ROUND_ENV, so it needs more than the 20 s file default.
+  it('backfills a departed player with a bot only next round, not mid-round', { timeout: 45000 }, async () => {
     const spec = await connect(WS_URL);
     await joinTeam(spec, 2);
 
@@ -94,38 +102,38 @@ describe.skipIf(!SERVER_AVAILABLE)('Phase 9 roster rules', () => {
     const backfilled = await waitForSnapshot(spec, (s) => s.round.phase === 0 && s.entities.some((e) => e.slot === mySlot));
     expect(backfilled.entities.some((e) => e.slot === mySlot)).toBe(true);
 
-    spec.close();
+    await spec.close();
     await delay(150);
   });
 
-  it('forces the 4th player on a full team to spectate; the other team still has room', async () => {
+  it('forces an over-cap player on a full team to spectate; the other team still has room', async () => {
     const t: Client[] = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < PER_TEAM; i++) {
       const c = await connect(WS_URL);
       const r = await joinTeam(c, 0); // T
       expect(r.spectator).toBe(false);
       t.push(c);
     }
-    // T is full (3 humans). A 4th T join → spectator.
+    // T is full (PER_TEAM humans). One more T join → spectator.
     const overflow = await connect(WS_URL);
     expect((await joinTeam(overflow, 0)).spectator).toBe(true);
-    // CT still has 3 bot slots → a CT join gets a real slot.
+    // CT still has bot slots → a CT join gets a real slot.
     const ct = await connect(WS_URL);
     expect((await joinTeam(ct, 1)).spectator).toBe(false);
 
-    for (const c of [...t, overflow, ct]) c.close();
+    await Promise.all([...t, overflow, ct].map((c) => c.close()));
     await delay(200);
   });
 
-  it('advertises 6 max players and a spectator cap of 4 in the Welcome', async () => {
+  it('advertises 10 max players and a spectator cap of 4 in the Welcome', async () => {
     // The client reads capacity from the Welcome (players/maxPlayers/spec/specCap),
-    // not the advisory /status HTTP endpoint. maxPlayers = 3 T + 3 CT; specCap =
-    // ceil(2/3 · 6) = 4.
+    // not the advisory /status HTTP endpoint. maxPlayers = MAX_SLOTS (5 T + 5 CT);
+    // specCap = MAX_SPECTATORS.
     const c = await connect(WS_URL);
     const { connectWelcome } = await joinTeam(c, 2);
-    expect(connectWelcome.maxPlayers).toBe(6);
-    expect(connectWelcome.specCap).toBe(4);
-    c.close();
+    expect(connectWelcome.maxPlayers).toBe(MAX_PLAYERS);
+    expect(connectWelcome.specCap).toBe(SPEC_CAP);
+    await c.close();
     await delay(100);
   });
 
@@ -133,36 +141,36 @@ describe.skipIf(!SERVER_AVAILABLE)('Phase 9 roster rules', () => {
     const res = await fetch(`http://${BIND}/status`);
     expect(res.ok).toBe(true);
     const body = await res.json();
-    expect(body).toMatchObject({ maxPlayers: 6, specCap: 4 });
+    expect(body).toMatchObject({ maxPlayers: MAX_PLAYERS, specCap: SPEC_CAP });
     expect(typeof body.players).toBe('number');
     expect(typeof body.spectators).toBe('number');
   });
 
-  it('refuses a connection once the server is full (6 players + 4 spectators)', async () => {
+  it('refuses a connection once the server is full (10 players + 4 spectators)', async () => {
     const clients: Client[] = [];
-    // 6 players: 3 T + 3 CT.
-    for (let i = 0; i < 6; i++) {
+    // Fill every player slot: half T, half CT.
+    for (let i = 0; i < MAX_PLAYERS; i++) {
       const c = await connect(WS_URL);
       const r = await joinTeam(c, i % 2); // 0=T, 1=CT
       expect(r.spectator).toBe(false);
       clients.push(c);
     }
-    // 4 spectators fill the rest of capacity.
-    for (let i = 0; i < 4; i++) {
+    // Spectators fill the rest of capacity.
+    for (let i = 0; i < SPEC_CAP; i++) {
       const c = await connect(WS_URL);
       await joinTeam(c, 2);
       clients.push(c);
     }
     await delay(100); // let the game loop update ACTIVE_HUMANS / SPECTATOR_COUNT
 
-    // The 11th connection is refused at the handshake with a Bye.
+    // The next connection over capacity is refused at the handshake with a Bye.
     const rejected = await connect(WS_URL);
     const first = await rejected.next();
     expect(tagOf(first)).toBe(TAG_BYE);
     expect(decodeBye(first)?.reason).toBe('full');
-    rejected.close();
+    await rejected.close();
 
-    for (const c of clients) c.close();
+    await Promise.all(clients.map((c) => c.close()));
     await delay(200);
   });
 });

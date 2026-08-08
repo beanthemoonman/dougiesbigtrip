@@ -424,6 +424,27 @@ Increments (each demoable; full breakdown + exit checks in `docs/netcode.md` §9
 the server says with no rubber-banding; extra connections spectate rather than join the fight.
 Full increment breakdown and per-increment status in `claude_changelog.md` (Phase 6.0–6.7 entries).
 
+**Regression, 2026-08-08 — re-fixed.** The exit test had regressed: a `?connect=` boot still built
+and ran the entire single-player match (local bots + local round FSM) during the handshake, because
+every net-mode gate tested `predictor`, which does not exist until after the team pick. On top of
+that the networked entry path never seeded `player.position`, so the camera sat at world origin
+until the server round went live.
+
+- [x] **T1/e2e:** `tests/e2e/two-clients.e2e.ts` — two real clients vs the real server, snapshots fed
+      through the real `decodeSnapshot` + `createInterpolationBuffer`; each resolves the other as a
+      live, moving, correctly-teamed entity, and a mid-round joiner gets the round in progress.
+      **Both cases passed against unmodified code**, proving the server/wire/interp chain was sound
+      and localising the bug to `src/game/session.ts`.
+- [x] **Fix:** `session.ts` gates on `netMode` (`validatedBootUrl !== null`, known at boot); no local
+      bots are constructed in net mode; the MP team-menu branch calls `enterGame()`; the sim→player
+      read-back (`syncPlayerFromSim()`) also runs while not live.
+- [x] **Harness:** `SERVER_BIN` gets the `.exe` suffix on Windows — without it the **entire e2e suite
+      silently skipped**, which is how `roster.e2e.ts` sat red and unnoticed. Roster suite and docs
+      updated from the stale 3v3 / 6-player numbers to the shipped 5v5 / 10 players + 4 spectators.
+
+**Exit-test result:** `pnpm test:e2e` **13/13 green** (2026-08-08). The two-browser visual half of
+the exit test is still a human gate — nothing in CI executes `session.ts`.
+
 ---
 
 ## Phase 7 — Light ragdoll physics (½–1 week) — **ABSORBED INTO PHASE 12**

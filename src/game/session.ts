@@ -153,6 +153,14 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
 
   // Netcode: declared early so the connect/disconnect callbacks can capture
   // them. Assigned on connect; cleared on disconnect.
+  //
+  // `netMode` is the "am I a networked client?" test, and it is known at BOOT.
+  // Everything used to gate on `predictor`, which only exists after the SECOND
+  // Welcome (i.e. after the team pick) — so a ?connect= boot spent the whole
+  // handshake running a full local match: local bots hunting you, the local round
+  // FSM ticking. The server is authoritative for all of that; in net mode the
+  // client runs no local sim at all.
+  const netMode = validatedBootUrl !== null;
   let predictor: Predictor | null = null;
   let netConn: ReturnType<typeof createConnection> | null = null;
   let serverRoundTimeSec = -1;
@@ -255,12 +263,13 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         teamMenu.el.style.display = 'none';
         screens.enterGame(canvas);
       } else {
-        playerTeam = choice;
-        const spawnPt = choice === 'T' ? T_SPAWN : CT_SPAWN;
-        spawn.set(spawnPt[0], spawnPt[1], spawnPt[2]);
-        teamMenu.el.style.display = 'none';
-        gameMode = 'playing';
-        screens.enterGame(canvas);
+        // Same entry path as single-player. It used to be hand-rolled here and
+        // skipped seeding player.position / input yaw / the kinematic body, so a
+        // networked player sat at world origin until the first live tick. With
+        // `enemies` empty in net mode the bot-benching inside is a no-op, and the
+        // server's first snapshot overwrites position and liveness anyway — this
+        // just closes the pre-snapshot hole.
+        enterGame(choice);
       }
     } else {
       if (choice === 'spec') {
@@ -546,7 +555,11 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     ...spawnRing('CT', ctCount).map((s) => ({ team: 'CT' as Team, s })),
     ...spawnRing('T', tCount).map((s) => ({ team: 'T' as Team, s })),
   ];
-  const enemies: Enemy[] = botDefs.map(({ team, s }) => {
+  // Net mode: the server owns every actor, so build no local bots at all. Before,
+  // they were created unconditionally and the loop merely stopped *updating* them —
+  // leaving frozen bodies visible at both spawn rows whose Rapier capsules still
+  // blocked movement and swallowed local tracer raycasts.
+  const enemies: Enemy[] = (netMode ? [] : botDefs).map(({ team, s }) => {
     const wasmIndex = sim_add_player(s.x, s.y, s.z);
     const bot = createBot(world, s, wasmIndex);
     const clone = cloneSkeleton(templateFor(team));
@@ -606,10 +619,17 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   // interpolation. Each remote gets its own character mesh clone, created lazily
   // when a new slot appears and hidden when gone.
   const remoteRoots = new Map<number, Group>(); // slot → Group
+  const remoteTeams = new Map<number, boolean>(); // slot → teamCt the model was built for
   // slot → last interpolated ground position + stride accumulator, for the
   // footsteps of networked players (see game/footsteps.ts).
   const remoteSteps = new Map<number, { x: number; z: number; dist: number }>();
   function remoteRootFor(slot: number, teamCt: boolean): Group {
+    // A slot that switches team must get the other side's model — the cached one
+    // is baked with the team it was created for, so drop it and rebuild.
+    if (remoteRoots.has(slot) && remoteTeams.get(slot) !== teamCt) {
+      renderCtx.scene.remove(remoteRoots.get(slot)!);
+      remoteRoots.delete(slot);
+    }
     let root = remoteRoots.get(slot);
     if (!root) {
       const clone = cloneSkeleton(templateFor(teamCt ? 'CT' : 'T'));
@@ -621,6 +641,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       root.visible = true;
       renderCtx.scene.add(root);
       remoteRoots.set(slot, root);
+      remoteTeams.set(slot, teamCt);
     }
     return root;
   }
@@ -785,6 +806,29 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     restoreBreakables();
   }
 
+  /** Copy the WASM sim's slot-0 state into `player` and the kinematic body. */
+  function syncPlayerFromSim(): void {
+    const s = sim_get_state(0);
+    player.position.set(s[0]!, s[1]!, s[2]!);
+    player.velocity.set(s[3]!, s[4]!, s[5]!);
+    player.onGround = s[6]! === 1;
+    player.eyeHeight = s[7]!;
+    player.viewPunch = s[8]!;
+    player.duckAmount = s[9]!;
+    player.ducked = player.duckAmount > 0.5;
+    // Sync kinematic body so bots can hit-detect the player. The capsule
+    // shrinks with the duck so a crouching player is genuinely smaller —
+    // same as the server does (sim/src/world.rs).
+    const playerHalf = duckHalfHeight(player.duckAmount);
+    movementCtx.collider.setHalfHeight(playerHalf);
+    bodyCenterScratch.set(
+      player.position.x,
+      player.position.y + playerHalf + PLAYER_RADIUS,
+      player.position.z,
+    );
+    movementCtx.body.setTranslation(bodyCenterScratch, true);
+  }
+
   // Both weapons, welded to the eye on layer 1 (viewmodel pass, renderer.ts).
   // Each keeps its own rest pose (hand-tuned lower-right hold) and its own
   // ammo/recoil state that persists across switches, like CS. The inactive
@@ -851,7 +895,10 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
 
   // Centre-banner text for the current phase (empty during normal play).
   function bannerText(): string {
-    if (predictor) {
+    if (netMode) {
+      // Not synced yet (still handshaking / picking a team): say nothing rather
+      // than fall through to a local round that never ticks.
+      if (serverPhase === -1) return '';
       if (serverPhase === 0) return `FREEZE  ${Math.ceil(serverRoundTimeSec)}`;
       if (serverPhase === 2) {
         const sc = serverScore;
@@ -919,9 +966,9 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         if (e.team === 'CT') ctAlive++;
         else tAlive++;
       }
-      const event = predictor ? 'none' : tickRound(round, currentMatchConfig, tAlive, ctAlive, fixedDt);
-      if (!predictor && event === 'reset') respawn();
-      const live = predictor
+      const event = netMode ? 'none' : tickRound(round, currentMatchConfig, tAlive, ctAlive, fixedDt);
+      if (!netMode && event === 'reset') respawn();
+      const live = netMode
         ? (serverPhase === 1 && playerAlive)
         : (!round.matchOver && round.phase === 'live');
 
@@ -937,25 +984,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         } else {
           sim_tick(0, input.state.buttons, input.state.yaw);
         }
-        const s = sim_get_state(0);
-        player.position.set(s[0]!, s[1]!, s[2]!);
-        player.velocity.set(s[3]!, s[4]!, s[5]!);
-        player.onGround = s[6]! === 1;
-        player.eyeHeight = s[7]!;
-        player.viewPunch = s[8]!;
-        player.duckAmount = s[9]!;
-        player.ducked = player.duckAmount > 0.5;
-        // Sync kinematic body so bots can hit-detect the player. The capsule
-        // shrinks with the duck so a crouching player is genuinely smaller —
-        // same as the server does (sim/src/world.rs).
-        const playerHalf = duckHalfHeight(player.duckAmount);
-        movementCtx.collider.setHalfHeight(playerHalf);
-        bodyCenterScratch.set(
-          player.position.x,
-          player.position.y + playerHalf + PLAYER_RADIUS,
-          player.position.z,
-        );
-        movementCtx.body.setTranslation(bodyCenterScratch, true);
+        syncPlayerFromSim();
         // Footsteps: see game/footsteps.ts. Unpanned — your own boots are at the
         // ear. The greybox floor is concrete throughout; sample a real surface
         // here if the map ever varies.
@@ -963,6 +992,14 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         const step = advanceStride(stepDist, groundSpeed, fixedDt);
         stepDist = step.dist;
         if (step.stepped) playFootstep('concrete');
+      } else if (netMode && predictor) {
+        // Not live (server freezetime / round over) but connected: reconcile() has
+        // already written the authoritative position into the WASM sim, so read it
+        // back. Without this the camera sat at world origin until the round went
+        // live — you were nowhere near the map, which is why nobody could see
+        // anybody. No predict(), no command sent: the server zeroes buttons outside
+        // Live anyway (server/src/main.rs, `is_live` gate).
+        syncPlayerFromSim();
       }
       world.updateSceneQueries(); // bot perception: human body at current tick position
 
@@ -975,7 +1012,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       // Bots (both teams): pick the nearest visible enemy, run the FSM, shoot.
       // In networked mode the server is authoritative for all entities; local bot
       // simulation would create duplicate models and waste CPU on shadow sim ticks.
-      if (live && !predictor) {
+      if (live && !netMode) {
         for (const e of enemies) {
           if (!e.alive) continue;
           e.fireCooldown = Math.max(0, e.fireCooldown - fixedDt);
@@ -1138,7 +1175,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
             // The pistol is a suppressed USP-S — a much smaller, dimmer flash.
             vfx.muzzleFlash(muzzle, shot.direction, active.id === 'pistol' ? 0.3 : 1);
             vfx.tracer(muzzle, tracerEnd);
-            if (predictor) {
+            if (netMode) {
               // Networked: the server owns hitreg. Ship eye + spread-adjusted dir
               // on this tick's command; kill/damage arrive via snapshot events.
               if (netCmd) attachShot(netCmd, shotOrigin, shot.direction);
@@ -1290,7 +1327,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       // hierarchy sits inside it and AnimationMixer drives the poses.
       // In networked mode the server is authoritative for all entity
       // positions — render those through remoteRootFor below.
-      if (!predictor) {
+      if (!netMode) {
         for (const e of enemies) {
           if (e.alive) {
             const p = e.brain.bot.position;
