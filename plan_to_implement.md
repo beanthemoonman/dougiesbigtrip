@@ -601,6 +601,12 @@ Status: all code written, all tests green (204 TS, 39 sim, 6 server). ACC-019 re
 Server-side nav via hand-authored waypoint graph (`de_douglas.navnodes.json`) loaded by both
 ports. **Phase 11 is complete.**
 
+**Correction (2026-08-08):** Phase 11 shipped with a critical defect — bots were inert after the
+server port due to a missing self/team filter in the target scan (`server/src/ai.rs:342-355`).
+Fixed in a follow-up that added `enemy_positions` filtering in `main.rs`, spread spawns
+(`spawn_ring_feet`), and bot shooting with deterministic angular spread. Three new AI tests
+added (wander, engage, teammate ignore). See `claude_changelog.md` 2026-08-08.
+
 ---
 
 ## Phase 12 — Third-person fidelity + ragdoll (redux of Phase 7) (1 week)

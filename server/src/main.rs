@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
-use sim::constants::FIXED_DT;
+use sim::constants::{EYE_HEIGHT_STANDING, FIXED_DT};
 use sim::map;
 use sim::movement::{tick_movement, PlayerState};
 use sim::protocol::{
@@ -55,6 +55,54 @@ const MAX_SPECTATORS: usize = 4;
 const SEED: u32 = 1;
 const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
 const NAVNODES_JSON: &str = include_str!("../../assets/maps/de_douglas.navnodes.json");
+
+/// Port of `spawnRing` from `src/game/spawning.ts`. Returns the feet position for a
+/// slot given its team and its 0-based index *within the team*. Preset offsets
+/// reproduce the original 3v3 layout; beyond 3 per side rows step inward.
+fn spawn_ring_feet(team_ct: bool, rel_index: usize, anchor: [f64; 3]) -> [f64; 3] {
+    const PRESET_X: [f64; 3] = [-3.0, 2.0, 5.0];
+    const PRESET_Z: [f64; 3] = [0.0, 1.0, -1.0];
+    let z_sign: f64 = if team_ct { 1.0 } else { -1.0 };
+
+    let (x_off, z_off) = if rel_index < PRESET_X.len() {
+        (PRESET_X[rel_index], PRESET_Z[rel_index])
+    } else {
+        let row = (rel_index / PRESET_X.len()) as f64;
+        let col = rel_index % PRESET_X.len();
+        (PRESET_X[col] - 2.5 * row, PRESET_Z[col] - 1.5 * row)
+    };
+
+    [anchor[0] + x_off, anchor[1], anchor[2] + z_off * z_sign]
+}
+
+/// The enemy-only view of the world handed to one bot's `ai::tick_bot`.
+///
+/// Entry `i` is `Some(pos)` only when slot `i` is occupied, alive and on the
+/// opposite team to slot `idx`. Self and same-team slots are always `None`.
+///
+/// This filter is load-bearing, not an optimisation. `ai::can_see` returns true
+/// unconditionally below 1e-6 m, and every bot on a team used to share one spawn
+/// coordinate — so an unfiltered array made each bot acquire *itself* as a
+/// target, enter Engage, and return zero buttons forever. See the tests.
+fn enemy_positions_for(
+    idx: usize,
+    positions: &[Option<nalgebra::Vector3<f64>>],
+    occupied: &[bool],
+    alive: &[bool],
+    team_ct: &[bool],
+) -> Vec<Option<nalgebra::Vector3<f64>>> {
+    if !occupied[idx] || !alive[idx] {
+        return vec![None; positions.len()];
+    }
+    positions
+        .iter()
+        .enumerate()
+        .map(|(i, opt_pos)| match opt_pos {
+            Some(p) if i != idx && occupied[i] && alive[i] && team_ct[i] != team_ct[idx] => Some(*p),
+            _ => None,
+        })
+        .collect()
+}
 
 /// Phase 16.3: runtime server configuration built from compiled defaults ← env vars.
 /// Validated against the same bounds as the TS `MatchConfig` validator (docs/plan-post-1.0-config-auth.md).
@@ -248,7 +296,8 @@ async fn game_loop(
     let mut slots: Vec<Slot> = (0..MAX_SLOTS)
         .map(|i| {
             let team_ct = i % 2 == 1;
-            let s = if team_ct { spawn.ct } else { spawn.t };
+            let anchor = if team_ct { spawn.ct } else { spawn.t };
+            let s = spawn_ring_feet(team_ct, i / 2, anchor);
             let (body_handle, collider_handle) = if i == 0 {
                 (
                     world.player_rigid_body_handle(0),
@@ -429,6 +478,12 @@ async fn game_loop(
                     })
                     .collect();
 
+                let occupied: Vec<bool> = slots.iter().map(|s| s.occupied).collect();
+                let teams: Vec<bool> = slots.iter().map(|s| s.team_ct).collect();
+                let enemy_positions: Vec<Vec<Option<nalgebra::Vector3<f64>>>> = (0..MAX_SLOTS)
+                    .map(|idx| enemy_positions_for(idx, &positions, &occupied, &alive, &teams))
+                    .collect();
+
                 for (_idx, slot) in slots.iter_mut().enumerate() {
                     if !slot.occupied { continue; }
 
@@ -464,7 +519,7 @@ async fn game_loop(
                                 &world,
                                 &slot.player.position,
                                 slot.collider_handle,
-                                &positions,
+                                &enemy_positions[_idx],
                                 &alive,
                                 &nav_graph,
                                 &mut search_state,
@@ -474,7 +529,42 @@ async fn game_loop(
                             );
                             slot.last_buttons = buttons;
                             slot.last_yaw = yaw as f32;
-                            slot.last_pitch = 0.0;
+                            slot.last_pitch = bot.aim_pitch as f32;
+
+                            // Bot shooting (Phase 11.5): when in Engage with
+                            // reaction done and the fire interval elapsed, synthesise
+                            // a Shot with deterministic angular spread.
+                            bot.fire_cooldown = (bot.fire_cooldown - FIXED_DT as f64).max(0.0);
+                            slot.last_shot = if bot.mode == ai::BotMode::Engage
+                                && bot.reaction_timer <= 0.0
+                                && bot.fire_cooldown <= 0.0
+                            {
+                                const BOT_AIM_SPREAD: f64 = 0.06;
+                                const FIRE_INTERVAL: f64 = 0.125;
+                                bot.fire_cooldown = FIRE_INTERVAL;
+                                let r1 = ai::hash01(server_tick, _idx as u32);
+                                let r2 = ai::hash01(_idx as u32, server_tick);
+                                let sp_yaw = (r1 - 0.5) * 2.0 * BOT_AIM_SPREAD;
+                                let sp_pitch = (r2 - 0.5) * 2.0 * BOT_AIM_SPREAD;
+                                let ay = bot.aim_yaw + sp_yaw;
+                                let ap = bot.aim_pitch + sp_pitch;
+                                let cp = ap.cos();
+                                let p = &slot.player.position;
+                                Some(Shot {
+                                    eye_pos: [
+                                        p.x as f32,
+                                        (p.y + EYE_HEIGHT_STANDING) as f32,
+                                        p.z as f32,
+                                    ],
+                                    dir: [
+                                        ((-ay.sin()) * cp) as f32,
+                                        (ap.sin()) as f32,
+                                        ((-ay.cos()) * cp) as f32,
+                                    ],
+                                })
+                            } else {
+                                None
+                            };
                         }
                     }
 
@@ -565,8 +655,16 @@ async fn game_loop(
                         let hit_z = eye_z + dir_z * dist;
                         let mut best_slot: Option<usize> = None;
                         let mut best_dist_sq = f64::MAX;
+                        let shooter_ct = slots[shooter_idx].team_ct;
                         for (ts, ts_slot) in slots.iter().enumerate() {
                             if ts == shooter_idx || !ts_slot.occupied || !ts_slot.alive {
+                                continue;
+                            }
+                            // No friendly fire. Bots fire ~8 rounds/s while standing
+                            // in Engage and their teammates spawn a few metres away,
+                            // so without this a team shoots itself down and the
+                            // shooter is credited with the kills.
+                            if ts_slot.team_ct == shooter_ct {
                                 continue;
                             }
                             let tp = &ts_slot.player.position;
@@ -714,7 +812,7 @@ async fn game_loop(
                                 found_slot = Some(i as u8);
                                 let o = out_opt.take().unwrap();
                                 // Phase 9: a player replaces a bot INSTANTLY, mid-round or not.
-                                let sp = if target_ct { spawn.ct } else { spawn.t };
+                                let bf = s.bot_spawn.feet;
                                 s.is_human = true;
                                 ACTIVE_HUMANS.fetch_add(1, Ordering::Relaxed);
                                 s.alive = true;
@@ -726,10 +824,10 @@ async fn game_loop(
                                 s.queue.clear();
                                 s.ack_seq = 0;
                                 s.last_buttons = 0;
-                                s.player.reset(sp[0], sp[1], sp[2]);
+                                s.player.reset(bf[0], bf[1], bf[2]);
                                 world.sync_player_body(
                                     s.body_handle, s.collider_handle,
-                                    sp[0], sp[1], sp[2], false,
+                                    bf[0], bf[1], bf[2], false,
                                 );
                                 s.bot = None;
                                 s.validated_user = validated;
@@ -1163,7 +1261,7 @@ mod config_tests {
     #[test]
     fn rejects_bot_count_above_capacity() {
         let (b, ab, _, r, m, f, rt, e, a) = default_values();
-        let err = validate_config(b, ab, 7, r, m, f, rt, e, a).unwrap_err();
+        let err = validate_config(b, ab, MAX_SLOTS + 1, r, m, f, rt, e, a).unwrap_err();
         assert!(err.iter().any(|e| e.contains("bot_count")));
     }
 
@@ -1207,5 +1305,104 @@ mod config_tests {
         let (b, ab, _, _, _, f, rt, e, a) = default_values();
         let err = validate_config(b, ab, 0, 0, "unknown".into(), f, rt, e, a).unwrap_err();
         assert!(err.len() >= 3);
+    }
+}
+
+#[cfg(test)]
+mod enemy_filter_tests {
+    use super::*;
+    use nalgebra::Vector3;
+    use sim::input::Buttons;
+
+    /// Ten slots, teams by parity, every member of a team stacked on one point —
+    /// the exact condition that froze every bot before the filter existed.
+    fn stacked_teams() -> (
+        Vec<Option<Vector3<f64>>>,
+        Vec<bool>,
+        Vec<bool>,
+        Vec<bool>,
+    ) {
+        let t = Vector3::new(-15.0, 0.05, -25.0);
+        let ct = Vector3::new(-15.0, 0.05, 25.0);
+        let positions = (0..MAX_SLOTS)
+            .map(|i| Some(if i % 2 == 1 { ct } else { t }))
+            .collect();
+        let occupied = vec![true; MAX_SLOTS];
+        let alive = vec![true; MAX_SLOTS];
+        let teams = (0..MAX_SLOTS).map(|i| i % 2 == 1).collect();
+        (positions, occupied, alive, teams)
+    }
+
+    #[test]
+    fn filter_hides_self_and_teammates() {
+        let (positions, occupied, alive, teams) = stacked_teams();
+        let view = enemy_positions_for(0, &positions, &occupied, &alive, &teams);
+        assert!(view[0].is_none(), "must not see itself");
+        for i in (2..MAX_SLOTS).step_by(2) {
+            assert!(view[i].is_none(), "must not see teammate in slot {i}");
+        }
+        for i in (1..MAX_SLOTS).step_by(2) {
+            assert!(view[i].is_some(), "must see enemy in slot {i}");
+        }
+    }
+
+    #[test]
+    fn filter_hides_dead_and_vacant_enemies() {
+        let (positions, mut occupied, mut alive, teams) = stacked_teams();
+        alive[1] = false; // dead enemy
+        occupied[3] = false; // vacant slot
+        let view = enemy_positions_for(0, &positions, &occupied, &alive, &teams);
+        assert!(view[1].is_none(), "dead enemy must be invisible");
+        assert!(view[3].is_none(), "vacant slot must be invisible");
+        assert!(view[5].is_some(), "live enemy still visible");
+    }
+
+    #[test]
+    fn dead_bot_gets_an_empty_view() {
+        let (positions, occupied, mut alive, teams) = stacked_teams();
+        alive[0] = false;
+        let view = enemy_positions_for(0, &positions, &occupied, &alive, &teams);
+        assert!(view.iter().all(|p| p.is_none()));
+    }
+
+    /// The regression proper. Runs the real `tick_bot` against both the filtered
+    /// and the unfiltered array from identical starting state: unfiltered, the bot
+    /// targets a zero-distance "enemy" (itself / a stacked teammate), latches into
+    /// Engage and emits zero buttons for good — the observed production freeze.
+    /// Filtered, it walks.
+    #[test]
+    fn stacked_teammates_freeze_the_bot_without_the_filter() {
+        let mut world = SimWorld::new();
+        map::load(&mut world, MAP_JSON);
+        world.ensure_broad_phase_ready();
+        let graph = nav_graph::NavGraph::from_json(NAVNODES_JSON);
+        let (positions, occupied, alive, teams) = stacked_teams();
+        let feet = positions[0].unwrap();
+
+        let run = |view: &[Option<Vector3<f64>>], world: &mut SimWorld| -> bool {
+            let (_b, coll) = world.add_player_body();
+            let mut bot = ai::Bot::new(0, 0);
+            let mut search = ai::SearchState::new(graph.node_count());
+            let mut moved = false;
+            for tick in 0..200 {
+                let (buttons, _) = ai::tick_bot(
+                    &mut bot, world, &feet, coll, view, &alive, &graph,
+                    &mut search, &[], &[], tick,
+                );
+                if buttons & Buttons::FORWARD != 0 {
+                    moved = true;
+                }
+            }
+            moved
+        };
+
+        assert!(
+            !run(&positions, &mut world),
+            "unfiltered positions must reproduce the freeze — if this now moves, \
+             the zero-distance can_see short-circuit changed and the filter's \
+             rationale needs revisiting"
+        );
+        let view = enemy_positions_for(0, &positions, &occupied, &alive, &teams);
+        assert!(run(&view, &mut world), "filtered view must let the bot walk");
     }
 }

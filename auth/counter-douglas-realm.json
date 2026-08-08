@@ -105,12 +105,11 @@
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
-        "http://localhost:8080/*",
+        "http://localhost:8082/*",
         "http://localhost:5173/*",
-        "https://localhost:8443/*",
         "https://counterdouggo.yikersis.land/*"
       ],
-      "webOrigins": ["+", "http://localhost:5173", "https://counterdouggo.yikersis.land"],
+      "webOrigins": ["+", "http://localhost:8082", "http://localhost:5173", "https://counterdouggo.yikersis.land"],
       "bearerOnly": false,
       "consentRequired": false,
       "standardFlowEnabled": true,
@@ -152,6 +151,16 @@
         "microprofile-jwt"
       ],
       "protocolMappers": [
+        {
+          "name": "subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
         {
           "name": "game-server audience",
           "protocol": "openid-connect",

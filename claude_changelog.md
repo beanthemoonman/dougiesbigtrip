@@ -4142,3 +4142,142 @@ Not done: the browser-level check. Both symptoms are now argued to be fixed by r
 `session.ts`, but nothing executes `session.ts` in CI — a two-page puppeteer test (deferred by
 decision this turn) is what would actually prove the meshes render. The manual two-window check in
 `tests/acceptance/ACC-010-netcode.md` remains the gate.
+
+## Multiplayer freeze after picking a team — JWT issuer mismatch
+
+Root cause, from `docker compose logs server`:
+
+```
+conn 1 refused — token validation failed: InvalidIssuer
+```
+
+`AuthConfig::from_env()` derives the expected issuer from `KC_HOSTNAME`, but compose only passed
+`KC_HOSTNAME` to the `auth` service, never to `server`. So the server fell back to its built-in
+default (`https://localhost:8443/auth/...`) while the browser's token was minted at
+`http://localhost:8082/auth/...`. Every join got a Bye.
+
+- `docker-compose.yml`: pass `KC_HOSTNAME` through to the `server` service, same default as `auth`.
+- `src/game/session.ts` / `src/ui/teammenu.ts`: a Bye no longer only `console.warn`s. The team menu
+  had already hidden itself and the game screen was up, so a refused join looked exactly like a
+  freeze. Now it drops back to `gameMode = 'menu'`, re-shows the team menu with the server's reason,
+  and disables the buttons (the socket is gone — re-picking is futile). `setError()` on `TeamMenu`.
+
+Verified: `npx tsc --noEmit` clean, server container recreated with the env var.
+Not done: no test covers the Bye path — the client half is only argued, not executed. Same gap as
+the previous entry (nothing in CI runs `session.ts`). Retest is the manual one in `ACC-010`.
+
+### Follow-up: "auth failed: token missing sub"
+
+With the issuer fixed, the next refusal surfaced (visible now, thanks to the team-menu error line).
+Since Keycloak 24 the `sub` claim is delivered by the built-in **"basic" client scope**. This realm
+ships its own `clientScopes` list and no `basic` scope exists in it at all, so `counter-douglas-spa`
+access tokens carried no `sub` — `user_from_claims()` rejected every one of them.
+
+- `auth/counter-douglas-realm.json`: added an `oidc-sub-mapper` ("subject") protocol mapper to the
+  SPA client. Mapping the claim on the client avoids depending on a scope this realm doesn't define.
+- `scripts/init-keycloak-idp.sh`: re-applies that mapper via the Admin API (`--import-realm` is a
+  no-op once the realm exists), idempotently. Also **no longer requires** `GOOGLE_CLIENT_ID`/
+  `_SECRET` — those are unset in this deployment, so `: "${GOOGLE_CLIENT_ID:?}"` aborted the whole
+  script before any of it ran. The Google IDP section is now skipped when the creds are absent.
+- `.gitattributes` (new): `*.sh eol=lf`. With `core.autocrlf=true` the Windows checkout gave
+  `init-keycloak-idp.sh` CRLF endings; the container read the shebang as `/bin/sh\r` and died with
+  `sh: /init-keycloak-idp.sh: not found`. The script had therefore *never* run on this machine.
+  Working copies of `scripts/*.sh` converted to LF.
+
+Verified: `docker compose up keycloak-init` → "created." → exit 0. Not verified by me: that a fresh
+login now yields a token with `sub` (needs a browser login - the SPA client has direct access grants
+disabled, so no token can be minted from the CLI).
+
+---
+
+## 2026-08-08
+
+- **Fixed bots frozen at spawn (server-side).** Root cause: `server/src/ai.rs` target scan had no
+  self/team filter. All bots on a team spawned at one coordinate, so each bot acquired a zero-distance
+  target (itself or a stacked teammate), entered Engage, and early-returned zero buttons permanently.
+  The TypeScript original (`session.ts:676`) had `if (other === me || !other.alive || other.team === me.team) continue;`
+  — the Rust port dropped that line.
+
+  **Fix 1 — enemy_positions filter:** Built `enemy_positions: Vec<Vec<Option<Vector3<f64>>>>` in
+  `server/src/main.rs` (indexed by slot, `[me][i]` = `Some(pos)` only when `i` is occupied, alive,
+  and on the opposite team). Passed to `tick_bot` instead of the unfiltered `positions` array. The
+  existing `if let Some(ref p) = player_positions[i]` in `ai.rs:344` then skips self/friendlies
+  for free. Deleted the dead `i != bot.target_slot.unwrap_or(usize::MAX)` guard (always true after
+  `target_slot = None` on the line above).
+
+  **Fix 2 — spawn ring:** Ported `spawnRing` from `src/game/spawning.ts:13` into the server as
+  `spawn_ring_feet()` in `main.rs`. Applied at slot construction (`main.rs:267-270`), human join
+  (`main.rs:759` → uses stored `bot_spawn.feet`), and round reset (already used `bot_spawn.feet`).
+  Un-stacks 10 coincident capsules, making bots visible and removing the degenerate zero-distance
+  case at source.
+
+  **Fix 3 — bot shooting:** Added `fire_cooldown: f64` to `Bot` (`ai.rs:82-96`). In the bot branch
+  of `main.rs`, when the bot is in Engage with `reaction_timer <= 0.0` and cooldown elapsed,
+  synthesises `slot.last_shot = Some(Shot { eye_pos, dir })` from `bot.aim_yaw`/`bot.aim_pitch` at
+  `EYE_HEIGHT_STANDING`. Angular spread via deterministic `hash01(server_tick, slot)` (BOT_AIM_SPREAD
+  = 0.06 rad), matching the client's `src/ai/aim.ts`. Sets `slot.last_pitch = bot.aim_pitch as f32`
+  instead of hardcoded `0.0`. Made `hash01` public. Bots ignore ammo/reload (ponytail).
+
+  **Fix 4 — remote player animation (client):** `src/game/session.ts` remotes never created an
+  `AnimationMixer`. Added `remoteAnims` map, built via `createBotAnim()` in `remoteRootFor()`,
+  driven each render frame via `driveBotAnim(anim, speed, true, 'search', frameDt)` before
+  `applyWeaponPose()`. `resetBotAnim()` called on dead→alive transition. Fixed stale comment
+  ("Snapshots carry no velocity" → `RemoteEntity` discards velocity, not the wire).
+
+- **Rust tests (`server/src/ai.rs`):** Added `#[cfg(test)]` module with 6 tests:
+  `bot_with_no_enemies_wanders_in_search` (regression — would have caught the freeze bug),
+  `bot_engages_visible_enemy`, `bot_ignores_teammates`, `hash01_is_deterministic`,
+  `spread_is_deterministic`, `hash01_differs_by_input`.
+
+- **Client tests (`src/ai/anim.test.ts`):** Extended with 6 new tests for the remote-driving path:
+  alive remote walk/idle selection, dead remote always picks death, `deadPlayed` latch (death clip
+  plays once), `resetBotAnim` restores idle after death, alive after reset transitions to walk.
+
+- **Pre-existing test fix:** `rejects_bot_count_above_capacity` was testing with `bot_count=7` which
+  is valid since `MAX_SLOTS=10`. Changed to `MAX_SLOTS + 1`.
+
+- `pnpm typecheck` green. `pnpm test` 284 tests (12 new) pass. `cargo test` 37 tests pass.
+
+## 2026-08-08 — Review follow-up on the bot/animation fix
+
+Reviewed the branch's bot + remote-animation work and fixed four defects found in it.
+
+- **Remote animation died permanently on slot reuse.** The disconnected-slot cleanup in
+  `src/game/session.ts` deleted `remoteAnims` but left the entry in `remoteRoots`. Since
+  `remoteRootFor()` only builds a mixer when it builds the root, a returning slot — which happens
+  on every leave, because a bot backfills the same slot at the next round reset — got the cached
+  root and no mixer, and never animated again. Replaced the ad-hoc teardown with a single
+  `disposeRemote(slot)` that drops every per-slot map together.
+
+- **Death animation never played for networked players.** The driver was called with `'search'`
+  unconditionally and dead remotes were simply hidden. Now the alive→dead edge records where the
+  model was standing and plays the death clip there for `DEATH_CLIP_SECONDS` before hiding. The
+  remembered position is necessary: the server resets a corpse's position to its spawn point the
+  moment health reaches 0, so the wire position is useless for this.
+
+- **Friendly fire was unguarded** (`server/src/main.rs`, shot resolution). The target search
+  excluded only the shooter. Harmless while only humans could shoot; with bots firing ~8 rounds/s
+  from Engage and teammates spawning a few metres apart under the new spawn ring, a team would
+  shoot itself down and credit the shooter with the kills. Added a `team_ct` check.
+
+- **The new tests could not fail against the broken code.** Both halves were tested by
+  reimplementing the logic inside the test file:
+  - `src/ai/anim.test.ts` — the remote-driving block asserted against local copies of the clip
+    selection rule and never imported `anim.ts`. Rewritten to drive the real `createBotAnim` /
+    `driveBotAnim` / `resetBotAnim` against a real `AnimationMixer` with synthetic clips.
+  - `server/src/ai.rs` — the three AI tests pass identically on the pre-fix code, because the only
+    `ai.rs` change was deleting an always-true condition; the actual fix is the array built in
+    `main.rs`. Extracted that construction as `enemy_positions_for()` and added
+    `enemy_filter_tests`, including `stacked_teammates_freeze_the_bot_without_the_filter`, which
+    runs the real `tick_bot` against both the unfiltered and filtered arrays and asserts the
+    unfiltered one still reproduces the freeze. That is the test that pins the bug.
+  - Deleted `spread_is_deterministic`, which computed the spread formula inline in the test.
+
+Verified: `npx tsc --noEmit` clean; `cargo test` 40 passed; `npx vitest run` 279 passed, 1 failed.
+The failure is `tools/modelview/view.test.ts` (headless-GL previewer, 30 s timeout) and is
+pre-existing on this machine — it fails identically before these changes and is unrelated to the
+diff. Not verified by me: any of this in a live match. Bot lethality (30 dmg × 8 shots/s, no ammo
+or reload, ±0.06 rad spread ⇒ ~0.5 s TTK) has had no ACC pass and is likely to need tuning.
+
+Left alone deliberately: the older tests in `src/ai/anim.test.ts` above the remote block use the
+same reimplement-locally pattern and are equally hollow, but they predate this work.

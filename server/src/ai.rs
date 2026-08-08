@@ -88,6 +88,9 @@ pub struct Bot {
     pub last_known: Option<Vector3<f64>>,
     pub reaction_timer: f64,
     pub lost_timer: f64,
+    /// Time until the bot may fire its weapon again (seconds). Decremented each
+    /// tick; the loop in main.rs synthesises a Shot only when this reaches zero.
+    pub fire_cooldown: f64,
     /// Graph node the bot is currently walking toward (the next hop in a path).
     pub path_goal_node: usize,
     /// Graph node the bot is currently at (nearest node to its position last frame).
@@ -118,6 +121,7 @@ impl Bot {
             last_known: None,
             reaction_timer: 0.0,
             lost_timer: 0.0,
+            fire_cooldown: 0.0,
             path_goal_node: start_node,
             current_node: start_node,
             caution_timer: base_move,
@@ -196,7 +200,7 @@ fn can_see(
 /// Deterministic [0,1) hash of two u32s. Must stay bit-identical to
 /// `navnodes.ts::hash01` — it is what lets both ports jitter their goal picks
 /// the same way. Not an RNG: no stream, no state, so replays stay exact.
-fn hash01(a: u32, b: u32) -> f64 {
+pub fn hash01(a: u32, b: u32) -> f64 {
     let mut h = a.wrapping_mul(0x9e37_79b1) ^ b.wrapping_mul(0x85eb_ca6b);
     h ^= h >> 15;
     h = h.wrapping_mul(0x2545_f491);
@@ -299,8 +303,8 @@ fn unstick(bot: &mut Bot, buttons: u16, bot_feet: &Vector3<f64>, server_tick: u3
 }
 
 /// Tick the bot's AI and return (buttons, yaw) for tick_movement.
-/// `player_positions` provides feet positions of all occupied slots (by index).
-/// `alive` indicates which slots are alive.
+/// `player_positions` provides feet positions of enemy slots only (by index) —
+/// self and same-team slots are always `None`. `alive` indicates which slots are alive.
 pub fn tick_bot(
     bot: &mut Bot,
     world: &SimWorld,
@@ -342,14 +346,12 @@ pub fn tick_bot(
         for (i, a) in alive.iter().enumerate() {
             if !a { continue; }
             if let Some(ref p) = player_positions[i] {
-                if i != bot.target_slot.unwrap_or(usize::MAX) {
-                    if can_see(world, bot_feet, bot.yaw, p, bot_collider) {
-                        bot.target_slot = Some(i);
-                        bot.last_known = Some(*p);
-                        sees = true;
-                        target_feet = *p;
-                        break;
-                    }
+                if can_see(world, bot_feet, bot.yaw, p, bot_collider) {
+                    bot.target_slot = Some(i);
+                    bot.last_known = Some(*p);
+                    sees = true;
+                    target_feet = *p;
+                    break;
                 }
             }
         }
@@ -474,4 +476,124 @@ pub fn tick_bot(
 
     buttons = unstick(bot, buttons, bot_feet, server_tick);
     (buttons, bot.yaw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sim::world::SimWorld;
+
+    const MAP_JSON: &str = include_str!("../../assets/maps/de_douglas.json");
+    const NAVNODES_JSON: &str = include_str!("../../assets/maps/de_douglas.navnodes.json");
+
+    fn setup() -> (SimWorld, NavGraph) {
+        let mut world = SimWorld::new();
+        sim::map::load(&mut world, MAP_JSON);
+        world.ensure_broad_phase_ready();
+        let graph = NavGraph::from_json(NAVNODES_JSON);
+        (world, graph)
+    }
+
+    /// Regression test: two same-team bots at identical coords would freeze before
+    /// the enemy_positions filter (each saw zero-distance self, entered Engage, and
+    /// returned zero buttons permanently). With enemies filtered out, a bot must
+    /// wander in Search mode even when it is the only occupied slot.
+    #[test]
+    fn bot_with_no_enemies_wanders_in_search() {
+        let (mut world, graph) = setup();
+        let mut bot = Bot::new(0, 0);
+        let (_body_h, coll_h) = world.add_player_body();
+        let feet = Vector3::new(-20.0, 0.0, -25.0);
+        let enemy_pos: Vec<Option<Vector3<f64>>> = vec![None; 10];
+        let alive: Vec<bool> = vec![false; 10];
+        let mut search = SearchState::new(graph.node_count());
+        let tm_pos: Vec<&Vector3<f64>> = vec![];
+        let tm_goals: Vec<usize> = vec![];
+
+        let mut moved = false;
+        for tick in 0..200 {
+            let (buttons, _) = tick_bot(
+                &mut bot, &world, &feet, coll_h,
+                &enemy_pos, &alive, &graph, &mut search,
+                &tm_pos, &tm_goals, tick,
+            );
+            if buttons & Buttons::FORWARD != 0 {
+                moved = true;
+            }
+        }
+        assert!(moved, "bot with no enemies should wander (search mode), not freeze");
+    }
+
+    /// A bot with a visible enemy in front (within FOV and LOS) must enter Engage.
+    #[test]
+    fn bot_engages_visible_enemy() {
+        let (mut world, graph) = setup();
+        let mut bot = Bot::new(0, 0);
+        bot.yaw = 0.0; // looks down -Z
+        let (_body_h, coll_h) = world.add_player_body();
+        let feet = Vector3::new(-20.0, 0.0, -25.0);
+        // Enemy at the exact same coords → zero-distance short-circuit in can_see.
+        let mut enemy_pos: Vec<Option<Vector3<f64>>> = vec![None; 10];
+        enemy_pos[1] = Some(feet);
+        let mut alive: Vec<bool> = vec![false; 10];
+        alive[1] = true;
+        let mut search = SearchState::new(graph.node_count());
+        let tm_pos: Vec<&Vector3<f64>> = vec![];
+        let tm_goals: Vec<usize> = vec![];
+
+        let (_buttons, _) = tick_bot(
+            &mut bot, &world, &feet, coll_h,
+            &enemy_pos, &alive, &graph, &mut search,
+            &tm_pos, &tm_goals, 0,
+        );
+        assert_eq!(
+            bot.mode, BotMode::Engage,
+            "bot should engage visible enemy at zero distance"
+        );
+    }
+
+    /// With only same-team members present (all enemy_pos entries None), the bot
+    /// must NOT enter Engage — it should stay in Search.
+    #[test]
+    fn bot_ignores_teammates() {
+        let (mut world, graph) = setup();
+        let mut bot = Bot::new(0, 0);
+        let (_body_h, coll_h) = world.add_player_body();
+        let feet = Vector3::new(-20.0, 0.0, -25.0);
+        let enemy_pos: Vec<Option<Vector3<f64>>> = vec![None; 10];
+        let mut alive: Vec<bool> = vec![false; 10];
+        alive[0] = true; // self occupied but not in enemy list
+        let mut search = SearchState::new(graph.node_count());
+        let tm_pos: Vec<&Vector3<f64>> = vec![];
+        let tm_goals: Vec<usize> = vec![];
+
+        let (_buttons, _) = tick_bot(
+            &mut bot, &world, &feet, coll_h,
+            &enemy_pos, &alive, &graph, &mut search,
+            &tm_pos, &tm_goals, 0,
+        );
+        assert_ne!(
+            bot.mode, BotMode::Engage,
+            "bot should not engage when only teammates/self are present"
+        );
+    }
+
+    #[test]
+    fn hash01_is_deterministic() {
+        let v1 = hash01(42, 17);
+        let v2 = hash01(42, 17);
+        assert_eq!(v1, v2, "hash01 must be deterministic for the same inputs");
+        assert!(v1 >= 0.0 && v1 < 1.0);
+    }
+
+    /// hash01 with different seeds produces different values (not a collision).
+    #[test]
+    fn hash01_differs_by_input() {
+        let a = hash01(1, 1);
+        let b = hash01(1, 2);
+        let c = hash01(2, 1);
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+    }
 }

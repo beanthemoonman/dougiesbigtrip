@@ -60,9 +60,10 @@ services:
       KC_DB_SCHEMA: keycloak
       KC_HEALTH_ENABLED: "true"
       # Full public URL: nginx sends Host without the port, so a bare hostname
-      # would build redirect/issuer URLs missing :8443 and break the OAuth
-      # round-trip. Override in .env for a real deployment.
-      KC_HOSTNAME: ${KC_HOSTNAME:-https://localhost:8443/auth}
+      # would build redirect/issuer URLs missing :8082 and break the OAuth
+      # round-trip. Override in .env for a real deployment (the public URL of
+      # the reverse proxy, e.g. https://counterdouggo.yikersis.land/auth).
+      KC_HOSTNAME: ${KC_HOSTNAME:-http://localhost:8082/auth}
       # Keycloak serves at / by default; the proxy and all the advertised
       # redirect URIs use /auth.
       KC_HTTP_RELATIVE_PATH: /auth
@@ -124,6 +125,11 @@ services:
       # documented AUTH_REQUIRED=true gate was silently off). Unset ⇒ auth off
       # ⇒ the admin API refuses every write rather than running open.
       AUTH_REQUIRED: ${AUTH_REQUIRED:-}
+      # The server derives the expected JWT issuer from this. It must match the
+      # URL the *browser* got its token from, or every join is refused with
+      # InvalidIssuer (and the client sits on a dead connection). Same default
+      # as the auth service above — keep the two in step.
+      KC_HOSTNAME: ${KC_HOSTNAME:-http://localhost:8082/auth}
     expose:
       - "9876"
       - "9877"
@@ -137,6 +143,10 @@ services:
       context: .
       dockerfile: Dockerfile.client
     ports:
+      # Single published port. Dev hits http://localhost:8082 directly;
+      # deployment terminates TLS in a reverse proxy in front of this.
+      # Must appear in the realm's redirectUris / KC_HOSTNAME or Keycloak
+      # rejects the login with "Invalid parameter: redirect_uri".
       - "8082:80"
     depends_on:
       server:

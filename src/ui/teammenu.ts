@@ -14,6 +14,8 @@ export interface TeamMenu {
   readonly el: HTMLElement;
   /** Update which buttons are enabled based on team capacity info. */
   setCounts(players: number, maxPlayers: number, spectators: number, specCap: number): void;
+  /** Show why the last join was refused (server Bye). '' clears it. */
+  setError(reason: string): void;
   /** Called when Esc is pressed while the menu is visible. The caller should
    *  hide the menu and return to the previous game state. */
   onEsc: (() => void) | null;
@@ -35,6 +37,10 @@ export function createTeamMenu(
   sub.textContent = 'Choose Team';
   sub.style.cssText = 'font-size:13px;margin-bottom:24px;opacity:0.6;letter-spacing:1px';
   el.appendChild(sub);
+
+  const err = document.createElement('div');
+  err.style.cssText = 'color:#c44;font-size:12px;margin-bottom:12px;min-height:14px;';
+  el.appendChild(err);
 
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:12px';
@@ -112,6 +118,9 @@ export function createTeamMenu(
       tBtn.style.cssText += teamsFull ? dim : '';
       ctBtn.style.cssText += teamsFull ? dim : '';
       specBtn.style.cssText += specFull ? dim : '';
+    },
+    setError(reason: string): void {
+      err.textContent = reason;
     },
     get onEsc() {
       return escCb;

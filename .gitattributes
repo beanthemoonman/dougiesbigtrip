@@ -1,0 +1,7 @@
+# Shell scripts are bind-mounted into Linux containers (see docker-compose.yml,
+# keycloak-init). With core.autocrlf=true a Windows checkout gives them CRLF
+# line endings, the container reads the shebang as "/bin/sh\r", and the run dies
+# with "not found" — which looks like a missing file, not a line-ending bug.
+*.sh text eol=lf
+Dockerfile* text eol=lf
+*.yml text eol=lf

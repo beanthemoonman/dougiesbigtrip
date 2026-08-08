@@ -9,7 +9,7 @@ service.
 | Image | What | Port |
 |---|---|---|
 | `dougys-server` | Rust deathmatch server (64 Hz authoritative sim, bot AI, round FSM) | internal |
-| `dougys-client` | nginx serving the TypeScript/Vite SPA + reverse proxy (TLS) | 8080→80, 8443→443 |
+| `dougys-client` | nginx serving the TypeScript/Vite SPA + reverse proxy | 8082→80 |
 | Keycloak 26 | Auth (Google OAuth broker, JWT issuer) — `KC_DB_SCHEMA=keycloak` | internal |
 | Postgres 16 | Database (named volume `pgdata`) — two schemas, `app` + `keycloak` | internal |
 
@@ -35,11 +35,11 @@ cp .env.example .env
 docker compose --env-file .env up --build
 ```
 
-Open `https://localhost:8443` (accept the self-signed cert warning) or
-`http://localhost:8080` for plain HTTP. The client auto-detects ws:// vs.
-wss:// from the page protocol. The Connect overlay defaults to the proxy
-endpoint on the origin you loaded the page from (`wss://localhost:8443/ws`,
-`ws://localhost:8080/ws`) — no manual server URL needed. Under `pnpm dev` the
+Open `http://localhost:8082`. The stack publishes one host port; a real
+deployment puts a reverse proxy in front of it to terminate TLS. The client
+auto-detects ws:// vs. wss:// from the page protocol. The Connect overlay
+defaults to the proxy endpoint on the origin you loaded the page from
+(`ws://localhost:8082/ws`) — no manual server URL needed. Under `pnpm dev` the
 default stays `ws://127.0.0.1:9876`, since the vite dev server proxies nothing.
 
 Hit **Connect**. You have a slot as soon as the server acknowledges.
@@ -123,8 +123,8 @@ Two first-boot-only things to know:
 
 **`KC_HOSTNAME`** must be the full public URL including scheme, port and
 `/auth` (nginx forwards `Host` without the port, so a bare hostname yields
-redirect URLs missing `:8443`). Defaults to `https://localhost:8443/auth`; set
-it in `.env` for a real deployment.
+redirect URLs missing `:8082`). Defaults to `http://localhost:8082/auth`; set
+it in `.env` to the reverse proxy's public URL for a real deployment.
 
 The realm defines a public OIDC client (`counter-douglas-spa`) and a Google
 identity provider. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are read from
@@ -140,8 +140,8 @@ the environment (set them in `.env`).
    ```
    https://<your-host>/auth/realms/counter-douglas/broker/google/endpoint
    ```
-   (For local dev with the self-signed cert it's
-   `https://localhost:8443/auth/realms/counter-douglas/broker/google/endpoint`.)
+   (For local dev it's
+   `http://localhost:8082/auth/realms/counter-douglas/broker/google/endpoint`.)
 6. Copy the **Client ID** and **Client Secret** into your `.env` file.
 
 **Granting admin (`role_admin`):**

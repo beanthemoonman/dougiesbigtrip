@@ -321,6 +321,15 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
     };
     conn.onBye = (reason): void => {
       console.warn(`[net] server said bye: ${reason}`);
+      // The join was refused (auth, capacity, kick). The team menu has already
+      // hidden itself and the game screen is up, but no snapshot will ever
+      // arrive — which reads as a freeze. Put the menu back with the reason on
+      // it, and disable every button: the socket is gone, re-picking is futile.
+      gameMode = 'menu';
+      document.exitPointerLock();
+      teamMenu.setError(`${reason} — reload to retry`);
+      teamMenu.setCounts(1, 0, 1, 0);
+      teamMenu.el.style.display = 'flex';
       conn.close();
     };
     conn.onSnapshot = (s): void => {
@@ -623,12 +632,36 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
   // slot → last interpolated ground position + stride accumulator, for the
   // footsteps of networked players (see game/footsteps.ts).
   const remoteSteps = new Map<number, { x: number; z: number; dist: number }>();
+  const remoteAnims = new Map<number, BotAnimState>(); // slot → animation mixer + state
+  const remoteAlive = new Map<number, boolean>(); // slot → last known alive flag
+  // How long a networked corpse stays up playing its death clip before it is
+  // hidden. ponytail: a fixed duration rather than reading the clip length off
+  // the mixer — the clip clamps on its last frame, so overshooting just holds
+  // the pose. Revisit if the death animation is ever re-authored longer.
+  const DEATH_CLIP_SECONDS = 2.0;
+  // slot → where the model was standing when it died, plus the seconds left of
+  // the death clip. The server teleports a corpse's position straight back to
+  // its spawn point (main.rs, on health reaching 0), so the death animation has
+  // to play at a remembered position, not the one on the wire.
+  const remoteDeaths = new Map<number, { x: number; y: number; z: number; t: number }>();
+  /** Drop every per-slot resource. The maps must be torn down together: keeping
+   *  the root while dropping the mixer leaves a model that can never animate
+   *  again, because remoteRootFor only builds a mixer when it builds the root. */
+  function disposeRemote(slot: number): void {
+    const root = remoteRoots.get(slot);
+    if (root) renderCtx.scene.remove(root);
+    remoteRoots.delete(slot);
+    remoteTeams.delete(slot);
+    remoteAnims.delete(slot);
+    remoteSteps.delete(slot);
+    remoteAlive.delete(slot);
+    remoteDeaths.delete(slot);
+  }
   function remoteRootFor(slot: number, teamCt: boolean): Group {
     // A slot that switches team must get the other side's model — the cached one
     // is baked with the team it was created for, so drop it and rebuild.
     if (remoteRoots.has(slot) && remoteTeams.get(slot) !== teamCt) {
-      renderCtx.scene.remove(remoteRoots.get(slot)!);
-      remoteRoots.delete(slot);
+      disposeRemote(slot);
     }
     let root = remoteRoots.get(slot);
     if (!root) {
@@ -636,6 +669,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
       clone.visible = true;
       flattenMaterials(clone);
       attachBotWeapon(clone, 'rifle');
+      remoteAnims.set(slot, createBotAnim(clone, ctTemplateClips));
       root = new Group();
       root.add(clone);
       root.visible = true;
@@ -1385,16 +1419,18 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
           const root = remoteRootFor(r.slot, r.teamCt);
           if (r.alive) {
             root.visible = true;
-            // Footsteps for networked players. Snapshots carry no velocity, so
-            // speed is the interpolated horizontal delta since the last frame.
+            // Footsteps for networked players. Speed is the interpolated
+            // horizontal delta since the last frame (positional delta, not
+            // wire velocity — RemoteEntity discards velocity at interp time).
             // ponytail: this runs on the render frame, not the 64 Hz tick — a
             // cosmetic cue, and pacing is distance-based so a variable dt only
             // shifts *when* within a stride the step lands, never how many.
             const prev = remoteSteps.get(r.slot);
+            let speed = 0;
             if (prev) {
               const dx = r.pos[0] - prev.x;
               const dz = r.pos[2] - prev.z;
-              const speed = frameDt > 0 ? Math.hypot(dx, dz) / frameDt : 0;
+              speed = frameDt > 0 ? Math.hypot(dx, dz) / frameDt : 0;
               const rs = advanceStride(prev.dist, speed, frameDt);
               prev.dist = rs.dist;
               if (rs.stepped) playFootstep('concrete', root.position);
@@ -1403,6 +1439,25 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
             root.position.set(r.pos[0], r.pos[1], r.pos[2]);
             root.rotation.y = r.yaw;
             root.scale.y = duckScaleY(r.ducked ? 1 : 0);
+            // Reset animation on dead→alive transition so the death pose
+            // is cleared on respawn.
+            const wasAlive = remoteAlive.get(r.slot);
+            if (!wasAlive) {
+              const anim = remoteAnims.get(r.slot);
+              if (anim) resetBotAnim(anim);
+              remoteDeaths.delete(r.slot);
+            }
+            remoteAlive.set(r.slot, true);
+            // Remote player animation: drive the bot anim state machine from
+            // interpolated speed and mode. Must run BEFORE applyWeaponPose so
+            // the weapon-hold arm IK override wins against the animation.
+            const anim = remoteAnims.get(r.slot);
+            if (anim) {
+              // ponytail: the wire carries no on-ground flag; always true so
+              // remotes never show an air pose. An upgrading flag would need a
+              // wire extension (EntityState::flags reserved bits).
+              driveBotAnim(anim, speed, true, 'search', frameDt);
+            }
             // Phase 12.1: apply weapon-hold pose to remote models.
             applyWeaponPose(root, 'rifle');
             // Phase 12.2: spawn muzzle FX from pending EV_FIRE events.
@@ -1414,17 +1469,42 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
               }
             }
           } else {
-            root.visible = false;
+            // On the alive→dead edge, pin the model where it fell: the server
+            // resets a corpse's position to its spawn point the moment health
+            // hits 0, so r.pos is already useless for this. root.position still
+            // holds the last position we rendered it alive at.
+            if (remoteAlive.get(r.slot)) {
+              remoteDeaths.set(r.slot, {
+                x: root.position.x,
+                y: root.position.y,
+                z: root.position.z,
+                t: DEATH_CLIP_SECONDS,
+              });
+            }
+            remoteAlive.set(r.slot, false);
             remoteSteps.delete(r.slot); // dead: no teleport-step on respawn
+            const death = remoteDeaths.get(r.slot);
+            const anim = remoteAnims.get(r.slot);
+            if (death && death.t > 0 && anim) {
+              // Play the death clip out where the body fell, then hide. No
+              // applyWeaponPose here — the clip owns the whole skeleton.
+              death.t -= frameDt;
+              root.visible = true;
+              root.position.set(death.x, death.y, death.z);
+              root.scale.y = duckScaleY(0);
+              driveBotAnim(anim, 0, true, 'dead', frameDt);
+            } else {
+              root.visible = false;
+            }
           }
         }
-        // Hide roots for slots no longer in the snapshot (disconnected).
+        // Drop slots no longer in the snapshot (disconnected). Tear the whole
+        // slot down rather than just hiding it: a slot is reused (a bot backfills
+        // a departed human at the next round reset), and a root kept without its
+        // mixer would come back permanently unanimated.
         const activeSlots = new Set(remotes.map((r) => r.slot));
-        for (const [slot, root] of remoteRoots) {
-          if (!activeSlots.has(slot)) {
-            root.visible = false;
-            remoteSteps.delete(slot); // dead/disconnected: drop the stride state
-          }
+        for (const slot of [...remoteRoots.keys()]) {
+          if (!activeSlots.has(slot)) disposeRemote(slot);
         }
       }
       // Clear any fire events we couldn't deliver (e.g. slot not in this snapshot
