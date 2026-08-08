@@ -52,23 +52,6 @@ function settleFrames(count: number): void {
   for (let i = 0; i < count; i++) sim_tick(0, 0, 0);
 }
 
-/**
- * sim_tick_bot needs alive flags + team info. Tick a bot for `ticks` frames
- * and return all result arrays. Also ticks the human (index 0) so their
- * kinematic body syncs.
- */
-function tickBotN(botIdx: number, startTick: number, ticks: number): Float64Array[] {
-  const results: Float64Array[] = [];
-  for (let t = 0; t < ticks; t++) {
-    sim_tick(0, 0, 0); // keep human body up-to-date
-    const alive = new Uint8Array(botIdx + 1);
-    alive[0] = 1; // human alive
-    for (let j = 1; j <= botIdx; j++) alive[j] = 1; // bots alive
-    results.push(sim_tick_bot(botIdx, startTick + t, alive));
-  }
-  return results;
-}
-
 describe('WASM bot AI — init', () => {
   it('sim_init_bots loads the nav graph without error', () => {
     sim_init(0, 0.05, 0);

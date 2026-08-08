@@ -1515,7 +1515,7 @@ export async function startGameSession(ctx: SessionContext): Promise<void> {
         vfx.muzzleFlash(wm.pos, wm.dir);
         // Pair with a matching impact to terminate the tracer at the real hit point.
         // Impact events arrive in the same snapshot, so a slot match is sufficient.
-        let tracerEnd = wm.dir.clone().multiplyScalar(100).add(wm.pos);
+        const tracerEnd = wm.dir.clone().multiplyScalar(100).add(wm.pos);
         for (let j = 0; j < pendingImpactQueue.length; j++) {
           const imp = pendingImpactQueue[j]!;
           if (imp.slot === ev.slot) {
