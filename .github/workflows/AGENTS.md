@@ -6,7 +6,7 @@ Supplements the root [`AGENTS.md`](../../AGENTS.md) (Definition of Done, command
 
 GitHub Actions CI. One workflow, `ci.yml` (name `CI`), with one job `ci` on `ubuntu-latest`.
 Triggers: `push` to `main` and `pull_request` targeting `main`. No schedules, no matrix, no
-deploy/release jobs.
+deploy/release jobs. One artifact: `test-results` (vitest JUnit XML).
 
 ## Job steps (in order)
 
@@ -20,6 +20,7 @@ deploy/release jobs.
 | `wasm-pack build sim --target bundler --features wasm` | Produces `sim/pkg/` (gitignored) |
 | `pnpm install` | Must come **after** the wasm build: `sim-wasm` is `file:./sim/pkg` |
 | `pnpm lint` → `pnpm typecheck` → `pnpm test` → `pnpm build` | eslint, `tsc --noEmit`, vitest, `tsc && vite build` |
+| `actions/upload-artifact@v4` `test-results` | Right after `pnpm test`, `if: !cancelled()` so it uploads on failure too. `pnpm test` gets `--reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml` (vitest built-in, no dep). Download from the run's Summary page. |
 
 ## Local repro
 

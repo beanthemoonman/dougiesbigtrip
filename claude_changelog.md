@@ -4595,3 +4595,13 @@ section because pnpm is not on this machine's PATH — the next `pnpm install` w
 - Reverted the `tests/ai_parity.test.ts` `as unknown as` cast back to a plain `as` (it was
   inconsistent with the sibling `ramps` cast).
 - Grammar: "a `AGENTS.md`" → "an `AGENTS.md`" in `docs/plan-post-1.0-config-auth.md`.
+
+## 2026-10-16 — CI test-results artifact
+
+- `ci.yml`: `pnpm test` now also emits vitest's built-in JUnit report to
+  `test-results/junit.xml`; new `actions/upload-artifact@v4` step uploads it as `test-results`
+  (`if: !cancelled()`, so failed runs still get it). No new dependency.
+- `.gitignore`: `test-results/`. `.github/workflows/AGENTS.md`: documented the step.
+- Verified the exact command locally (report written, 285 tests). Locally one pre-existing
+  failure: `tools/modelview/view.test.ts` Puppeteer render times out at 30 s on this Windows box —
+  unrelated, not touched.

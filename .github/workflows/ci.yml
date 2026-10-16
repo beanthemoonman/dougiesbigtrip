@@ -31,6 +31,14 @@ jobs:
 
       - run: pnpm typecheck
 
-      - run: pnpm test
+      # pnpm forwards trailing flags to vitest. Console output keeps the default reporter; JUnit XML is the artifact.
+      - run: pnpm test --reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-results
+          path: test-results/
+          if-no-files-found: warn
 
       - run: pnpm build
