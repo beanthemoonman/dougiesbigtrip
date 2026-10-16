@@ -3,7 +3,7 @@
  * noise burst plus a low thump; a reload is a couple of short clicks. No sound
  * *files*, so no asset to licence and no CREDITS row.
  *
- * ponytail: deliberately not Howler.js (the CLAUDE.md stack pick). Howler plays
+ * ponytail: deliberately not Howler.js (the AGENTS.md stack pick). Howler plays
  * *sources* — files, data URIs — and every voice in here is a synthesised
  * oscillator/noise graph with no file behind it, so there is nothing for Howler
  * to load. Its spatial support is a thin wrapper over the Web Audio PannerNode,

@@ -15,7 +15,7 @@ Do not start phase N+1 until phase N's exit test passes.
 
 Each phase's exit test becomes a committed `tests/acceptance/ACC-*.md` script with a PASS
 recorded against a commit hash. Every task inside a phase is subject to the Definition of Done
-in `CLAUDE.md`.
+in `AGENTS.md`.
 
 ---
 
@@ -356,7 +356,7 @@ feels symmetric in a playtest. Draw-call and payload budgets still hold.
       on the dev box; re-verify on integrated graphics at deploy.)
 - [x] Settings: sensitivity, FOV (world), volume. Persist to a config object.
       (`src/core/settings.ts` — a `Settings` config object is the source of truth, no
-      localStorage per CLAUDE.md. A DOM panel of native range sliders mutates it and pushes
+      localStorage per AGENTS.md. A DOM panel of native range sliders mutates it and pushes
       each value live: `input.state.sensitivity`, `renderCtx.setWorldFov`, audio `setMasterVolume`
       (new master gain node all voices route through). Panel shows out of pointer lock, hides in
       play. In-browser confirm owed, same standing blocker as the ACC runs.)
@@ -841,7 +841,7 @@ their stored record, Keycloak state persists.
 
 ## Phase 19 — Entry & Settings screens (1 week)
 
-The menu shell around the game. Plain DOM overlay (no React — see `CLAUDE.md`).
+The menu shell around the game. Plain DOM overlay (no React — see `AGENTS.md`).
 
 **Entry screen:**
 - [x] Title: **"Counter Douglas"**.

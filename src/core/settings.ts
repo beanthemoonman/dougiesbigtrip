@@ -2,7 +2,7 @@
  * Player settings — the single config object the game reads for its three
  * user-facing knobs: mouse sensitivity, world FOV, master volume.
  *
- * No localStorage/sessionStorage: CLAUDE.md says this may be embedded, so don't
+ * No localStorage/sessionStorage: AGENTS.md says this may be embedded, so don't
  * assume web storage exists. The `Settings` object itself is the "config object"
  * the plan asks these to persist to; a host that wants durability can serialise
  * it however it likes. A caller wires `onChange` to push each value into

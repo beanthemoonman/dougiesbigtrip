@@ -1300,7 +1300,7 @@ async fn main() {
     tokio::spawn(game_loop(events_rx, config.clone(), shared.clone(), pool.clone()));
 
     // Phase 20.1: spawn the axum HTTP API server for /api/config, /status.
-    let api_addr: std::net::SocketAddr = config.api_bind.parse().expect("invalid API_BIND");
+    let api_addr: SocketAddr = config.api_bind.parse().expect("invalid API_BIND");
     // Open admin only for a loopback-bound API with auth off — see ApiState::open_admin.
     let open_admin = !config.auth_config.required && api_addr.ip().is_loopback();
     if open_admin {

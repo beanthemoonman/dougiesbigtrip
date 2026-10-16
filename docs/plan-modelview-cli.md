@@ -101,7 +101,7 @@ view sphere; distance is computed by framing (below).
 | `top` | (0, 1, 0.001) | Footprint, layout (tiny z to avoid gimbal/up ambiguity) |
 | `iso` | (1, 0.8, 1) normalised | The money shot — 3/4 hero view |
 
-`front` assumes the model faces +Z. Project convention is Y-up (CLAUDE.md); glTF export handles
+`front` assumes the model faces +Z. Project convention is Y-up (AGENTS.md); glTF export handles
 Z→Y. If a given asset faces the "wrong" way, that's an asset-orientation observation the tool
 surfaces, not something it corrects.
 
@@ -132,7 +132,7 @@ setup.
 
 These are intentional and each gets a `// ponytail:` line at the relevant code:
 
-1. **Realtime lights, not lightmaps.** CLAUDE.md forbids realtime lights *in the world scene*
+1. **Realtime lights, not lightmaps.** AGENTS.md forbids realtime lights *in the world scene*
    for illumination. This tool is not the world scene — it's an inspection rig, and baked
    lightmaps only exist for the map, not for props/weapons/characters. We light with directional
    lights so an unlit prop is still visible.
@@ -167,11 +167,11 @@ allocation).
 - Assert the PNG buffer has **> 1 % non-background pixels** (i.e. something actually drew — not
   a blank grey frame). This is the smallest thing that fails if context creation, loading,
   framing, or readback breaks.
-- No golden image, no pixel-diff (CLAUDE.md: never pixel-diff the renderer). Just "not blank."
+- No golden image, no pixel-diff (AGENTS.md: never pixel-diff the renderer). Just "not blank."
 
 ## Definition of done for this tool
 
-Per CLAUDE.md, this is a **tool**, not a game feature — most tiers don't apply. Applicable gates:
+Per AGENTS.md, this is a **tool**, not a game feature — most tiers don't apply. Applicable gates:
 
 - [x] `pnpm modelview assets/props/crate_wood.glb` writes six non-blank PNGs.
 - [x] Runs against a weapon, a character, and the full map `.glb` without special-casing.

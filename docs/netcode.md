@@ -88,7 +88,7 @@ the Rapier boundary (the client's `rapier3d-compat` WASM is f32; the server uses
 compiled sim, there is no cross-language port to drift — the only residual nondeterminism is
 Rapier's own query path, which reconciliation absorbs.
 
-**Determinism guardrails** (from `CLAUDE.md`, non-negotiable): no wall-clock in the sim, 64 Hz
+**Determinism guardrails** (from `AGENTS.md`, non-negotiable): no wall-clock in the sim, 64 Hz
 fixed, RNG seeded and injected. The server owns the seed and sends it in `Welcome`; the client
 predicts with the same seed.
 

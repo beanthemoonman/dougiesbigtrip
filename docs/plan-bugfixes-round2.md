@@ -91,7 +91,7 @@ mocking.
 **Root cause.** Tab is unhandled in `core/input.ts`. In pointer lock the browser
 default for Tab is focus navigation, which moves focus off the canvas → pointer
 lock drops → `pointerlockchange` shows the settings panel (`main.ts:240-243`).
-There is no scoreboard at all yet (`CLAUDE.md` lists it as P3 — but it's
+There is no scoreboard at all yet (`AGENTS.md` lists it as P3 — but it's
 explicitly requested here).
 
 **Fix (two parts).**
@@ -135,7 +135,7 @@ leave the calibration knob). Steps:
 - Verify in ACC-014 step 2 (already written) — mark it Pass with the final
   numbers, or note the residual clip.
 
-No automated test — orientation is a visual property (`CLAUDE.md`: never
+No automated test — orientation is a visual property (`AGENTS.md`: never
 pixel-diff the renderer).
 
 ---
@@ -154,5 +154,5 @@ pixel-diff the renderer).
   included.
 - ACC-017 written before the scoreboard is coded; ACC-013 (LOS) and ACC-014
   (armed bots) re-run in a real browser after Bug 1/3 and Bug 5.
-- `claude_changelog.md` appended; `CLAUDE.md`/`agents.md` synced if any behaviour
+- `claude_changelog.md` appended; `AGENTS.md` synced if any behaviour
   they describe changed (none expected — all fixes restore intended behaviour).

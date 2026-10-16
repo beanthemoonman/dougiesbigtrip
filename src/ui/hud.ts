@@ -1,5 +1,5 @@
 /**
- * HUD — plain DOM overlay (no React for a crosshair, per CLAUDE.md).
+ * HUD — plain DOM overlay (no React for a crosshair, per AGENTS.md).
  *
  * The only non-trivial part is the crosshair: its gap is driven by the *same*
  * inaccuracy value the bullet's spread disc uses (weapons/spread.ts), projected

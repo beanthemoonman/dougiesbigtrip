@@ -1,5 +1,5 @@
 /**
- * Seeded RNG — the ONLY source of randomness allowed under src/ (CLAUDE.md
+ * Seeded RNG — the ONLY source of randomness allowed under src/ (AGENTS.md
  * determinism rule). mulberry32: fast, tiny, good enough for a spread disc; not
  * cryptographic. Injected everywhere so simulate(trace, {seed}) twice is
  * identical.

@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-Context for Claude Code working in this repo. Read this before making changes.
+Context for coding agents (Claude Code, etc.) working in this repo. Read this before making changes.
 
 ## What this is
 
@@ -71,9 +71,14 @@ assets/
 tools/
   blender/       export/bake helper scripts (see docs/blender-pipeline.md)
   navbake/       node script: .glb -> navmesh.bin
-  optimize/      gltf-transform pipeline
 docs/
 ```
+
+### Per-folder AGENTS.md
+
+Sub-projects carry their own `AGENTS.md` with folder-specific context. Read the one for the
+folder you're working in, in addition to this file:
+`.github/workflows/`, `assets/`, `server/`, `sim/`, `tests/`, `tools/`.
 
 ## Conventions
 
@@ -94,7 +99,7 @@ pnpm dev            # vite dev server
 pnpm build          # production build
 pnpm typecheck
 pnpm test           # vitest — movement math has golden tests, keep them green
-pnpm assets:opt     # gltf-transform: draco/meshopt + ktx2 (see docs/asset-pipeline.md)
+pnpm test:e2e       # websocket e2e vs the real Rust server (needs `cargo build`); see tests/e2e/README.md
 pnpm nav:bake       # regenerate navmesh blob from assets/maps/*.glb
 ```
 
@@ -148,7 +153,7 @@ rationale and examples in `docs/testing.md`; this is the gate.
 - [ ] Test written **before** the implementation, and observed failing first.
 - [ ] Every tier in the table above is satisfied for this feature type.
 - [ ] Golden values are **derived from a spec doc**, not pasted from the code's current output.
-  Spec-derived → `tests/golden/`. Recorded-from-known-good → `tests/baseline/`. Never mix.
+      Spec-derived → `tests/golden/`. Recorded-from-known-good → `tests/baseline/`. Never mix.
 - [ ] If `tests/golden/` changed, the corresponding doc changed in the same PR.
 - [ ] If `tests/baseline/` changed, the PR says why **and** a T3 script was re-run.
 - [ ] No `--update-snapshots` to get green. No `it.skip` without a linked issue + owner.
@@ -157,13 +162,13 @@ rationale and examples in `docs/testing.md`; this is the gate.
 **Determinism (non-negotiable)**
 - [ ] `simulate(trace, {seed})` twice → identical snapshots.
 - [ ] No `Date.now()`, `performance.now()`, or `Math.random()` anywhere under `src/` except
-  `core/loop.ts` and `core/rng.ts`. RNG is seeded and injected.
+      `core/loop.ts` and `core/rng.ts`. RNG is seeded and injected.
 - [ ] Nothing below `core/loop.ts` reads frame delta. Sim is 64 Hz fixed, always.
 - [ ] A T1 flake is a **P0 determinism bug**, not a test to retry.
 
 **Behaviour**
 - [ ] Golden movement tests (`src/player/movement.test.ts`) green if movement was touched —
-  these are the only defence against drifting away from the feel.
+      these are the only defence against drifting away from the feel.
 - [ ] An input trace reproducing the feature/bug is committed to `tests/traces/`.
 - [ ] Constants live in `src/player/constants.ts` and are in **metres**. No bare Hammer units.
 - [ ] Branch coverage held at ~100% for `src/player/`, `src/weapons/`, `src/game/`.
@@ -181,12 +186,12 @@ rationale and examples in `docs/testing.md`; this is the gate.
 - [ ] The `ACC-*` acceptance script was **written before tuning began**.
 - [ ] It was run, passed, and the result committed with a name and a commit hash.
 - [ ] Any T3 step that has now failed twice for the same reason has been **migrated down to
-  a T1 test**.
+      a T1 test**.
 
 **Hygiene**
 - [ ] `pnpm typecheck` green. No new `any`.
 - [ ] Spec docs updated if behaviour diverges from what they say. **The doc is the spec; if the
-  code and the doc disagree, that's a bug in one of them — decide which, in this PR.**
+      code and the doc disagree, that's a bug in one of them — decide which, in this PR.**
 
 ### Never
 
@@ -218,8 +223,7 @@ rationale and examples in `docs/testing.md`; this is the gate.
 
 - End your turn by saying Bada Bing!
 - Append what you did during your turn to the end of the file claude_changelog.md.
-- If anything you did means that now something in claude.md is incorrect, please update it.
-- claude.md and agents.md should be kept in sync.
+- If anything you did means that now something in AGENTS.md (root or per-folder) is incorrect, please update it.
 - When you complete part of the plan, update `plan_to_implement.md` in the same turn: tick the
   boxes, flip the phase/increment status, and record the exit-test result. The plan file must
   never drift behind what's actually built.
