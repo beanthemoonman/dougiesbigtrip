@@ -4605,3 +4605,7 @@ section because pnpm is not on this machine's PATH — the next `pnpm install` w
 - Verified the exact command locally (report written, 285 tests). Locally one pre-existing
   failure: `tools/modelview/view.test.ts` Puppeteer render times out at 30 s on this Windows box —
   unrelated, not touched.
+
+## 2026-10-16 — committed
+
+- Committed the CI artifact change (no attribution) and pushed it to `main` (fast-forward from `ci/test-results-artifact`, branch deleted).
