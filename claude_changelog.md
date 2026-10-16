@@ -4569,3 +4569,29 @@ short hops), not by watching a bot walk. Two things I chose to leave, both noted
 fixed: ~31% of navmesh triangles are unreachable islands from the T spawn, which is a bake
 artifact worth a look; and `pnpm-lock.yaml` still lists `recast-navigation` under the old
 section because pnpm is not on this machine's PATH — the next `pnpm install` will tidy it.
+
+## 2026-10-16 — CLAUDE.md → AGENTS.md, per-folder AGENTS.md
+
+- Deleted `CLAUDE.md`; root `AGENTS.md` is now the single source (took CLAUDE.md's newer
+  content, incl. the `pnpm test:e2e` line). Dropped the "keep claude.md and agents.md in sync"
+  note; added a "Per-folder AGENTS.md" pointer section.
+- Rewrote every `CLAUDE.md` reference to `AGENTS.md` in README, docs/, plan_to_implement.md,
+  src/ comments, tests/acceptance/ACC-006, tsconfig.json. This changelog left as history.
+- New folder guides (written by sub-agents, claims checked against code): `.github/workflows/`,
+  `assets/`, `server/`, `sim/`, `tests/`, `tools/` — each `AGENTS.md`.
+- Drift found, not fixed (noted in the folder files): `pnpm assets:opt` / `tools/optimize/`
+  don't exist though root AGENTS.md lists them; `tests/golden|baseline|traces/` don't exist;
+  `docs/netcode.md` file trees describe the plan not the code, no lag comp implemented;
+  CI runs no `cargo test`; `tools/blender/build_map.py` hardcodes `/home/upmoon/...`;
+  `de_douglas.navmesh.bin` has no runtime consumer.
+
+## 2026-10-16 — code-review follow-ups (post CLAUDE.md→AGENTS.md)
+
+- Fixed the stale `CLAUDE.md` reference in `.github/workflows/AGENTS.md` ("keep `CLAUDE.md` in
+  sync per root rules") — dropped the parenthetical.
+- Root `AGENTS.md`: removed the non-existent `pnpm assets:opt` command and the `tools/optimize/`
+  repo-layout entry. Repointed the `assets/` and `tools/` folder guides' drift note from "the root
+  file" to `docs/asset-pipeline.md`.
+- Reverted the `tests/ai_parity.test.ts` `as unknown as` cast back to a plain `as` (it was
+  inconsistent with the sibling `ramps` cast).
+- Grammar: "a `AGENTS.md`" → "an `AGENTS.md`" in `docs/plan-post-1.0-config-auth.md`.

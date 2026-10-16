@@ -4,7 +4,7 @@
  *
  * Session survives reload via `check-sso` (silent re-auth against the
  * Keycloak SSO cookie). No token is persisted to localStorage/sessionStorage,
- * both because `CLAUDE.md` forbids assuming web storage and because it is the
+ * both because `AGENTS.md` forbids assuming web storage and because it is the
  * safer choice.
  *
  * Phase 17.3 — exposes state for the Phase 19 entry screen and Phase 17.4

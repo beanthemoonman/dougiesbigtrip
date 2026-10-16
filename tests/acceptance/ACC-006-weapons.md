@@ -53,7 +53,7 @@ real audio device — headless has none). Sound is judged by ear; there's no aut
 
 - **Audio is synthesised, mono, non-positional** (`src/core/audio.ts`, Web Audio, not Howler).
   No distance tail, no first-person/third-person variants, no shell-casing tink. Those land with
-  bots in Phase 4 (positional) / Phase 5 (polish). See the CLAUDE.md stack note.
+  bots in Phase 4 (positional) / Phase 5 (polish). See the AGENTS.md stack note.
 - **No real reload/draw *content*** — the anims are procedural pose moves (dip/raise/kick), not
   authored clips or mag-swap geometry (the models have no armature). Good enough to read; a rigged
   weapon with hands is out of scope for the demo.

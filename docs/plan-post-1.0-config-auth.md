@@ -3,7 +3,7 @@
 Detailed breakdown of `plan_to_implement.md` Phases 16–20. Each phase is split into numbered
 increments; an increment is a single commit-sized unit with its own tests and its own exit check.
 
-**Read first:** `CLAUDE.md` (Definition of Done, test tiers), `docs/testing.md`, `docs/deploy.md`.
+**Read first:** `AGENTS.md` (Definition of Done, test tiers), `docs/testing.md`, `docs/deploy.md`.
 
 ## Where the code actually stands today (survey, 2026-07-23)
 
@@ -33,7 +33,7 @@ Two consequences that change the plan's shape:
 
 ## Cross-cutting decisions (make these once, here)
 
-- **No new frontend framework.** `CLAUDE.md` says plain DOM. Screens in Phase 19 are DOM
+- **No new frontend framework.** `AGENTS.md` says plain DOM. Screens in Phase 19 are DOM
   builders in `src/ui/`, same style as `connect.ts` / `teammenu.ts`.
 - **DB: PostgreSQL 16, one instance, two schemas** (`app`, `keycloak`). Keycloak needs Postgres
   anyway; running a second store for three tables is waste.
@@ -189,7 +189,7 @@ proxy and that :9876 is not reachable from the host.
 - [ ] Authorization Code + PKCE against Keycloak, public client, no secret in the browser.
       Use `keycloak-js` (the official adapter) rather than hand-rolling PKCE — this is the one
       place a dependency beats fifty lines, because the failure mode is a security hole.
-- [ ] Token held in memory only. `CLAUDE.md` forbids assuming web storage; that constraint
+- [ ] Token held in memory only. `AGENTS.md` forbids assuming web storage; that constraint
       happens to be the safer choice here too. Session survival across reload = a silent
       re-auth against Keycloak, not a stored token.
 - [ ] Expose `auth.name`, `auth.sub`, `auth.isAdmin`, `auth.token()` for Phases 19–20.
@@ -355,7 +355,7 @@ everything in 20 needs 17.4 for the role and 18.2 for durability.
 | Keycloak realm config drifts from what is committed | Realm export JSON is the source of truth, imported at start. Console changes that are not exported do not exist. |
 | Auth makes local dev require the full stack | `AUTH_REQUIRED=false` + unset `DATABASE_URL` are first-class paths, tested in CI, not afterthoughts. |
 | Token validation looks done but only checks the signature | Fixture-token unit tests for `exp`/`iss`/`aud`/`kid` are part of 17.4's DoD, not a follow-up. |
-| Phase 19 quietly becomes a UI framework project | Plain DOM is a `CLAUDE.md` non-negotiable. One `screens.ts` helper, four states, no router. |
+| Phase 19 quietly becomes a UI framework project | Plain DOM is an `AGENTS.md` non-negotiable. One `screens.ts` helper, four states, no router. |
 | Config bounds diverge between TS and Rust | `LIMITS` in this doc is the spec. If they diverge, the doc decides — and the DoD's "doc is the spec" rule applies. |
 | "Multiple maps" leaks in via the map knob | Map stays a one-value validated enum until someone actually builds a second map. |
 

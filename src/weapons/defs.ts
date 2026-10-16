@@ -1,6 +1,6 @@
 /**
  * Weapon data. All gameplay tuning lives here as data, not scattered constants
- * (per CLAUDE.md). Two guns to start: an AK-analogue rifle and a USP-analogue
+ * (per AGENTS.md). Two guns to start: an AK-analogue rifle and a USP-analogue
  * pistol — spray vs. tap. See docs/weapon-feel.md for the field rationale.
  *
  * Ported-from-doc values are noted; everything else is a gameplay tuning number

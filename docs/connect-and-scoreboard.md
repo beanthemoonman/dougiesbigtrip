@@ -1,6 +1,6 @@
 # Connect UI + Tab Scoreboard (Phase 6.7)
 
-Two plain-DOM overlays, per the "no React for a crosshair" rule (CLAUDE.md). Nothing here
+Two plain-DOM overlays, per the "no React for a crosshair" rule (AGENTS.md). Nothing here
 is netcode mechanics — it's the join surface and the K/D readout. The connection transport
 (`src/net/connection.ts`, `Welcome` decode) already exists from 6.0.
 
@@ -27,7 +27,7 @@ roster.
   `disconnected` / `error`. Polled in the existing loop (no new event bus).
 - Single-player path untouched — the overlay is only wired when the client is in server mode.
 
-~40 lines. No router, no menu framework, no settings persistence (`no localStorage`, CLAUDE.md).
+~40 lines. No router, no menu framework, no settings persistence (`no localStorage`, AGENTS.md).
 
 ## 2. Scoreboard — `src/ui/scoreboard.ts`
 
@@ -72,7 +72,7 @@ interface PlayerScore {
   renders `"Bot N"`. `Join` and `EntityState` changed in lockstep in `src/net/protocol.ts` **and**
   `sim/src/protocol.rs` — the on-the-wire contract.
 
-## Definition of Done (HUD / UI rows from CLAUDE.md)
+## Definition of Done (HUD / UI rows from AGENTS.md)
 
 - [ ] **T0:** `scoreboard.render()` with a known roster → 6 rows, correct columns, sorted by
       kills desc. (The only non-trivial logic; one vitest.)

@@ -1,6 +1,6 @@
 # Testing Strategy
 
-The *how* behind the Definition of Done in `CLAUDE.md`. Read this once; after that the DoD
+The *how* behind the Definition of Done in `AGENTS.md`. Read this once; after that the DoD
 checklist should be enough.
 
 ---

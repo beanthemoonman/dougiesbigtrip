@@ -3,7 +3,7 @@
  * uncapped render rate. Render is called every rAF with an interpolation
  * alpha in [0, 1) so visuals don't step at the sim rate.
  *
- * Retrofitting this later is miserable — see CLAUDE.md Phase 0. Every
+ * Retrofitting this later is miserable — see AGENTS.md Phase 0. Every
  * system that reads "current" transforms for rendering must interpolate
  * between the previous and current sim state using `alpha`, not just read
  * the latest sim state directly.

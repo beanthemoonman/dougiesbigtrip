@@ -127,7 +127,7 @@ docker compose up
 ```
 
 Rebuilding the shared WASM sim after editing `sim/src/` requires a specific ritual (pnpm keeps a
-stale `file:` copy) — see the "Rebuilding the shared WASM sim" section in [`CLAUDE.md`](CLAUDE.md).
+stale `file:` copy) — see the "Rebuilding the shared WASM sim" section in [`AGENTS.md`](AGENTS.md).
 
 ## Repo layout
 

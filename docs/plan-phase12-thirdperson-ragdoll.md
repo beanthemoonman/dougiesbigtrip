@@ -112,7 +112,7 @@ for MP, getting the fire signal on the wire.
 
 ## Tests & Definition of Done
 
-Feature type per the CLAUDE.md matrix: this is **Rendering / art direction** (T2 config + T3) plus a
+Feature type per the AGENTS.md matrix: this is **Rendering / art direction** (T2 config + T3) plus a
 sliver of **HUD/UI-like** pure logic (T0 stance/protocol). No T1 sim traces — nothing here is sim
 state. Determinism gate still applies to what it touches:
 

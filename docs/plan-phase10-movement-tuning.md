@@ -2,7 +2,7 @@
 
 Small, high-value feel fixes. Movement math is a port (`docs/source-movement.md`); everything
 here is a **bug against the spec or the input layer**, not a re-tune of the accel/friction
-curves. Any golden-value change edits `docs/source-movement.md` in the **same PR** (CLAUDE.md
+curves. Any golden-value change edits `docs/source-movement.md` in the **same PR** (AGENTS.md
 gate).
 
 ## The dual-port tax (read first)
@@ -14,7 +14,7 @@ Movement lives in **two** places that must stay bit-identical:
 
 Golden tests guard both: `movement.test.ts`, `movement_wasm.test.ts`, `movement_wasm_full.test.ts`.
 **Every math/constant change in this phase lands in both files**, and after touching Rust you owe
-the WASM rebuild ritual (CLAUDE.md → "Rebuilding the shared WASM sim"). Skip it and you get
+the WASM rebuild ritual (AGENTS.md → "Rebuilding the shared WASM sim"). Skip it and you get
 `wasm.<fn> is not a function` or a client/server desync.
 
 ## What already exists (reuse, don't rebuild)

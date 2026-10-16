@@ -15,7 +15,7 @@
     "moduleDetection": "force",
     "noEmit": true,
 
-    /* Strict — see CLAUDE.md: TypeScript strict, no `any` outside typed-shim files */
+    /* Strict — see AGENTS.md: TypeScript strict, no `any` outside typed-shim files */
     "strict": true,
     "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,
